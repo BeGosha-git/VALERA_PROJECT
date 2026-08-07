@@ -473,6 +473,7 @@ class VoiceAssistant:
         silence_timeout: float = 0.75,
         min_speech_duration: float = 0.5,
         no_confirm: bool = False,
+        stt: str = "kairos",
     ):
         self.rag = rag_client
         self.tts = neural_speaker
@@ -481,6 +482,10 @@ class VoiceAssistant:
         self.silence_timeout = silence_timeout
         self.min_speech_duration = min_speech_duration
         self._no_confirm = no_confirm
+        self._stt = stt
+
+        # STT-модель: грузим один раз и переиспользуем
+        self._asr = None  # лениво инициализируется при первой фразе
 
         self.is_recording = False
         self.noise_profile: Optional[np.ndarray] = None

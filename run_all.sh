@@ -12,8 +12,12 @@ CONDA_ENV_NAME="tts_env"
 MIC_ENV_NAME="mic_to_text_env"
 
 # Что запускать: "talk" (TALK.py) или "voice" (voice_assistant.py)
-# Можно передать аргументом: ./run_all.sh voice
+# Можно передать аргументом: ./run_all.sh voice [--no-confirm]
+#   voice         — голосовой ассистент с подтверждением
+#   voice-fast    — голосовой ассистент БЕЗ подтверждения (сразу ответ)
+#   talk          — TALK.py (по умолчанию)
 RUN_MODE="${1:-talk}"
+EXTRA_ARGS=""
 
 # Функция очистки при завершении
 cleanup() {
@@ -96,7 +100,7 @@ echo "Ожидание запуска сервисов (5 секунд)..."
 sleep 5
 
 if [ "$RUN_MODE" = "voice" ]; then
-    # --- Режим голосового ассистента ---
+    # --- Режим голосового ассистента (с подтверждением) ---
     echo ""
     echo "[4/5] Активация окружения '$MIC_ENV_NAME' (голосовой ассистент)..."
     conda activate "$MIC_ENV_NAME"
@@ -105,6 +109,16 @@ if [ "$RUN_MODE" = "voice" ]; then
     echo "[5/5] Запуск voice_assistant.py..."
     cd "$SCRIPT_DIR"
     python voice_assistant.py
+elif [ "$RUN_MODE" = "voice-fast" ]; then
+    # --- Режим голосового ассистента (без подтверждения) ---
+    echo ""
+    echo "[4/5] Активация окружения '$MIC_ENV_NAME' (голосовой ассистент, fast)..."
+    conda activate "$MIC_ENV_NAME"
+
+    echo ""
+    echo "[5/5] Запуск voice_assistant.py --no-confirm..."
+    cd "$SCRIPT_DIR"
+    python voice_assistant.py --no-confirm
 else
     # --- Режим TALK.py (по умолчанию) ---
     echo ""

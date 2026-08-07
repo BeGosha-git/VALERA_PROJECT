@@ -1,0 +1,19 @@
+# Nemotron 3.5 ASR Streaming — Mic to Text
+# Requires Python 3.11+
+
+# Core: transformers for Nemotron ASR model
+transformers>=5.13.0
+
+# Audio I/O
+sounddevice>=0.5.0       # Запись с микрофона
+soundfile>=0.12.0        # Сохранение/чтение аудиофайлов
+librosa>=0.10.0          # Аудио-утилиты
+
+# VAD (детектор голосовой активности)
+silero-vad>=5.1
+
+# Math
+numpy>=1.24.0
+
+# Optional GPU acceleration
+accelerate>=0.20.0

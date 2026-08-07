@@ -169,6 +169,22 @@ class RAGClient:
         except requests.RequestException as e:
             raise RuntimeError(f"Ошибка соединения при выполнении запроса: {e}")
 
+    def get_collections(self):
+        """Получает список коллекций (как в TALK.py)."""
+        if not self._logged_in:
+            raise RuntimeError("Необходимо сначала выполнить login()")
+
+        url = f"{self.base_url}/collections"
+        try:
+            response = self.session.get(url)
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"Ошибка получения коллекций: статус {response.status_code}"
+                )
+            return response.json()
+        except requests.RequestException as e:
+            raise RuntimeError(f"Ошибка соединения при получении коллекций: {e}")
+
     def close(self):
         self.session.close()
 
@@ -186,7 +202,6 @@ def clean_html(html_text: Optional[str]) -> str:
 # "робот" покрывает: робот, робота, роботу, роботы, роботе...
 FILTER_STEMS = [
     "валер",
-    "робот",
 ]
 # Мат (нецензурная лексика) — стебли для удаления
 PROFANITY_STEMS = [
@@ -210,9 +225,40 @@ def clean_question(text: str) -> str:
 
 
 def is_yes_answer(answer: str) -> bool:
-    """Определяет, ответил ли пользователь 'да'."""
+    """Определяет, ответил ли пользователь 'да' (только разрешённые фразы)."""
+    import re
+
     a = answer.lower().strip()
-    return any(w in a for w in ("да", "ага", "конечно", "давай", "угу", "верно"))
+    # Многословные фразы
+    for phrase in ("так точно", "хотел бы"):
+        if phrase in a:
+            return True
+    # Одиночные слова по границам
+    return bool(re.search(r"\b(да|конечно|ага|хочу)\b", a))
+
+
+# Слова, близкие к аббревиатуре МИРЭА, которые надо заменять на "МИРЭА"
+# (включая формы склонения "мир": мир, мира, миру, мире, миры, миров, мирами, мирах)
+MIREA_ALIASES = [
+    "мир", "мира", "миру", "мире", "миры", "миров", "мирами", "мирах",
+    "мирэ", "мирэа",
+]
+
+
+def normalize_mirea(text: str) -> str:
+    """Заменяет слова близкие к МИРЭА на 'МИРЭА' (по границам слов)."""
+    import re
+
+    pattern = r"\b(" + "|".join(MIREA_ALIASES) + r")\b"
+    return re.sub(pattern, "МИРЭА", text, flags=re.IGNORECASE)
+
+
+def is_mirea_related(text: str) -> bool:
+    """Есть ли в тексте упоминание МИРЭА или близких к нему слов."""
+    import re
+
+    pattern = r"\b(" + "|".join(MIREA_ALIASES) + r")\b"
+    return re.search(pattern, text, flags=re.IGNORECASE) is not None
 
 
 def arecord_command(extra_args=None):
@@ -247,6 +293,7 @@ class VoiceAssistant:
         vad: SileroVAD,
         silence_timeout: float = 0.75,
         min_speech_duration: float = 0.5,
+        no_confirm: bool = False,
     ):
         self.rag = rag_client
         self.tts = neural_speaker
@@ -254,11 +301,13 @@ class VoiceAssistant:
         self._vad_model = vad.model  # прямой доступ к ONNX-модели (быстрее)
         self.silence_timeout = silence_timeout
         self.min_speech_duration = min_speech_duration
+        self._no_confirm = no_confirm
 
         self.is_recording = False
         self.noise_profile: Optional[np.ndarray] = None
         self._capture_proc: Optional[subprocess.Popen] = None
         self._vad_buffer = np.array([], dtype=np.float32)
+        self._collection_id: Optional[str] = None  # кэш ID коллекции для МИРЭА
 
         # Флаг занятости: пока идёт обработка (STT/RAG/TTS),
         # речь с микрофона игнорируется и новые запросы не отправляются
@@ -426,19 +475,46 @@ class VoiceAssistant:
                 print("🚫 Текст пустой после очистки.")
                 return
 
-            # Подтверждение: спрашиваем, хочет ли пользователь узнать об этом
-            if not self._confirm(clean_text):
-                print("⏭️  Пользователь отказался — не отправляю в ИИ.\n")
-                return
+            # Нормализация МИРЭА: близкие слова → "МИРЭА"
+            query_text = normalize_mirea(clean_text)
+            mirea_related = is_mirea_related(clean_text)
+            if query_text != clean_text:
+                print(f"🔄 МИРЭА-нормализация: {query_text}")
 
-            # 4. Отправляем запрос в RAG
+            # Подтверждение: спрашиваем, хочет ли пользователь узнать об этом
+            if not self._no_confirm:
+                if not self._confirm(query_text):
+                    print("⏭️  Пользователь отказался — не отправляю в ИИ.\n")
+                    return
+
+            # 4. Отправляем запрос в RAG (коллекция для МИРЭА, иначе интернет)
             try:
-                rag_result = self.rag.query(
-                    query_text=clean_text,
-                    use_web_search=True,
-                    use_agent_search=False,
-                    max_results=3,
-                )
+                if mirea_related:
+                    collection_id = self._get_collection_id()
+                    if collection_id:
+                        print(f"📚 Поиск по коллекции (МИРЭА): {collection_id}")
+                        rag_result = self.rag.query(
+                            query_text=query_text,
+                            collection_id=collection_id,
+                            use_web_search=False,
+                            use_agent_search=False,
+                            max_results=3,
+                        )
+                    else:
+                        print("⚠️ Нет коллекций — ищу в интернете.")
+                        rag_result = self.rag.query(
+                            query_text=query_text,
+                            use_web_search=True,
+                            use_agent_search=False,
+                            max_results=3,
+                        )
+                else:
+                    rag_result = self.rag.query(
+                        query_text=query_text,
+                        use_web_search=True,
+                        use_agent_search=False,
+                        max_results=3,
+                    )
                 answer = clean_html(rag_result.get("response"))
                 # Обрезаем, чтобы не было слишком длинно для TTS
                 answer = answer[:700]
@@ -525,6 +601,17 @@ class VoiceAssistant:
         print(f"    Ответ: {answer!r}")
         return is_yes_answer(answer)
 
+    def _get_collection_id(self) -> Optional[str]:
+        """Возвращает ID первой коллекции (кэшируется)."""
+        if self._collection_id is None:
+            try:
+                collections = self.rag.get_collections()
+                if collections:
+                    self._collection_id = collections[0]["id"]
+            except Exception as e:
+                print(f"❌ Не удалось получить коллекции: {e}", file=sys.stderr)
+        return self._collection_id
+
     def start(self):
         if self.is_recording:
             return
@@ -572,8 +659,19 @@ class VoiceAssistant:
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Голосовой ассистент (Микрофон → RAG → TTS)")
+    parser.add_argument(
+        "--no-confirm", action="store_true",
+        help="Отключить подтверждение — отправлять запрос сразу в ИИ без вопроса пользователю"
+    )
+    args = parser.parse_args()
+
     print("=" * 50)
     print("  Голосовой ассистент (Микрофон → RAG → TTS)")
+    if args.no_confirm:
+        print("  ⚡ Режим: без подтверждения (сразу ответ)")
     print("=" * 50)
 
     # 1. Инициализация RAG-клиента
@@ -605,6 +703,7 @@ def main():
         vad=vad,
         silence_timeout=SILENCE_TIMEOUT_SEC,
         min_speech_duration=MIN_SPEECH_DURATION_SEC,
+        no_confirm=args.no_confirm,
     )
 
     try:

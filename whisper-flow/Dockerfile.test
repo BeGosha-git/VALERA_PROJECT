@@ -1,0 +1,27 @@
+FROM python:3.12-slim-bookworm
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    portaudio19-dev \
+    python3-dev \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set the working directory
+WORKDIR /app
+
+# Copy requirements files
+COPY requirements.txt requirements-dev.txt ./
+
+# Install dependencies (runtime + dev/test)
+RUN pip install --upgrade pip wheel && \
+    pip install "setuptools<70" && \
+    pip install --no-cache-dir -r requirements-dev.txt
+
+# Copy the rest of the application
+COPY . .
+
+# Run formatting, linting, and tests directly on the container's python
+RUN black whisperflow tests && \
+    pylint --fail-under=9.9 whisperflow tests && \
+    pytest --ignore=tests/benchmark --ignore=tests/audio --cov-fail-under=95 --cov whisperflow -v tests

@@ -1,0 +1,8 @@
+# runtime dependencies only (dev/test tooling lives in requirements-dev.txt)
+fastapi==0.108.0
+uvicorn[standard]==0.52.0
+python-multipart==0.0.32
+openai-whisper==20250625
+torch
+numpy
+PyAudio==0.2.14

@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+
+{% block title %}Document Preview: {{ document.title }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="jumbotron text-center">
+        <h1 class="display-4">Document Preview Not Available</h1>
+        <p class="lead">We couldn't generate a preview for this document type.</p>
+        <hr class="my-4">
+        {% if error %}
+        <div class="alert alert-warning">
+            <strong>Error:</strong> {{ error }}
+        </div>
+        {% endif %}
+        <p>You can download the document to view it in an appropriate application.</p>
+        <a href="{{ url_for('main.document_raw', document_id=document.id) }}" class="btn btn-primary btn-lg">
+            <i class="bi bi-download"></i> Download {{ document.title }}
+        </a>
+        <a href="{{ url_for('main.index') }}" class="btn btn-secondary btn-lg mt-2">
+            <i class="bi bi-house"></i> Return to Home
+        </a>
+    </div>
+    
+    <div class="card mt-4">
+        <div class="card-header">
+            <h5 class="card-title mb-0">Document Information</h5>
+        </div>
+        <div class="card-body">
+            <p><strong>Title:</strong> {{ document.title }}</p>
+            <p><strong>ID:</strong> {{ document.id }}</p>
+            <p><strong>Collection:</strong> {{ document.collection_id }}</p>
+            <p><strong>Created:</strong> {{ document.created_at }}</p>
+            {% if document.metadata %}
+            <p><strong>Chunks:</strong> {{ document.metadata.chunk_count|default('0') }}</p>
+            {% if document.metadata.filename %}
+            <p><strong>Filename:</strong> {{ document.metadata.filename }}</p>
+            {% endif %}
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

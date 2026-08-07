@@ -1,0 +1,522 @@
+{% extends 'base.html' %}
+
+{% block title %}WebRAgent Query Interface{% endblock %}
+
+{% block head_extra %}
+<style>
+    .preview-iframe {
+        width: 100%;
+        height: 100%;
+        border: none;
+        border-radius: 0;
+    }
+    .context-link {
+        color: var(--bs-primary);
+        text-decoration: underline;
+        cursor: pointer;
+        font-weight: 500;
+        transition: all 0.2s ease;
+    }
+    .context-link:hover {
+        color: var(--bs-primary-hover);
+    }
+    .context-page {
+        background-color: var(--bs-light);
+        padding: 2px 8px;
+        border-radius: 16px;
+        font-size: 0.85em;
+        margin-left: 5px;
+        font-weight: 500;
+    }
+    #mindmap-container {
+        transition: all 0.3s ease;
+    }
+    .document-preview-modal .modal-content {
+        border-radius: 8px;
+        overflow: hidden;
+    }
+    .document-preview-modal .modal-body {
+        padding: 0;
+        height: 80vh;
+    }
+    .blur-backdrop {
+        backdrop-filter: blur(5px);
+        background-color: rgba(0, 0, 0, 0.5);
+    }
+    .query-form {
+        transition: all 0.3s ease;
+    }
+    .loading-spinner {
+        transition: opacity 0.3s ease;
+    }
+    .response-container {
+        animation: fadeIn 0.5s ease;
+    }
+    .mindmap-title {
+        font-weight: 600;
+        font-size: 1.25rem;
+        margin-bottom: 0;
+    }
+    .card-header-custom {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem;
+        background: var(--bs-light);
+        border-bottom: 1px solid rgba(0, 0, 0, 0.125);
+    }
+    .source-document {
+        position: relative;
+        margin-bottom: 1rem;
+        transition: transform 0.2s ease;
+    }
+    .source-document:hover {
+        transform: translateY(-2px);
+    }
+    .badge-container {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4">
+    <div class="row">
+        <!-- Query and results section -->
+        <div class="col-lg-6">
+
+                <!-- Enhanced Query Form -->
+                <div class="query-form mb-4">
+                    <form id="query-form" method="POST" action="{{ url_for('main.query') }}">
+                        <!-- Search Options Container -->
+                        <div class="card shadow-sm mb-3">
+                            <div class="card-header-custom">
+                                <h5 class="card-title h5 mb-0 fw-bold"><i class="bi bi-gear me-2"></i>Search Options</h5>
+                                <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#searchOptionsCollapse" aria-expanded="true" aria-controls="searchOptionsCollapse">
+                                    <i class="bi bi-chevron-up"></i>
+                                </button>
+                            </div>
+                            <div class="collapse show" id="searchOptionsCollapse">
+                                <div class="card-body">
+                                    <!-- Source Selection - Reorganized for clarity -->
+                                    <div class="mb-4">
+                                        <h6 class="fw-medium mb-2 d-flex align-items-center">
+                                            <i class="bi bi-folder2 me-1"></i>Source:
+                                            <button type="button" class="btn btn-sm ms-2 p-0 text-primary" 
+                                                    data-bs-toggle="modal" data-bs-target="#searchHelpModal">
+                                                <i class="bi bi-question-circle"></i>
+                                            </button>
+                                        </h6>
+                                        
+                                        <!-- Main source selection -->
+                                        <div class="source-type-selector mb-3">
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="radio" name="source_type_main" id="use-collection-option" value="collection" checked>
+                                                <label class="form-check-label" for="use-collection-option" data-bs-toggle="tooltip" title="Search within your document collections">
+                                                    <i class="bi bi-journals me-1"></i>Collection Search
+                                                </label>
+                                            </div>
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="radio" name="source_type_main" id="use-web-option" value="web">
+                                                <label class="form-check-label" for="use-web-option" data-bs-toggle="tooltip" title="Search the web instead of document collections">
+                                                    <i class="bi bi-globe me-1"></i>Web Search
+                                                </label>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Collection selection (conditionally visible) -->
+                                        <div id="collection-selector-container">
+                                            <select class="form-select mb-2" id="collection_id" name="collection_id">
+                                                <option value="" disabled {% if not selected_collection %}selected{% endif %}>-- Select a collection --</option>
+                                                {% for collection in collections %}
+                                                <option value="{{ collection.id }}" {% if selected_collection == collection.id %}selected{% endif %}>
+                                                    {{ collection.name }}
+                                                </option>
+                                                {% endfor %}
+                                            </select>
+                                            <small id="collection-help" class="form-text text-muted">
+                                                Select a document collection to search within
+                                            </small>
+                                        </div>
+                                        
+                                        <!-- Web search options (conditionally visible) -->
+                                        <div id="web-search-options-container" class="d-none">
+                                            <!-- Hidden field for backend compatibility -->
+                                            <input type="checkbox" id="use-web-search" name="use_web_search" checked style="display:none;">
+                                            
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input" type="checkbox" id="use-deep-search" name="use_deep_search">
+                                                <label class="form-check-label" for="use-deep-search" data-bs-toggle="tooltip" 
+                                                       title="Scrape & process full web page content for deeper analysis">
+                                                    <i class="bi bi-search-heart me-1"></i>Deep Web Search
+                                                </label>
+                                                <small class="form-text d-block text-muted ps-4">
+                                                    Scrapes full content from web pages for more detailed analysis. Takes longer to process.
+                                                </small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Advanced Options -->
+                                    <div class="mb-3">
+                                        <h6 class="fw-medium mb-2 d-flex align-items-center">
+                                            <i class="bi bi-sliders me-1"></i>Advanced Options:
+                                            <button type="button" class="btn btn-sm ms-2 p-0 text-primary" 
+                                                    data-bs-toggle="tooltip" title="Click the help icon at the top for detailed explanations">
+                                                <i class="bi bi-info-circle-fill"></i>
+                                            </button>
+                                        </h6>
+                                        <div class="row">
+                                            <div class="col-md-6">
+                                                <div class="form-check mb-2">
+                                                    <input class="form-check-input" type="checkbox" id="use-agent-search" name="use_agent_search">
+                                                    <label class="form-check-label" for="use-agent-search" data-bs-toggle="tooltip" 
+                                                           title="Uses AI to break down complex queries into simpler subqueries for better results">
+                                                        <i class="bi bi-robot me-1"></i>Agent Search
+                                                    </label>
+                                                    <small class="form-text d-block text-muted ps-4">
+                                                        Improves results for complex questions by breaking them down
+                                                    </small>
+                                                </div>
+                                                <div class="agent-strategy-container d-none mb-3">
+                                                    <label class="form-label mb-1 ps-4">Agent Strategy:</label>
+                                                    <select class="form-select form-select-sm ms-4" style="width: calc(100% - 1.5rem);" id="agent-strategy" name="agent_strategy">
+                                                        <option value="direct" selected data-bs-toggle="tooltip" title="Directly breaks down the query into subqueries">Direct Decomposition</option>
+                                                        <option value="informed" data-bs-toggle="tooltip" title="First gets initial results, then creates targeted follow-up queries">Informed Decomposition</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <div class="form-check mb-2">
+                                                    <input class="form-check-input" type="checkbox" id="generate-mindmap" name="generate_mindmap" checked>
+                                                    <label class="form-check-label" for="generate-mindmap" data-bs-toggle="tooltip"
+                                                           title="Creates a visual mind map representation of the answer">
+                                                        <i class="bi bi-diagram-3 me-1"></i>Generate Mind Map
+                                                    </label>
+                                                </div>
+                                                <div class="mb-2">
+                                                    <label class="form-label mb-1" for="max-results" data-bs-toggle="tooltip"
+                                                           title="Maximum number of sources to include in the response">
+                                                        <i class="bi bi-list-ol me-1"></i>Number of Results:
+                                                    </label>
+                                                    <input type="number" class="form-control form-control-sm" id="max-results" name="max_results" value="4" min="1" max="10">
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Question Container -->
+                        <div class="card shadow-sm">
+                            <div class="card-header-custom">
+                                <h5 class="card-title h5 mb-0 fw-bold"><i class="bi bi-question-circle me-2"></i>Your Question</h5>
+                            </div>
+                            <div class="card-body">
+                                <textarea class="form-control" id="query" name="query" rows="3" placeholder="What would you like to know..." required style="height: 150px;">{{ request.form.get('query', '') }}</textarea>
+                                <div class="text-end mt-3">
+                                    <button type="submit" class="btn btn-primary">
+                                        <span class="spinner-submit">
+                                            <i class="bi bi-send me-1"></i>Submit Query
+                                        </span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Results Container -->
+                <div id="results-card" class="card shadow-sm mb-4">
+                    <div class="card-header-custom">
+                        <h3 class="card-title h5 mb-0 fw-bold">
+                            <i class="bi bi-search me-2"></i>
+                            {% if result %}
+                                Results for: <span class="text-primary">"{{ result.query }}"</span>
+                            {% else %}
+                                Results
+                            {% endif %}
+                        </h3>
+                    </div>
+                    <div class="card-body">
+                        <!-- Loading Spinner (initially hidden) -->
+                        <div id="loading-spinner" class="loading-spinner text-center py-4" style="display: none;">
+                            <div class="spinner-grow text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <div id="processing-message" class="mt-3 text-primary fw-medium">
+                                <p class="mb-0">Analyzing your query...</p>
+                                <div id="processing-details" class="small text-muted mt-2"></div>
+                            </div>
+                        </div>
+                
+                        <!-- Empty State Placeholder (shown when no search has been done) -->
+                        <div id="empty-results-placeholder" class="text-center py-5" {% if result %}style="display: none;"{% endif %}>
+                            <div class="mb-3">
+                                <i class="bi bi-search" style="font-size: 3rem; color: #6c757d;"></i>
+                            </div>
+                            <h4 class="h5 mb-2">Ready to Search</h4>
+                            <p class="text-muted">Configure your search options and ask a question above to get started.</p>
+                        </div>
+                
+                        <!-- Response Container (replaced with results when search completes) -->
+                        <div id="response-container" class="response-container" {% if not result %}style="display: none;"{% endif %}>
+                            {% if result %}
+                                {% if result.subqueries %}
+                                <!-- Agent Search Results Format -->
+                                <h4 class="h5 fw-bold mb-3">
+                                    <i class="bi bi-robot me-2"></i>Generated Response:
+                                    <span class="badge bg-info text-dark ms-2">Agent Search</span>
+                                </h4>
+                                
+                                <div class="llm-response mb-4">
+                                    {{ result.response|markdown }}
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <div class="d-flex align-items-center mb-2">
+                                        <button class="btn btn-sm btn-outline-secondary me-2" type="button" data-bs-toggle="collapse" data-bs-target="#subqueriesCollapse" aria-expanded="false" aria-controls="subqueriesCollapse">
+                                            <i class="bi bi-list-task me-1"></i>Show Subqueries
+                                        </button>
+                                        <small class="text-muted">See how the question was broken down</small>
+                                    </div>
+                                    
+                                    <div class="collapse" id="subqueriesCollapse">
+                                        <div class="card card-body bg-light mb-3">
+                                            <h6 class="card-subtitle mb-2 text-muted">Query Decomposition:</h6>
+                                            <ul class="list-group list-group-flush">
+                                                {% for subquery in result.subqueries %}
+                                                <li class="list-group-item bg-transparent">{{ subquery }}</li>
+                                                {% endfor %}
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                                {% else %}
+                                <!-- Standard WebRAgent Results Format -->
+                                <h4 class="h5 fw-bold mb-3"><i class="bi bi-robot me-2"></i>Generated Response:</h4>
+                                <div class="llm-response mb-4">
+                                    {{ result.response|markdown }}
+                                </div>
+                                {% endif %}
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Source Documents Container -->
+                <div id="sources-container" class="card shadow-sm mb-4" {% if not result or not result.contexts %}style="display: none;"{% endif %}>
+                    <div class="card-header-custom">
+                        <h4 class="card-title h5 mb-0 fw-bold">
+                            <i class="bi bi-journal-text me-2"></i>Source Documents
+                        </h4>
+                    </div>
+                    <div class="card-body">
+                        <div class="source-documents">
+                            {% if result and result.contexts %}
+                                {% for context in result.contexts %}
+                                <div class="source-document card mb-3">
+                                    <div class="card-header py-2 px-3 bg-light">
+                                        <div class="d-flex justify-content-between align-items-center">
+                                            <div>
+                                                <strong class="d-flex align-items-center">
+                                                    <i class="bi bi-file-earmark-text me-2"></i>
+                                                    <a href="javascript:void(0)" class="context-link" 
+                                                       data-document-id="{{ context.document_id }}" 
+                                                       data-preview-url="{{ url_for('main.document_preview', document_id=context.document_id) }}">
+                                                        {{ context.document_title }}
+                                                    </a>
+                                                </strong>
+                                                {% if context.page_number %}
+                                                <span class="context-page">Page {{ context.page_number }}</span>
+                                                {% endif %}
+                                            </div>
+                                            <span class="badge bg-primary rounded-pill">Score: {{ "%.2f"|format(context.score) }}</span>
+                                        </div>
+                                    </div>
+                                    <div class="card-body py-2 px-3">
+                                        <p class="mb-0 source-content">{{ context.content }}</p>
+                                    </div>
+                                </div>
+                                {% endfor %}
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+        </div>
+        
+        <!-- Mind map and Document preview section -->
+        <div class="col-lg-6">
+            <!-- Mind map pane -->
+            <div id="mindmap-container" class="card shadow-sm mb-4" style="height: 464px;">
+                <div class="card-header-custom">
+                    <h5 class="mindmap-title"><i class="bi bi-diagram-3 me-2"></i>Mind Map Visualization</h5>
+                    <button id="close-mindmap-btn" class="btn btn-sm btn-outline-secondary">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+                <div class="card-body p-0" style="height: 400px;">
+                    <div id="mindmap-frame-container" style="height: 100%; overflow: hidden;">
+                        <iframe id="mindmap-frame" class="preview-iframe" src="about:blank"></iframe>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Document preview pane -->
+            <div id="document-preview" class="preview-pane" style="display: block;">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header-custom">
+                        <h5 class="card-title mb-0" id="preview-title"><i class="bi bi-file-earmark-text me-2"></i>Document Preview</h5>
+                        <div>
+                            <a href="#" id="preview-download" class="btn btn-sm btn-outline-primary" target="_blank">
+                                <i class="bi bi-download"></i> Download
+                            </a>
+                            <button class="btn btn-sm btn-outline-secondary" id="close-preview">
+                                <i class="bi bi-x-lg"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <iframe id="preview-iframe" class="preview-iframe" src="about:blank"></iframe>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<!-- Search Help Modal -->
+<div class="modal fade" id="searchHelpModal" tabindex="-1" aria-labelledby="searchHelpModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="searchHelpModalLabel"><i class="bi bi-question-circle me-2"></i>Search Options Help</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="accordion" id="helpAccordion">
+                    <!-- Source Selection Help -->
+                    <div class="accordion-item">
+                        <h2 class="accordion-header" id="headingOne">
+                            <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne" aria-expanded="true" aria-controls="collapseOne">
+                                <i class="bi bi-folder2 me-2"></i>Source Selection
+                            </button>
+                        </h2>
+                        <div id="collapseOne" class="accordion-collapse collapse show" aria-labelledby="headingOne" data-bs-parent="#helpAccordion">
+                            <div class="accordion-body">
+                                <h6 class="fw-bold"><i class="bi bi-journals me-1"></i>Collection Search</h6>
+                                <p>Search within your document collections for relevant information. Select a specific collection from the dropdown menu.</p>
+                                
+                                <h6 class="fw-bold mt-3"><i class="bi bi-globe me-1"></i>Web Search</h6>
+                                <p>Search the internet for information. This option uses SearXNG to fetch results from search engines.</p>
+                                
+                                <h6 class="fw-bold mt-3"><i class="bi bi-search-heart me-1"></i>Deep Web Search</h6>
+                                <p>An enhanced web search that scrapes and processes the full content of web pages to extract more detailed information. This option:</p>
+                                <ul>
+                                    <li>Retrieves search results from the web</li>
+                                    <li>Scrapes the full content of each page</li>
+                                    <li>Analyzes the content to extract relevant information</li>
+                                    <li>Takes longer to process but provides more comprehensive results</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Advanced Options Help -->
+                    <div class="accordion-item">
+                        <h2 class="accordion-header" id="headingTwo">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTwo" aria-expanded="false" aria-controls="collapseTwo">
+                                <i class="bi bi-sliders me-2"></i>Advanced Options
+                            </button>
+                        </h2>
+                        <div id="collapseTwo" class="accordion-collapse collapse" aria-labelledby="headingTwo" data-bs-parent="#helpAccordion">
+                            <div class="accordion-body">
+                                <h6 class="fw-bold"><i class="bi bi-robot me-1"></i>Agent Search</h6>
+                                <p>Enhances search by breaking down complex questions into smaller, more focused subqueries:</p>
+                                <ul>
+                                    <li>Analyzes your question to identify its key components</li>
+                                    <li>Creates targeted subqueries for each component</li>
+                                    <li>Processes each subquery separately</li>
+                                    <li>Synthesizes a comprehensive answer from all results</li>
+                                    <li>Particularly useful for multi-part questions</li>
+                                </ul>
+                                
+                                <h6 class="fw-bold mt-3">Agent Strategies:</h6>
+                                <ul>
+                                    <li><strong>Direct Decomposition:</strong> Immediately breaks down your query into subqueries before searching</li>
+                                    <li><strong>Informed Decomposition:</strong> First performs a preliminary search, then creates targeted follow-up queries based on initial results</li>
+                                </ul>
+                                
+                                <h6 class="fw-bold mt-3"><i class="bi bi-diagram-3 me-1"></i>Generate Mind Map</h6>
+                                <p>Creates a visual mind map representation of the answer, helping you to understand the relationships between concepts.</p>
+                                
+                                <h6 class="fw-bold mt-3"><i class="bi bi-list-ol me-1"></i>Number of Results</h6>
+                                <p>Controls how many source documents or web pages will be used to generate the answer. More sources can provide more comprehensive information but may increase processing time.</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Combinations Help -->
+                    <div class="accordion-item">
+                        <h2 class="accordion-header" id="headingThree">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseThree" aria-expanded="false" aria-controls="collapseThree">
+                                <i class="bi bi-gear-wide-connected me-2"></i>Common Combinations
+                            </button>
+                        </h2>
+                        <div id="collapseThree" class="accordion-collapse collapse" aria-labelledby="headingThree" data-bs-parent="#helpAccordion">
+                            <div class="accordion-body">
+                                <h6 class="fw-bold">Basic Collection Search</h6>
+                                <p>For straightforward questions about your documents.</p>
+                                <ul>
+                                    <li>Collection Search (select your collection)</li>
+                                    <li>Agent Search OFF</li>
+                                </ul>
+                                
+                                <h6 class="fw-bold mt-3">Enhanced Collection Search</h6>
+                                <p>For complex, multi-part questions about your documents.</p>
+                                <ul>
+                                    <li>Collection Search (select your collection)</li>
+                                    <li>Agent Search ON</li>
+                                </ul>
+                                
+                                <h6 class="fw-bold mt-3">Basic Web Search</h6>
+                                <p>For general information from the web.</p>
+                                <ul>
+                                    <li>Web Search</li>
+                                    <li>Deep Web Search OFF</li>
+                                    <li>Agent Search OFF</li>
+                                </ul>
+                                
+                                <h6 class="fw-bold mt-3">Deep Web Research</h6>
+                                <p>For in-depth research requiring detailed information from web pages.</p>
+                                <ul>
+                                    <li>Web Search</li>
+                                    <li>Deep Web Search ON</li>
+                                    <li>Agent Search ON (recommended for best results)</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Got it!</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/rag.js') }}"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // All JavaScript functionality is handled in rag.js
+        // No additional inline JavaScript needed
+    });
+</script>
+{% endblock %}

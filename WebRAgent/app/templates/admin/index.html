@@ -1,0 +1,146 @@
+{% extends 'base.html' %}
+
+{% block title %}Admin Dashboard{% endblock %}
+
+{% block head_extra %}
+<style>
+    .admin-panel-card {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        background-color: #f8f9fa;
+        border-radius: 0.5rem;
+        padding: 1.5rem;
+        box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+    }
+    
+    .admin-panel-card h2 {
+        font-size: 1.5rem;
+        margin-bottom: 1rem;
+        color: #212529;
+    }
+    
+    .admin-panel-card p {
+        color: #6c757d;
+        margin-bottom: 1.5rem;
+    }
+    
+    .admin-panel-card .stats-container {
+        background-color: white;
+        border-radius: 0.375rem;
+        padding: 1rem;
+        box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+    }
+    
+    .admin-panel-card .btn {
+        margin-top: auto;
+    }
+    
+    .spacer {
+        flex-grow: 1;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="mb-4">Admin Dashboard</h1>
+    
+    <div class="row g-4">
+        <div class="col-md-3">
+            <div class="admin-panel-card">
+                <h2><i class="bi bi-folder2 me-2"></i>Collections</h2>
+                <p>Manage your document collections and upload documents.</p>
+                <div class="spacer"></div>
+                <a href="{{ url_for('admin.collections') }}" class="btn btn-primary w-100">
+                    <i class="bi bi-gear-fill me-2"></i>Manage Collections
+                </a>
+            </div>
+        </div>
+        
+        <div class="col-md-3">
+            <div class="admin-panel-card">
+                <h2><i class="bi bi-people me-2"></i>Users</h2>
+                <p>Manage user accounts and permissions.</p>
+                <div class="spacer"></div>
+                <a href="{{ url_for('admin.users') }}" class="btn btn-primary w-100">
+                    <i class="bi bi-person-gear me-2"></i>Manage Users
+                </a>
+            </div>
+        </div>
+        
+        <div class="col-md-3">
+            <div class="admin-panel-card">
+                <h2><i class="bi bi-cpu me-2"></i>Models</h2>
+                <p>Configure LLM providers and embedding models.</p>
+                <div class="spacer"></div>
+                <a href="{{ url_for('admin.models') }}" class="btn btn-primary w-100">
+                    <i class="bi bi-gear-wide-connected me-2"></i>Manage Models
+                </a>
+            </div>
+        </div>
+        
+        <div class="col-md-3">
+            <div class="admin-panel-card">
+                <h2><i class="bi bi-bar-chart me-2"></i>Stats</h2>
+                <div class="stats-container">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h5 class="card-title mb-0">Total Collections</h5>
+                        <span class="badge bg-primary rounded-pill fs-6">{{ collections|length }}</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center">
+                        <h5 class="card-title mb-0">Total Users</h5>
+                        <span class="badge bg-primary rounded-pill fs-6">{{ users|length }}</span>
+                    </div>
+                </div>
+                <div class="spacer"></div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header d-flex justify-content-between align-items-center py-3">
+                    <h2 class="h5 mb-0 fw-bold"><i class="bi bi-collection me-2"></i>Recent Collections</h2>
+                </div>
+                <div class="card-body">
+                    {% if collections %}
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Description</th>
+                                    <th>Created</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for collection in collections %}
+                                <tr>
+                                    <td class="fw-medium">{{ collection.name }}</td>
+                                    <td>{{ collection.description }}</td>
+                                    <td>{{ collection.created_at }}</td>
+                                    <td>
+                                        <a href="{{ url_for('admin.collection_detail', collection_id=collection.id) }}" class="btn btn-sm btn-primary">
+                                            <i class="bi bi-eye me-1"></i>View
+                                        </a>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle me-2"></i>
+                        No collections found. <a href="{{ url_for('admin.collections') }}" class="fw-medium">Create a collection</a> to get started.
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

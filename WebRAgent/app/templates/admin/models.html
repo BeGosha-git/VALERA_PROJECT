@@ -1,0 +1,649 @@
+{% extends 'base.html' %}
+
+{% block title %}Model Management{% endblock %}
+
+{% block head_extra %}
+<style>
+    .card-header-custom {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem 1.25rem;
+        background: #f8f9fa;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.125);
+    }
+    
+    .provider-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.5rem 1rem;
+        border-radius: 0.375rem;
+        margin-right: 0.5rem;
+        margin-bottom: 0.5rem;
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        cursor: pointer;
+        transition: all 0.15s ease-in-out;
+    }
+    
+    .provider-badge.active {
+        background-color: #0d6efd;
+        color: white;
+        border-color: #0d6efd;
+    }
+    
+    .provider-badge.unavailable {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+    
+    .model-card {
+        border-radius: 0.5rem;
+        overflow: hidden;
+        transition: all 0.2s ease;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .model-card .card-body {
+        flex-grow: 1;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .model-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.1);
+    }
+    
+    .model-card.active {
+        border-color: #0d6efd;
+        border-width: 2px;
+    }
+    
+    .model-type-badge {
+        position: absolute;
+        top: 0.5rem;
+        right: 0.5rem;
+        font-size: 0.75rem;
+    }
+    
+    .model-actions {
+        margin-top: auto;
+    }
+    
+    .provider-icon {
+        margin-right: 0.5rem;
+        font-size: 1.25rem;
+    }
+    
+    .status-indicator {
+        display: inline-block;
+        width: 0.75rem;
+        height: 0.75rem;
+        border-radius: 50%;
+        margin-right: 0.5rem;
+    }
+    
+    .status-indicator.active {
+        background-color: #28a745;
+    }
+    
+    .status-indicator.inactive {
+        background-color: #dc3545;
+    }
+    
+    .model-groups {
+        margin-top: 1.5rem;
+    }
+    
+    .model-group {
+        margin-bottom: 1.5rem;
+    }
+    
+    .model-group-title {
+        font-size: 1.25rem;
+        font-weight: 600;
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="mb-0">Model Management</h1>
+        <a href="{{ url_for('admin.index') }}" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-left me-1"></i>Back to Dashboard
+        </a>
+    </div>
+    
+    <div class="card shadow-sm mb-4">
+        <div class="card-header-custom">
+            <h2 class="h5 mb-0 fw-bold"><i class="bi bi-braces-asterisk me-2"></i>Active Configuration</h2>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="card h-100">
+                        <div class="card-header bg-light">
+                            <h5 class="mb-0">LLM Provider</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="d-flex align-items-center">
+                                <span class="status-indicator active"></span>
+                                <span class="fw-medium" id="active-provider-display">{{ active_config.llm_provider|capitalize }}</span>
+                            </div>
+                            
+                            <div class="mt-3">
+                                <label class="form-label">Switch Provider:</label>
+                                <div class="provider-selection">
+                                    {% for provider in providers %}
+                                        {% if provider.id in ['openai', 'claude', 'ollama'] %}
+                                        <div class="provider-badge {% if active_config.llm_provider == provider.id %}active{% endif %} {% if not provider.available %}unavailable{% endif %}" 
+                                             data-provider="{{ provider.id }}" data-available="{{ provider.available|lower }}">
+                                            {% if provider.id == 'openai' %}
+                                            <i class="bi bi-cpu provider-icon"></i>
+                                            {% elif provider.id == 'claude' %}
+                                            <i class="bi bi-robot provider-icon"></i>
+                                            {% elif provider.id == 'ollama' %}
+                                            <i class="bi bi-hdd-network provider-icon"></i>
+                                            {% endif %}
+                                            {{ provider.name }}
+                                        </div>
+                                        {% endif %}
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="col-md-6">
+                    <div class="card h-100">
+                        <div class="card-header bg-light">
+                            <h5 class="mb-0">Active Models</h5>
+                        </div>
+                        <div class="card-body">
+                            <ul class="list-group list-group-flush">
+                                {% if active_config.llm_provider == 'openai' %}
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    <span>OpenAI LLM:</span>
+                                    <span class="fw-medium" id="openai-llm-display">{{ active_config.models.openai_llm }}</span>
+                                </li>
+                                {% elif active_config.llm_provider == 'claude' %}
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    <span>Claude LLM:</span>
+                                    <span class="fw-medium" id="claude-llm-display">{{ active_config.models.claude_llm }}</span>
+                                </li>
+                                {% elif active_config.llm_provider == 'ollama' %}
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    <span>Ollama LLM:</span>
+                                    <span class="fw-medium" id="ollama-llm-display">{{ active_config.models.ollama_llm }}</span>
+                                </li>
+                                {% endif %}
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    <span>Embedding Model:</span>
+                                    <span class="fw-medium" id="embedding-display">{{ active_config.models.embedding }}</span>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card shadow-sm">
+        <div class="card-header-custom">
+            <h2 class="h5 mb-0 fw-bold"><i class="bi bi-gear-wide-connected me-2"></i>Available Models</h2>
+            <button id="refresh-models-btn" class="btn btn-outline-primary btn-sm">
+                <i class="bi bi-arrow-clockwise me-1"></i>Refresh Models
+            </button>
+        </div>
+        <div class="card-body">
+            <ul class="nav nav-tabs" id="modelsTab" role="tablist">
+                {% for provider in providers %}
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link {% if loop.first %}active{% endif %}" 
+                            id="{{ provider.id }}-tab" 
+                            data-bs-toggle="tab" 
+                            data-bs-target="#{{ provider.id }}-models" 
+                            type="button" 
+                            role="tab" 
+                            aria-controls="{{ provider.id }}-models" 
+                            aria-selected="{% if loop.first %}true{% else %}false{% endif %}">
+                        {{ provider.name }}
+                    </button>
+                </li>
+                {% endfor %}
+            </ul>
+            
+            <div class="tab-content pt-3" id="modelsTabContent">
+                {% for provider in providers %}
+                <div class="tab-pane fade {% if loop.first %}show active{% endif %}" 
+                     id="{{ provider.id }}-models" 
+                     role="tabpanel" 
+                     aria-labelledby="{{ provider.id }}-tab">
+                    
+                    {% if provider.available %}
+                    <div class="model-groups">
+                        <!-- LLM Models -->
+                        <div class="model-group" id="{{ provider.id }}-llm-models">
+                            <div class="model-group-title">
+                                <i class="bi bi-chat-dots me-2"></i>
+                                LLM Models
+                                <div class="spinner-border text-primary spinner-border-sm ms-2 d-none" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                            </div>
+                            <div class="row g-3 models-container">
+                                <!-- Models will be loaded dynamically -->
+                                <div class="col-12">
+                                    <div class="alert alert-info">
+                                        <i class="bi bi-info-circle me-2"></i>
+                                        Loading models...
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Embedding Models -->
+                        {% if provider.id != 'claude' %}
+                        <div class="model-group" id="{{ provider.id }}-embedding-models">
+                            <div class="model-group-title">
+                                <i class="bi bi-boxes me-2"></i>
+                                Embedding Models
+                                <div class="spinner-border text-primary spinner-border-sm ms-2 d-none" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                            </div>
+                            <div class="row g-3 models-container">
+                                <!-- Models will be loaded dynamically -->
+                                <div class="col-12">
+                                    <div class="alert alert-info">
+                                        <i class="bi bi-info-circle me-2"></i>
+                                        Loading models...
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% else %}
+                    <div class="alert alert-warning mt-3">
+                        <i class="bi bi-exclamation-triangle me-2"></i>
+                        {{ provider.reason }}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Success Toast -->
+<div class="toast-container position-fixed bottom-0 end-0 p-3">
+    <div id="successToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="toast-header bg-success text-white">
+            <i class="bi bi-check-circle me-2"></i>
+            <strong class="me-auto">Success</strong>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+        <div class="toast-body">
+            Model updated successfully!
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const activeConfig = {{ active_config|tojson }};
+    
+    // Load models for each provider tab
+    document.querySelectorAll('[id$="-tab"]').forEach(tab => {
+        tab.addEventListener('click', function(e) {
+            const provider = this.id.replace('-tab', '');
+            loadModels(provider, 'llm');
+            if (provider !== 'claude') {
+                loadModels(provider, 'embedding');
+            }
+        });
+    });
+    
+    // Load models for the first active tab
+    const firstActiveTab = document.querySelector('.nav-link.active');
+    if (firstActiveTab) {
+        const provider = firstActiveTab.id.replace('-tab', '');
+        loadModels(provider, 'llm');
+        if (provider !== 'claude') {
+            loadModels(provider, 'embedding');
+        }
+    }
+    
+    // Handle provider selection
+    document.querySelectorAll('.provider-badge').forEach(badge => {
+        badge.addEventListener('click', function() {
+            const provider = this.dataset.provider;
+            const available = this.dataset.available === 'true';
+            
+            if (!available) return; // Don't allow selecting unavailable providers
+            
+            document.querySelectorAll('.provider-badge').forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+            
+            // Update the active provider via API
+            setActiveProvider(provider);
+        });
+    });
+    
+    function loadModels(provider, modelType) {
+        const container = document.querySelector(`#${provider}-${modelType}-models .models-container`);
+        const spinner = document.querySelector(`#${provider}-${modelType}-models .spinner-border`);
+        
+        if (!container) return;
+        
+        // Show spinner
+        spinner.classList.remove('d-none');
+        
+        // Make API request
+        fetch(`/admin/api/models/list?provider=${provider}&type=${modelType}`)
+            .then(response => response.json())
+            .then(data => {
+                // Hide spinner
+                spinner.classList.add('d-none');
+                
+                if (data.models && data.models.length > 0) {
+                    // Clear container
+                    container.innerHTML = '';
+                    
+                    // Determine active model ID
+                    let activeModelId;
+                    if (modelType === 'llm') {
+                        if (provider === 'openai') activeModelId = activeConfig.models.openai_llm;
+                        else if (provider === 'claude') activeModelId = activeConfig.models.claude_llm;
+                        else if (provider === 'ollama') activeModelId = activeConfig.models.ollama_llm;
+                    } else if (modelType === 'embedding') {
+                        if (provider === 'openai') activeModelId = activeConfig.models.openai_embedding;
+                        else if (provider === 'ollama') activeModelId = activeConfig.models.ollama_embedding;
+                        else if (provider === 'embedding') activeModelId = activeConfig.models.embedding;
+                    }
+                    
+                    // Add model cards
+                    data.models.forEach(model => {
+                        const isActive = model.id === activeModelId;
+                        
+                        const modelCard = document.createElement('div');
+                        modelCard.className = 'col-md-4 col-lg-3';
+                        modelCard.innerHTML = `
+                            <div class="card model-card ${isActive ? 'active' : ''}">
+                                <div class="card-body">
+                                    <span class="badge ${modelType === 'llm' ? 'bg-primary' : 'bg-success'} model-type-badge">
+                                        ${modelType.toUpperCase()}
+                                    </span>
+                                    <h5 class="card-title">${model.name}</h5>
+                                    <p class="card-text text-muted small">${model.id}</p>
+                                    <div class="model-actions">
+                                        <button class="btn btn-sm ${isActive ? 'btn-success' : 'btn-outline-primary'} w-100 set-model-btn"
+                                                data-provider="${provider}"
+                                                data-model-id="${model.id}"
+                                                data-model-type="${modelType}"
+                                                ${isActive ? 'disabled' : ''}>
+                                            ${isActive ? '<i class="bi bi-check-circle me-1"></i>Active' : 'Select'}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                        container.appendChild(modelCard);
+                    });
+                    
+                    // Add event listeners to model selection buttons
+                    document.querySelectorAll('.set-model-btn').forEach(btn => {
+                        btn.addEventListener('click', function() {
+                            const modelProvider = this.dataset.provider;
+                            const modelId = this.dataset.modelId;
+                            const modelType = this.dataset.modelType;
+                            
+                            setActiveModel(modelProvider, modelId, modelType);
+                        });
+                    });
+                } else {
+                    container.innerHTML = `
+                        <div class="col-12">
+                            <div class="alert alert-info">
+                                <i class="bi bi-info-circle me-2"></i>
+                                No ${modelType} models available for ${provider}.
+                            </div>
+                        </div>
+                    `;
+                }
+            })
+            .catch(error => {
+                spinner.classList.add('d-none');
+                container.innerHTML = `
+                    <div class="col-12">
+                        <div class="alert alert-danger">
+                            <i class="bi bi-exclamation-triangle me-2"></i>
+                            Error loading models: ${error.message}
+                        </div>
+                    </div>
+                `;
+                console.error('Error loading models:', error);
+            });
+    }
+    
+    function setActiveModel(provider, modelId, modelType) {
+        fetch('/admin/api/models/set-model', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                provider: provider,
+                model_id: modelId,
+                type: modelType
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Refresh models list to update UI
+                loadModels(provider, modelType);
+                
+                // Update active models display
+                if (modelType === 'llm') {
+                    // Update in-memory activeConfig
+                    if (provider === 'openai') {
+                        activeConfig.models.openai_llm = modelId;
+                        // Only update display if this is the active provider
+                        if (activeConfig.llm_provider === 'openai') {
+                            // If this model is shown in the active models list, update it
+                            const displayElement = document.getElementById('openai-llm-display');
+                            if (displayElement) displayElement.textContent = modelId;
+                            
+                            // If not, we need to update the active models section
+                            if (!displayElement) {
+                                updateActiveModelsDisplay();
+                            }
+                        }
+                    }
+                    else if (provider === 'claude') {
+                        activeConfig.models.claude_llm = modelId;
+                        if (activeConfig.llm_provider === 'claude') {
+                            const displayElement = document.getElementById('claude-llm-display');
+                            if (displayElement) displayElement.textContent = modelId;
+                            
+                            if (!displayElement) {
+                                updateActiveModelsDisplay();
+                            }
+                        }
+                    }
+                    else if (provider === 'ollama') {
+                        activeConfig.models.ollama_llm = modelId;
+                        if (activeConfig.llm_provider === 'ollama') {
+                            const displayElement = document.getElementById('ollama-llm-display');
+                            if (displayElement) displayElement.textContent = modelId;
+                            
+                            if (!displayElement) {
+                                updateActiveModelsDisplay();
+                            }
+                        }
+                    }
+                } else if (modelType === 'embedding') {
+                    // For embedding models
+                    if (provider === 'embedding') {
+                        activeConfig.models.embedding = modelId;
+                        const displayElement = document.getElementById('embedding-display');
+                        if (displayElement) displayElement.textContent = modelId;
+                    }
+                }
+                
+                // Show success toast
+                const toast = new bootstrap.Toast(document.getElementById('successToast'));
+                toast.show();
+            } else {
+                alert(`Error: ${data.error || 'Failed to set model'}`);
+            }
+        })
+        .catch(error => {
+            console.error('Error setting model:', error);
+            alert('An error occurred while setting the model.');
+        });
+    }
+    
+    function updateActiveModelsDisplay() {
+        // Update active models section
+        const activeModelsList = document.querySelector('.card-body ul.list-group');
+        let modelDisplayHTML = '';
+        
+        // Show only the active provider's model
+        if (activeConfig.llm_provider === 'openai') {
+            modelDisplayHTML += `
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <span>OpenAI LLM:</span>
+                    <span class="fw-medium" id="openai-llm-display">${activeConfig.models.openai_llm}</span>
+                </li>
+            `;
+        } else if (activeConfig.llm_provider === 'claude') {
+            modelDisplayHTML += `
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <span>Claude LLM:</span>
+                    <span class="fw-medium" id="claude-llm-display">${activeConfig.models.claude_llm}</span>
+                </li>
+            `;
+        } else if (activeConfig.llm_provider === 'ollama') {
+            modelDisplayHTML += `
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <span>Ollama LLM:</span>
+                    <span class="fw-medium" id="ollama-llm-display">${activeConfig.models.ollama_llm}</span>
+                </li>
+            `;
+        }
+        
+        // Always show embedding model
+        modelDisplayHTML += `
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+                <span>Embedding Model:</span>
+                <span class="fw-medium" id="embedding-display">${activeConfig.models.embedding}</span>
+            </li>
+        `;
+        
+        activeModelsList.innerHTML = modelDisplayHTML;
+    }
+    
+    function setActiveProvider(provider) {
+        fetch('/admin/api/models/set-provider', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                provider: provider
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Update active provider display
+                document.getElementById('active-provider-display').textContent = provider.charAt(0).toUpperCase() + provider.slice(1);
+                
+                // Update activeConfig in memory
+                activeConfig.llm_provider = provider;
+                
+                // Update the active models display
+                updateActiveModelsDisplay();
+                
+                // Show success toast
+                const toast = new bootstrap.Toast(document.getElementById('successToast'));
+                toast.show();
+            } else {
+                alert(`Error: ${data.error || 'Failed to set provider'}`);
+            }
+        })
+        .catch(error => {
+            console.error('Error setting provider:', error);
+            alert('An error occurred while setting the provider.');
+        });
+    }
+    
+    // Handle refresh models button
+    document.getElementById('refresh-models-btn').addEventListener('click', function() {
+        const button = this;
+        const originalText = button.innerHTML;
+        
+        // Show loading state
+        button.disabled = true;
+        button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Refreshing...';
+        
+        // Make API request to refresh models
+        fetch('/admin/api/models/refresh', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            // Reset button state
+            button.disabled = false;
+            button.innerHTML = originalText;
+            
+            if (data.success) {
+                // Reload the current tab's models
+                const activeTab = document.querySelector('.nav-link.active');
+                if (activeTab) {
+                    const provider = activeTab.id.replace('-tab', '');
+                    loadModels(provider, 'llm');
+                    if (provider !== 'claude') {
+                        loadModels(provider, 'embedding');
+                    }
+                }
+                
+                // Show success toast with custom message
+                const toastBody = document.querySelector('#successToast .toast-body');
+                toastBody.textContent = 'Models refreshed successfully!';
+                const toast = new bootstrap.Toast(document.getElementById('successToast'));
+                toast.show();
+            } else {
+                alert(`Error refreshing models: ${data.error || 'Unknown error'}`);
+            }
+        })
+        .catch(error => {
+            // Reset button state
+            button.disabled = false;
+            button.innerHTML = originalText;
+            
+            console.error('Error refreshing models:', error);
+            alert('An error occurred while refreshing models.');
+        });
+    });
+});
+</script>
+{% endblock %}

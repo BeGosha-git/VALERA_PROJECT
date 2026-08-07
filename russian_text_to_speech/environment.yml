@@ -1,0 +1,26 @@
+name: tts_env
+channels:
+  - conda-forge
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pytorch=2.0.1
+  - torchaudio
+  - cudatoolkit=11.8   # если нужна CUDA, иначе удалите
+  - pip:
+    - fastapi
+    - "uvicorn[standard]"
+    - pydantic
+    - transformers
+    - numpy
+    - scipy
+    - soundfile
+    - librosa
+    - beautifulsoup4
+    - requests
+    - transliterate
+    - num2words
+    - simpleaudio
+    - python-dotenv

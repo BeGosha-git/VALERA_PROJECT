@@ -42,6 +42,18 @@ def query():
     except ValueError:
         max_results = 4
     
+    # Parse conversation context (JSON array of {role, content} messages)
+    conversation_context = None
+    raw_context = request.form.get('conversation_context')
+    if raw_context:
+        try:
+            import json
+            parsed = json.loads(raw_context)
+            if isinstance(parsed, list) and len(parsed) > 0:
+                conversation_context = parsed
+        except (ValueError, TypeError):
+            conversation_context = None
+    
     # Validate inputs based on search type
     if not query_text:
         return jsonify({
@@ -71,7 +83,7 @@ def query():
                     query=query_text,
                     max_results=max_results,
                     search_type='general',
-                    conversation_context=None,  # Could be enhanced with conversation history
+                    conversation_context=conversation_context,
                     use_agent=True,
                     agent_strategy=agent_strategy
                 )
@@ -81,7 +93,7 @@ def query():
                     query=query_text,
                     max_results=max_results,
                     search_type='general',
-                    conversation_context=None  # Could be enhanced with conversation history
+                    conversation_context=conversation_context
                 )
         elif use_agent_search:
             # Web search with agent capabilities
@@ -89,14 +101,16 @@ def query():
             result = web_agent_service.process_query(
                 query=query_text,
                 max_results=max_results,
-                strategy=agent_strategy
+                strategy=agent_strategy,
+                conversation_context=conversation_context
             )
         else:
             # Standard web search
             web_search_service = SearXNGService()
             result = web_search_service.process_query(
                 query=query_text,
-                max_results=max_results
+                max_results=max_results,
+                conversation_context=conversation_context
             )
     else:
         # Document-based searches
@@ -107,7 +121,8 @@ def query():
                 collection_id=collection_id,
                 query=query_text,
                 max_results=max_results,
-                strategy=agent_strategy
+                strategy=agent_strategy,
+                conversation_context=conversation_context
             )
         else:
             # Process query with standard RAG
@@ -115,7 +130,8 @@ def query():
             result = rag_service.process_query(
                 collection_id=collection_id,
                 query=query_text,
-                max_results=max_results
+                max_results=max_results,
+                conversation_context=conversation_context
             )
     
     # Return JSON if AJAX request, otherwise render template

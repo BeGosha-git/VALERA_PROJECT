@@ -35,9 +35,10 @@ fi
 # 2. Install PyTorch with CUDA
 echo ""
 echo "[2/4] Installing PyTorch with CUDA support..."
-# We assume CUDA 12.x (RTX 5000 series). Adjust if needed.
+# ВАЖНО: RTX 50xx (Blackwell, sm_120) требует PyTorch cu128+!
+# cu124 НЕ поддерживает эти GPU. НЕ меняйте на cu124.
 conda run -p "${ENV_PATH}" pip install --upgrade pip
-conda run -p "${ENV_PATH}" pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+conda run -p "${ENV_PATH}" pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
 
 echo "  ✓ PyTorch installed."
 

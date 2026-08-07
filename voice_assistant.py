@@ -74,6 +74,166 @@ class SileroVAD:
         return prob > self.threshold
 
 
+# ---------------------------------------------------------------------------
+# STT-модели
+# ---------------------------------------------------------------------------
+
+# Путь к Nemotron-модели (папка с config.json / model.safetensors)
+NEMOTRON_MODEL_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "nemotron-project"
+)
+# Язык для Nemotron: ru-RU, en-US, auto и т.д.
+NEMOTRON_LANGUAGE = "ru-RU"
+# Задержка стриминга (мс): 80 / 320 / 560 / 1120
+NEMOTRON_LATENCY_MS = 320
+
+
+class NemotronSTT:
+    """
+    Распознавание речи через NVIDIA Nemotron-3.5-ASR-Streaming-0.6B
+    (Transformers, локальная папка nemotron-project/).
+
+    API совместим с KairosASR: transcribe(wav_file=..., sample_rate=...).
+    Модель грузится один раз и переиспользуется для всех фраз.
+    """
+
+    def __init__(
+        self,
+        model_path: str = NEMOTRON_MODEL_PATH,
+        language: str = NEMOTRON_LANGUAGE,
+        latency_ms: int = NEMOTRON_LATENCY_MS,
+        device: str = "auto",
+    ):
+        from transformers import AutoModelForRNNT, AutoProcessor
+
+        self.language = language
+        # lookahead-токены под нужную задержку
+        lookahead_map = {80: 0, 320: 3, 560: 6, 1120: 13}
+        num_tokens = lookahead_map.get(latency_ms, 3)
+
+        print(f"[Nemotron-STT] Загрузка модели из: {model_path}")
+        print(f"[Nemotron-STT] Язык: {language}  |  Задержка: {latency_ms} мс")
+
+        self.processor = AutoProcessor.from_pretrained(
+            model_path, trust_remote_code=True
+        )
+        self.processor.set_num_lookahead_tokens(num_tokens)
+
+        self.model = AutoModelForRNNT.from_pretrained(
+            model_path,
+            device_map=device,
+            dtype=torch.float16,
+            trust_remote_code=True,
+        )
+        self.model.eval()
+
+        self.sampling_rate = self.processor.feature_extractor.sampling_rate
+        self.samples_first_chunk = self.processor.num_samples_first_audio_chunk
+        self.samples_per_chunk = self.processor.num_samples_per_audio_chunk
+        self.hop_length = self.processor.feature_extractor.hop_length
+        self.n_fft = self.processor.feature_extractor.n_fft
+        print(f"[Nemotron-STT] Готов (устройство: {self.model.device}).")
+
+    def _move_to_device(self, inputs: dict):
+        device = self.model.device
+        out = {}
+        for k, v in inputs.items():
+            if isinstance(v, torch.Tensor):
+                if v.dtype in (torch.float32, torch.float16):
+                    out[k] = v.to(device, dtype=torch.float16)
+                else:
+                    out[k] = v.to(device)
+            else:
+                out[k] = v
+        return out
+
+    def _make_feature_generator(self, audio: np.ndarray, first_inputs: dict):
+        """Генератор mel-фич для стримингового RNNT."""
+        device = self.model.device
+        yield first_inputs["input_features"][
+            :, : self.processor.num_mel_frames_first_audio_chunk, :
+        ]
+
+        mel_frame_idx = self.processor.num_mel_frames_first_audio_chunk
+        start_idx = mel_frame_idx * self.hop_length - self.n_fft // 2
+
+        while True:
+            end_idx = start_idx + self.samples_per_chunk
+            if end_idx > len(audio):
+                break
+            inputs = self.processor(
+                audio[start_idx:end_idx],
+                sampling_rate=self.sampling_rate,
+                is_streaming=True,
+                is_first_audio_chunk=False,
+                language=self.language,
+                return_tensors="pt",
+            )
+            yield self._move_to_device(inputs)["input_features"]
+            mel_frame_idx += self.processor.num_mel_frames_per_audio_chunk
+            start_idx = mel_frame_idx * self.hop_length - self.n_fft // 2
+
+    def transcribe(self, wav_file: str, sample_rate: int = None) -> str:
+        """
+        Транскрибирует WAV-файл и возвращает текст.
+        Сигнатура совместима с KairosASR.transcribe(wav_file=...).
+        """
+        from transformers import TextIteratorStreamer
+
+        audio, sr = sf.read(wav_file, dtype="float32", always_2d=False)
+        if sr != self.sampling_rate:
+            import librosa
+
+            audio = librosa.resample(
+                audio, orig_sr=sr, target_sr=self.sampling_rate
+            )
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+
+        # Паддим, если короче первого чанка
+        if len(audio) < self.samples_first_chunk:
+            padded = np.zeros(self.samples_first_chunk, dtype=np.float32)
+            padded[: len(audio)] = audio
+            audio = padded
+
+        # Нормализация громкости
+        peak = np.abs(audio).max()
+        if peak > 0:
+            audio = audio / peak * 0.9
+
+        first_inputs = self.processor(
+            audio[: self.samples_first_chunk],
+            sampling_rate=self.sampling_rate,
+            is_streaming=True,
+            is_first_audio_chunk=True,
+            language=self.language,
+            return_tensors="pt",
+        )
+        first_inputs = self._move_to_device(first_inputs)
+
+        streamer = TextIteratorStreamer(
+            self.processor.tokenizer,
+            skip_special_tokens=True,
+            skip_prompt_tokens=True,
+        )
+        generate_kwargs = {
+            **first_inputs,
+            "input_features": self._make_feature_generator(audio, first_inputs),
+            "streamer": streamer,
+            "max_new_tokens": 512,
+        }
+        thread = threading.Thread(
+            target=self.model.generate, kwargs=generate_kwargs, daemon=True
+        )
+        thread.start()
+
+        parts = []
+        for text_chunk in streamer:
+            parts.append(text_chunk)
+        thread.join(timeout=10)
+        return "".join(parts).strip()
+
+
 class RAGClient:
     """
     Клиент для взаимодействия с WebRAgent RAG API.
@@ -139,6 +299,7 @@ class RAGClient:
         use_agent_search: bool = False,
         use_web_search: bool = False,
         max_results: int = 4,
+        conversation_context: Optional[list] = None,
     ) -> dict:
         if not self._logged_in:
             raise RuntimeError("Необходимо сначала выполнить login()")
@@ -157,6 +318,9 @@ class RAGClient:
         }
         if collection_id:
             data["collection_id"] = collection_id
+        if conversation_context:
+            import json
+            data["conversation_context"] = json.dumps(conversation_context)
 
         query_url = f"{self.base_url}/query"
         try:
@@ -244,6 +408,21 @@ MIREA_ALIASES = [
     "мирэ", "мирэа",
 ]
 
+# Ключевые слова, при которых поиск идёт по коллекции (а не по интернету).
+# Включает МИРЭА-алиасы + дополнительные слова, связанные с РТУ МИРЭА.
+COLLECTION_KEYWORDS = MIREA_ALIASES + [
+    "мегалаборатория", "мегалаборатории", "мегалабораторий",
+    "лаборатория", "лаборатории", "лабораторий",
+    "институт", "института", "институте",
+    "вуз", "вуза", "вузе", "вузов",
+    "испытания", "испытаний", "испытаниях",
+    "учитесь", "учёба", "учёбы", "учеба", "учебы",
+    "тхт",
+    "стромынка", "стромынки",
+    "вернадка", "вернадки", "вернадку", "вернадке", "вернадкой",
+    "рту",
+]
+
 
 def normalize_mirea(text: str) -> str:
     """Заменяет слова близкие к МИРЭА на 'МИРЭА' (по границам слов)."""
@@ -254,10 +433,10 @@ def normalize_mirea(text: str) -> str:
 
 
 def is_mirea_related(text: str) -> bool:
-    """Есть ли в тексте упоминание МИРЭА или близких к нему слов."""
+    """Есть ли в тексте упоминание МИРЭА или ключевых слов коллекции."""
     import re
 
-    pattern = r"\b(" + "|".join(MIREA_ALIASES) + r")\b"
+    pattern = r"\b(" + "|".join(COLLECTION_KEYWORDS) + r")\b"
     return re.search(pattern, text, flags=re.IGNORECASE) is not None
 
 
@@ -308,6 +487,9 @@ class VoiceAssistant:
         self._capture_proc: Optional[subprocess.Popen] = None
         self._vad_buffer = np.array([], dtype=np.float32)
         self._collection_id: Optional[str] = None  # кэш ID коллекции для МИРЭА
+
+        # История последних 10 обменов (user/assistant) для контекста ИИ
+        self._conversation_history: list = []
 
         # Флаг занятости: пока идёт обработка (STT/RAG/TTS),
         # речь с микрофона игнорируется и новые запросы не отправляются
@@ -499,6 +681,7 @@ class VoiceAssistant:
                             use_web_search=False,
                             use_agent_search=False,
                             max_results=3,
+                            conversation_context=self._conversation_history,
                         )
                     else:
                         print("⚠️ Нет коллекций — ищу в интернете.")
@@ -507,13 +690,15 @@ class VoiceAssistant:
                             use_web_search=True,
                             use_agent_search=False,
                             max_results=3,
+                            conversation_context=self._conversation_history,
                         )
                 else:
                     rag_result = self.rag.query(
                         query_text=query_text,
                         use_web_search=True,
-                        use_agent_search=False,
-                        max_results=3,
+                        use_agent_search=True,
+                        max_results=5,
+                        conversation_context=self._conversation_history,
                     )
                 answer = clean_html(rag_result.get("response"))
                 # Обрезаем, чтобы не было слишком длинно для TTS
@@ -531,6 +716,15 @@ class VoiceAssistant:
 
             if not answer or answer == "Ответ отсутствует":
                 answer = "К сожалению, я не смог найти ответ на ваш вопрос."
+
+            # Сохраняем обмен в историю (держим последние 10)
+            self._conversation_history.append(
+                {"role": "user", "content": query_text}
+            )
+            self._conversation_history.append(
+                {"role": "assistant", "content": answer}
+            )
+            self._conversation_history = self._conversation_history[-20:]  # 10 обменов
 
             # 5. Озвучиваем ответ
             print("🔊 Озвучиваю ответ...")

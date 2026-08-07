@@ -27,8 +27,11 @@ echo " Задержка: ${LATENCY} мс"
 echo "=============================================="
 
 cd "${SCRIPT_DIR}"
-
-conda run -p "${ENV_PATH}" python nemotron_streaming_stt.py \
+echo "   ЗАПУСК Nemotron ASR Streaming..."
+# Важно: вызываем python напрямую с -u (без буферизации), иначе вывод
+# (приглашение, распознанный текст) не отображается через conda run.
+PYBIN="${ENV_PATH}/bin/python"
+"${PYBIN}" -u nemotron_streaming_stt.py \
     --language "${LANGUAGE}" \
     --latency "${LATENCY}" \
     "${@:3}"

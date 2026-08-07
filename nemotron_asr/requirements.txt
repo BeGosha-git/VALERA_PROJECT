@@ -11,6 +11,7 @@ librosa>=0.10.0          # Аудио-утилиты
 
 # VAD (детектор голосовой активности)
 silero-vad>=5.1
+onnxruntime>=1.17.0        # нужен для Silero VAD (ONNX)
 
 # Math
 numpy>=1.24.0

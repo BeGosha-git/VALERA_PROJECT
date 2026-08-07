@@ -17,14 +17,16 @@ NVIDIA Nemotron-3.5-ASR-Streaming-0.6B (Transformers).
 from __future__ import annotations
 
 import argparse
+import os
 import queue
+import subprocess
 import sys
+import threading
 import time
 from threading import Thread
 from typing import Generator, Optional
 
 import numpy as np
-import sounddevice as sd
 import torch
 
 from transformers import AutoModelForRNNT, AutoProcessor, TextIteratorStreamer
@@ -36,9 +38,9 @@ SAMPLE_RATE: int = 16000
 BLOCK_SIZE: int = 512  # семплов на колбэк (32 мс при 16 кГц)
 
 # VAD
-VAD_THRESHOLD: float = 0.5
-SILENCE_TIMEOUT_SEC: float = 1.0  # сколько тишины ждать до конца фразы
-MIN_SPEECH_DURATION_SEC: float = 0.3  # минимальная длина фразы
+VAD_THRESHOLD: float = 0.3  # как в voice_assistant.py (0.3 чувствительнее, чем 0.5)
+SILENCE_TIMEOUT_SEC: float = 0.75  # пауза для завершения фразы (как в voice_assistant.py)
+MIN_SPEECH_DURATION_SEC: float = 0.5  # минимальная длина фразы
 MAX_UTTERANCE_SEC: float = 15.0  # максимальная длина фразы (защита)
 
 # Модель
@@ -86,37 +88,76 @@ class SileroVAD:
 # AudioSource — поток аудио с микрофона
 # ---------------------------------------------------------------------------
 class AudioSource:
-    """Захват аудио с микрофона через sounddevice.InputStream."""
+    """
+    Захват аудио с микрофона через `arecord` (ALSA/PipeWire).
+
+    Использует тот же подход, что и voice_assistant.py:
+      arecord -D default -r 16000 -c 1 -f S16_LE -t raw
+
+    Устройство 'default' идёт через PipeWire/Pulse, поэтому корректно
+    работает с USB-микрофонами (DJI MIC MINI) и сам делает ресемплинг.
+    Можно переопределить через переменную окружения ASR_AUDIO_DEVICE
+    (например: plughw:CARD=MINI,DEV=0 или hw:4,0).
+    """
 
     def __init__(self, sample_rate: int = SAMPLE_RATE, block_size: int = BLOCK_SIZE) -> None:
         self.sample_rate = sample_rate
         self.block_size = block_size
         self._queue: queue.Queue = queue.Queue()
-        self._stream: Optional[sd.InputStream] = None
+        self._proc: Optional[subprocess.Popen] = None
+        self._capture_thread: Optional[threading.Thread] = None
+        self._running = False
 
-    def _callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
-        if status:
-            print(f"[audio] {status}", file=sys.stderr)
-        self._queue.put(indata.copy().flatten())
+    def _capture_loop(self) -> None:
+        """Читает stdout arecord и кладёт блоки float32 в очередь."""
+        chunk_bytes = self.block_size * 2  # 512 сэмплов * 2 байта (S16_LE)
+        try:
+            while self._running:
+                data = self._proc.stdout.read(chunk_bytes)
+                if not data:
+                    break
+                # S16_LE → float32 [-1, 1]
+                a = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+                self._queue.put(a)
+        except Exception as e:
+            if self._running:
+                print(f"[audio] Ошибка захвата: {e}", file=sys.stderr)
 
     def start(self) -> None:
-        self._stream = sd.InputStream(
-            samplerate=self.sample_rate,
-            channels=1,
-            blocksize=self.block_size,
-            callback=self._callback,
-            dtype=np.float32,
+        device = os.environ.get("ASR_AUDIO_DEVICE", "default")
+        cmd = [
+            "arecord", "-D", device,
+            "-r", str(self.sample_rate),
+            "-c", "1",
+            "-f", "S16_LE",
+            "-t", "raw",
+            "-q",
+        ]
+        print(f"[audio] Запуск захвата: {' '.join(cmd)}")
+        self._proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
-        self._stream.start()
+        self._running = True
+        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._capture_thread.start()
 
     def stop(self) -> None:
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
+        self._running = False
+        if self._proc is not None:
+            try:
+                self._proc.terminate()
+            except Exception:
+                pass
+            try:
+                self._proc.wait(timeout=2.0)
+            except Exception:
+                pass
+            self._proc = None
 
     def get(self, timeout: float = 0.5) -> Optional[np.ndarray]:
-        """Получить очередной блок аудио (float32). None = таймаут."""
+        """Получить очередной блок аудио (float32, 16 кГц). None = таймаут."""
         try:
             return self._queue.get(timeout=timeout)
         except queue.Empty:
@@ -166,7 +207,7 @@ class NemotronStreamingASR:
         self.model = AutoModelForRNNT.from_pretrained(
             model_path,
             device_map=device,
-            torch_dtype=torch.float16,
+            dtype=torch.float16,
             trust_remote_code=True,
         )
         self.model.eval()
@@ -211,12 +252,25 @@ class NemotronStreamingASR:
                 language=self.language,
                 return_tensors="pt",
             )
-            inputs = {k: v.to(device, dtype=dtype) if v.dtype in (torch.float32, torch.float16) else v.to(device)
-                      for k, v in inputs.items()}
+            inputs = self._move_to_device(inputs)
             yield inputs["input_features"]
 
             mel_frame_idx += self.processor.num_mel_frames_per_audio_chunk
             start_idx = mel_frame_idx * self.hop_length - self.n_fft // 2
+
+    def _move_to_device(self, inputs: dict):
+        """Переносит тензоры на устройство/тип модели, оставляя скаляры как есть."""
+        device = self.model.device
+        out = {}
+        for k, v in inputs.items():
+            if isinstance(v, torch.Tensor):
+                if v.dtype in (torch.float32, torch.float16):
+                    out[k] = v.to(device, dtype=torch.float16)
+                else:
+                    out[k] = v.to(device)
+            else:
+                out[k] = v
+        return out
 
     def transcribe(self, audio: np.ndarray) -> str:
         """
@@ -240,10 +294,7 @@ class NemotronStreamingASR:
             language=self.language,
             return_tensors="pt",
         )
-        device = self.model.device
-        dtype = self.model.dtype
-        first_inputs = {k: v.to(device, dtype=dtype) if v.dtype in (torch.float32, torch.float16) else v.to(device)
-                        for k, v in first_inputs.items()}
+        first_inputs = self._move_to_device(first_inputs)
 
         streamer = TextIteratorStreamer(
             self.processor.tokenizer,
@@ -340,6 +391,7 @@ def main() -> None:
     utterance_blocks: list[np.ndarray] = []
     last_speech_time: float = 0.0
     speech_start_time: float = 0.0
+    _last_meter = 0.0  # для индикатора уровня
 
     try:
         while True:
@@ -359,6 +411,14 @@ def main() -> None:
                 continue
 
             now = time.time()
+
+            # Живой индикатор уровня (раз в ~200 мс)
+            if now - _last_meter > 0.2:
+                _last_meter = now
+                peak = float(np.abs(block).max())
+                bars = int(min(peak * 40, 40))
+                print(f"\r🎚️ {'█' * bars}{'░' * (40 - bars)} | {peak:.3f}    ", end="", flush=True)
+
             speech = vad.is_speech(block)
 
             if speech:

@@ -1,0 +1,25 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments (conda)
+miniconda3/
+env/
+venv/
+.venv/
+
+# Environment / secrets
+.env
+*.env.local
+
+# Audio / temp files
+*.wav
+*.mp3
+temp/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

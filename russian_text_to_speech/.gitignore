@@ -1,3 +1,28 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Large model file (скачивается автоматически через torch.hub)
+model.pt
+
+# Audio / temp files (создаются TALK.py)
+*.wav
+*.mp3
+temp/
+
+# Virtual environments (conda)
+miniconda3/
+env/
+venv/
+.venv/
+
+# Environment / secrets (но НЕ .env.dist — это пример-шаблон)
 .env
-miniconda3
-__pycache__
+.env.local
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

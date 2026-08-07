@@ -1,15 +1,14 @@
 name: tts_env
 channels:
   - conda-forge
-  - pytorch
   - defaults
 dependencies:
   - python=3.10
   - pip
-  - pytorch=2.0.1
-  - torchaudio
-  - cudatoolkit=11.8   # если нужна CUDA, иначе удалите
   - pip:
+    # kairos-asr нужен TALK.py для STT и тянет совместимый torch (2.13+cu130).
+    # НЕ ставить pytorch отдельной conda-зависимостью — это вызывало iJIT_NotifyEvent.
+    - kairos-asr[cpu]>=0.7.0
     - fastapi
     - "uvicorn[standard]"
     - pydantic

@@ -68,16 +68,20 @@ class SearXNGService:
                     timeout=ping_timeout,
                 )
                 if resp.status_code != 200:
+                    logger.info(f"  [PING] {engine}: статус {resp.status_code} — пропуск")
                     continue
                 data = resp.json()
+                n = len(data.get('results', []))
+                logger.info(f"  [PING] {engine}: {n} результатов — {'✅ рабочий' if n > 0 else '⏭️ пропуск'}")
                 if data.get('results'):
                     active.append(engine)
-            except Exception:
+            except Exception as e:
+                logger.info(f"  [PING] {engine}: ошибка ({e}) — пропуск")
                 continue
         if not active:
             # Ничего не ответило — фолбэк на проверенные базовые
             active = ["seznam", "mojeek", "wikipedia", "github"]
-        logger.info(f"Active SearXNG engines after ping: {active}")
+        logger.info(f"✅ [PING] Рабочие движки после пинга: {active}")
         return active[:max_engines]
 
     def _get_active_engines(self):
@@ -147,34 +151,45 @@ class SearXNGService:
             }
             
             # Make the API request
-            logger.info(f"Performing SearXNG search for: {query} (engines: {active_engines})")
+            logger.info(f"🔍 [SEARXNG] Запрос: '{query}' | движки: {active_engines} | лимит: {min(num_results, 25)}")
             headers = {
                 'Accept': 'application/json',
                 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
             }
             
+            import time as _t
+            _t0 = _t.time()
             response = requests.get(
                 self.api_url, 
                 params=params,
                 headers=headers,
                 timeout=25
             )
+            _dt = _t.time() - _t0
+            logger.info(f"⏱️ [SEARXNG] Ответ получен за {_dt:.2f}с (статус {response.status_code})")
             
             # Check the response status
             if response.status_code != 200:
-                logger.error(f"SearXNG search failed with status code: {response.status_code}")
+                logger.error(f"❌ [SEARXNG] Ошибка: статус {response.status_code}")
                 return []
             
             # Parse the results
             try:
                 search_results = response.json()
             except json.JSONDecodeError:
-                logger.error("Failed to parse SearXNG response as JSON")
+                logger.error("❌ [SEARXNG] Не удалось распарсить JSON ответ")
                 return []
+            
+            # Логируем ошибки движков (unresponsive)
+            unresponsive = search_results.get('unresponsive_engines', [])
+            if unresponsive:
+                logger.warning(f"⚠️ [SEARXNG] Неответившие движки: {unresponsive}")
             
             # Extract and format the relevant information
             formatted_results = self._format_results(search_results)
-            logger.info(f"Retrieved {len(formatted_results)} results from SearXNG")
+            logger.info(f"✅ [SEARXNG] Найдено {len(formatted_results)} результатов по запросу '{query}'")
+            for i, r in enumerate(formatted_results[:5], 1):
+                logger.info(f"   [{i}] {r.get('title', '')[:60]} | {r.get('url', '')[:80]}")
             
             return formatted_results
             
@@ -197,6 +212,7 @@ class SearXNGService:
         """
         # Perform the web search
         search_results = self.search(query, max_results, search_type)
+        logger.info(f"[SEARXNG] process_query: '{query}' → {len(search_results)} результатов")
         
         # Convert web search results to contextual format expected by RAG interface
         contexts = []
@@ -216,6 +232,7 @@ class SearXNGService:
         
         # Format web search content for LLM
         formatted_context = self._format_web_results_for_llm(contexts)
+        logger.info(f"[SEARXNG] Контекст для LLM ({len(contexts)} источников), первые 300 символов:\n{formatted_context[:300]}")
         
         if conversation_context and len(conversation_context) > 0:
             # Process with conversation context if available
@@ -274,6 +291,8 @@ class SearXNGService:
                 context=None,
                 max_tokens=1000
             )
+        
+        logger.info(f"[SEARXNG] LLM-ответ ({len(response)} символов): {response[:200]}")
         
         # Get model information
         model_info = {

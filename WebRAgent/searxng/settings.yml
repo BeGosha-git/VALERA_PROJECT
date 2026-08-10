@@ -524,7 +524,8 @@ engines:
   - name: bing
     engine: bing
     shortcut: bi
-    disabled: true
+    # bing включён — даёт релевантные результаты на русском (погода, GISMETEO)
+    # disabled: true
 
   - name: bing images
     engine: bing_images
@@ -1324,7 +1325,8 @@ engines:
     engine: mwmbl
     # api_url: https://api.mwmbl.org
     shortcut: mwm
-    disabled: true
+    # mwmbl включён — бесплатный движок, даёт релевантные русские результаты
+    # disabled: true
 
   - name: npm
     engine: npm

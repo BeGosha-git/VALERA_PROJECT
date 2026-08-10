@@ -19,6 +19,7 @@ ALL_WEB_ENGINES = [
     "google", "brave", "duckduckgo", "qwant", "startpage",
     "seznam", "mojeek", "mullvad", "wikipedia", "github",
     "yandex", "presearch", "stract",
+    "mwmbl", "bing", "marginalia", "gigablast",
 ]
 
 
@@ -53,7 +54,11 @@ class SearXNGService:
         движки пропускаются, чтобы не ждать их таймауты в каждом запросе.
         """
         active = []
-        for engine in ALL_WEB_ENGINES:
+        # Приоритет: сначала релевантные для русского поиска движки (mwmbl, bing),
+        # чтобы они гарантированно попали в топ-max_engines. Остальные — после.
+        ordered = ["mwmbl", "bing", "wikipedia", "github", "seznam", "mojeek"] + \
+                  [e for e in ALL_WEB_ENGINES if e not in ("mwmbl", "bing", "wikipedia", "github", "seznam", "mojeek")]
+        for engine in ordered:
             try:
                 resp = requests.get(
                     self.api_url,
@@ -79,8 +84,8 @@ class SearXNGService:
                 logger.info(f"  [PING] {engine}: ошибка ({e}) — пропуск")
                 continue
         if not active:
-            # Ничего не ответило — фолбэк на проверенные базовые
-            active = ["seznam", "mojeek", "wikipedia", "github"]
+            # Ничего не ответило — фолбэк на проверенные релевантные движки
+            active = ["mwmbl", "bing", "wikipedia", "github"]
         logger.info(f"✅ [PING] Рабочие движки после пинга: {active}")
         return active[:max_engines]
 
@@ -100,7 +105,9 @@ class SearXNGService:
 
         # Кэш пуст/устарел: для быстрого ответа используем надёжный фолбэк,
         # а полный пинг выполняем в фоне (результат применится со следующего запроса).
-        fallback = ["seznam", "mullvad", "wikipedia", "github"]
+        # Фолбэк = релевантные движки для русского поиска (НЕ seznam/mullvad,
+        # которые возвращают мусор: чешские форумы, YouTube и т.п.).
+        fallback = ["mwmbl", "bing", "wikipedia", "github"]
 
         def _background_ping():
             try:

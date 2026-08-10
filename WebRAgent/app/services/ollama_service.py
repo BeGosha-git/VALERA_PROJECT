@@ -70,14 +70,49 @@ class OllamaService(LLMService):
                 system_content = message['content']
                 break
         
+        # Add a strong instruction so the model prioritizes the FRESHEST messages.
+        # This fixes "stale context wins": the newest user question and the last
+        # assistant reply should dominate, older messages are just background.
+        system_content = (
+            f"{system_content}\n\n"
+            "Conversation dynamics: The messages at the END of the conversation are "
+            "the most important. The very last user message is your current question "
+            "and must be answered first. The most recent assistant replies and the "
+            "last few turns carry more weight than old ones. Use older messages only "
+            "as background context; do not let them override the latest topic."
+        )
+        
         # Format the conversation as a text prompt since many Ollama models
-        # handle this format better than structured chat messages
+        # handle this format better than structured chat messages.
+        # Separate older history from the latest exchange so the model can
+        # clearly see what is fresh.
+        non_system = [m for m in messages if m['role'] != 'system']
+        
+        # Keep at most the last N messages as "recent context" (excluding current question)
+        RECENT_LIMIT = 6
+        history = non_system[:-1] if len(non_system) > 1 else []
+        last = non_system[-1] if non_system else None
+        
         conversation_prompt = f"System: {system_content}\n\n"
         
-        for msg in messages:
-            if msg['role'] != 'system':  # Skip system messages as we handled it above
+        # Older messages (background only)
+        if len(history) > RECENT_LIMIT:
+            conversation_prompt += "[Earlier conversation omitted — only the recent messages matter]\n\n"
+            history = history[-RECENT_LIMIT:]
+        
+        if history:
+            conversation_prompt += "[Conversation history (background):]\n"
+            for msg in history:
                 role_name = "User" if msg['role'] == 'user' else "Assistant"
                 conversation_prompt += f"{role_name}: {msg['content']}\n\n"
+            conversation_prompt += "[End of history]\n\n"
+        
+        # The current question — emphasized as the priority
+        if last is not None:
+            role_name = "User" if last['role'] == 'user' else "Assistant"
+            conversation_prompt += f"[CURRENT {role_name.upper()} — answer this now]:\n{last['content']}\n\n"
+        else:
+            conversation_prompt += "[CURRENT USER]:\n\n"
         
         conversation_prompt += "Assistant:"
         

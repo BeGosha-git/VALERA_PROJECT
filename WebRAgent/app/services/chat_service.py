@@ -200,7 +200,7 @@ class ChatService:
     
     def get_chat_messages(self, chat_id, limit=50, before_id=None):
         """
-        Get messages from a chat
+        Get messages from a chat (the MOST RECENT `limit` messages).
         
         Args:
             chat_id (str): Chat ID
@@ -208,7 +208,7 @@ class ChatService:
             before_id (str, optional): Get messages before this message ID
             
         Returns:
-            list: List of messages
+            list: List of messages in chronological order (oldest → newest)
         """
         try:
             if self.client:
@@ -220,12 +220,17 @@ class ChatService:
                     if before_message:
                         query['created_at'] = {'$lt': before_message['created_at']}
                 
+                # Sort DESCENDING by time, take the newest `limit`, then reverse
+                # so the result is chronological (oldest → newest).
+                # Important: sort desc + limit returns the LAST N messages,
+                # not the first N (which would give stale/old context).
                 messages = list(
                     self.messages.find(
                         query, 
                         {'_id': 0}
-                    ).sort('created_at', 1).limit(limit)
+                    ).sort('created_at', -1).limit(limit)
                 )
+                messages.reverse()
                 return messages
             else:
                 # In-memory fallback
@@ -241,9 +246,9 @@ class ChatService:
                     if before_time:
                         chat_messages = [msg for msg in chat_messages if msg['created_at'] < before_time]
                 
-                # Sort by creation time
+                # Sort by creation time, then take the LAST `limit` messages
                 sorted_messages = sorted(chat_messages, key=lambda x: x['created_at'])
-                return sorted_messages[:limit]
+                return sorted_messages[-limit:] if limit > 0 else sorted_messages
         except Exception as e:
             logger.error(f"Failed to get messages for chat {chat_id}: {str(e)}")
             return []

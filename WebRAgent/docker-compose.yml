@@ -8,12 +8,16 @@ services:
     - QDRANT_URL=http://localhost:6333
     - SEARXNG_URL=http://localhost:8080
     - MONGODB_URI=mongodb://localhost:27017/ragapp
+    - FLASK_DEBUG=1
     # ports:
     #   - "5000:5000"
     env_file:
      - ./.env
     volumes:
       - ./data:/app/data
+      # Монтируем локальный код поверх образа, чтобы правки в app/ применялись
+      # без пересборки (Flask debug автоматически перезагружает при изменении).
+      - ./app:/app/app
     depends_on:
       - qdrant
       - searxng

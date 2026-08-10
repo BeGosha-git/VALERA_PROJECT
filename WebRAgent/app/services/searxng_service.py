@@ -36,27 +36,34 @@ class SearXNGService:
             list: List of search results with title, snippet, and URL
         """
         try:
-            # Format the request parameters
+            # Format the request parameters.
+            # - language 'all' (NOT 'en') so Russian queries are not restricted.
+            # - categories: 'web' covers web-search engines (seznam, mojeek, ...)
+            #   that actually respond, while 'general' alone only hits google/brave/
+            #   duckduckgo which are usually rate-limited/blocked from this network.
+            # - engines: explicitly prefer engines that respond and are less likely
+            #   to be blocked; SearXNG still uses other configured engines as well.
             params = {
                 'q': query,
                 'format': 'json',
-                'categories': self._map_search_type(search_type),
+                'categories': 'web,general',
                 'results': min(num_results, 25),  # Prevent overly large requests
-                'language': 'en'
+                'language': 'all',
+                'engines': 'seznam,mojeek,mullvad,wikipedia,github,yandex,startpage,google,brave',
             }
             
             # Make the API request
             logger.info(f"Performing SearXNG search for: {query}")
             headers = {
                 'Accept': 'application/json',
-                'User-Agent': 'RAGSystem/1.0'
+                'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
             }
             
             response = requests.get(
                 self.api_url, 
                 params=params,
                 headers=headers,
-                timeout=10
+                timeout=25
             )
             
             # Check the response status
@@ -118,17 +125,25 @@ class SearXNGService:
         
         if conversation_context and len(conversation_context) > 0:
             # Process with conversation context if available
-            # Create a system message if none exists
             current_exchange = list(conversation_context)  # Copy to avoid modifying original
             has_system = any(msg['role'] == 'system' for msg in current_exchange)
-            
+
+            # Dedupe a trailing user message equal to the current query (the chat route
+            # already added it before building context), so the fresh question appears
+            # exactly once and keeps its weight as the newest message.
+            while current_exchange and current_exchange[-1].get('role') == 'user':
+                if current_exchange[-1].get('content', '').strip() == query.strip():
+                    current_exchange.pop()
+                    break
+                break
+
             if not has_system:
                 current_exchange.insert(0, {
                     'role': 'system',
                     'content': "You are a helpful assistant answering questions based on web search results."
                 })
-            
-            # Add the current query
+
+            # Add the current query (single, as the last message)
             current_exchange.append({
                 'role': 'user',
                 'content': query
@@ -231,7 +246,19 @@ class SearXNGService:
             }
             
             formatted.append(formatted_result)
-            
+
+        # Deduplicate by URL (keep the highest-scoring entry per URL).
+        # SearXNG can return the same page from multiple engines.
+        by_url = {}
+        for item in formatted:
+            url = item['url']
+            if url not in by_url or item['score'] > by_url[url]['score']:
+                by_url[url] = item
+        formatted = list(by_url.values())
+
+        # Sort by relevance (score) descending, so the most relevant results
+        # appear first.
+        formatted.sort(key=lambda x: x.get('score', 0.0), reverse=True)
         return formatted
     
     def _generate_search_summary(self, query, contexts):

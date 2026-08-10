@@ -49,19 +49,33 @@ class RAGService:
         # Handle conversation context if provided
         if conversation_context and len(conversation_context) > 0:
             # Create a system message if none exists, using the improved system message with citation instructions
-            if not any(msg['role'] == 'system' for msg in conversation_context):
-                conversation_context.insert(0, {
+            current_exchange = list(conversation_context)  # Copy the conversation context
+
+            # Make sure the CURRENT query is the LAST user message and NOT duplicated.
+            # The chat route already added this query via chat.add_message('user', ...)
+            # before calling get_context(), so it may already be present in the context.
+            # Remove any trailing user message that equals the current query to avoid
+            # duplicate "user: <query>" entries (which dilute the weight of the fresh question).
+            while current_exchange and current_exchange[-1].get('role') == 'user':
+                if current_exchange[-1].get('content', '').strip() == query.strip():
+                    current_exchange.pop()
+                    break
+                # If the last user message differs (older question), keep the history but
+                # stop scanning further — we only dedupe an exact trailing duplicate.
+                break
+
+            if not any(msg['role'] == 'system' for msg in current_exchange):
+                current_exchange.insert(0, {
                     'role': 'system',
                     'content': PromptTemplateService.get_system_message("citation_focus")
                 })
-            
-            # Add the current query
-            current_exchange = list(conversation_context)  # Copy the conversation context
+
+            # Ensure the current query is always the single last user message
             current_exchange.append({
                 'role': 'user',
                 'content': query
             })
-            
+
             # Generate response with LLM using chat format
             llm_response = self.llm_service.generate_chat_response(
                 messages=current_exchange,

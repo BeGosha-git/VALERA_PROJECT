@@ -38,3 +38,8 @@ temp/
 questions.log
 *.partial
 temp/
+*.log
+.cache/
+
+# Chat ID (локальное состояние диалога)
+chat_id.txt

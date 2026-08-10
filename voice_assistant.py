@@ -31,34 +31,67 @@ from russian_text_to_speech.NeuralSpeaker import NeuralSpeaker
 from kairos_asr import KairosASR
 
 # ------------------------ Конфигурация ------------------------
+# Все настройки читаются из окружения (.env) с разумными значениями по умолчанию.
+# Поддерживается python-dotenv: создайте файл .env рядом со скриптом.
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+except ImportError:
+    pass  # python-dotenv не установлен — работаем с окружением как есть
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 SAMPLE_RATE = 16000
-SILENCE_TIMEOUT_SEC = 0.75
-MIN_SPEECH_DURATION_SEC = 0.5
-VAD_THRESHOLD = 0.3          # порог VAD
-NOISE_REDUCTION = True
-NOISE_PROFILE_DURATION = 1.5
+SILENCE_TIMEOUT_SEC = _env_float("SILENCE_TIMEOUT_SEC", 0.75)
+MIN_SPEECH_DURATION_SEC = _env_float("MIN_SPEECH_DURATION_SEC", 0.5)
+VAD_THRESHOLD = _env_float("VAD_THRESHOLD", 0.3)          # порог VAD
+NOISE_REDUCTION = os.getenv("NOISE_REDUCTION", "true").lower() == "true"
+NOISE_PROFILE_DURATION = _env_float("NOISE_PROFILE_DURATION", 1.5)
 
 # Устройство захвата. 'default' идёт через PipeWire/Pulse (умеет ресемплинг).
 # Для конкретного микрофона можно указать, например:
 #   plughw:CARD=MINI,DEV=0   (DJI MIC MINI)
 #   hw:4,0
 # Посмотреть доступные:  arecord -L
-AUDIO_DEVICE = "default"
+AUDIO_DEVICE = os.getenv("AUDIO_DEVICE", "default")
 
 # RAG-клиент
-RAG_BASE_URL = "http://localhost:5000"
-RAG_USERNAME = "admin"
-RAG_PASSWORD = "change_me_in_production"
+RAG_BASE_URL = os.getenv("RAG_BASE_URL", "http://localhost:5000")
+RAG_USERNAME = os.getenv("RAG_USERNAME", "admin")
+RAG_PASSWORD = os.getenv("RAG_PASSWORD", "change_me_in_production")
 
 # Файл, где хранится chat_id WebRAgent.
 # Благодаря этому контекст разговора сохраняется между перезапусками ассистента.
-CHAT_ID_FILE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "chat_id.txt"
+CHAT_ID_FILE = os.getenv(
+    "CHAT_ID_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_id.txt"),
 )
 
 # TTS
-TTS_SPEAKER = "eugene"
-TTS_SAMPLE_RATE = 48000
+TTS_SPEAKER = os.getenv("TTS_SPEAKER", "eugene")
+TTS_SAMPLE_RATE = _env_int("TTS_SAMPLE_RATE", 48000)
+
+# Nemotron STT
+NEMOTRON_MODEL_PATH = os.getenv(
+    "NEMOTRON_MODEL_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "nemotron-project"),
+)
+NEMOTRON_LANGUAGE = os.getenv("NEMOTRON_LANGUAGE", "ru-RU")
+NEMOTRON_LATENCY_MS = _env_int("NEMOTRON_LATENCY_MS", 320)
 # --------------------------------------------------------------
 
 
@@ -83,16 +116,6 @@ class SileroVAD:
 # ---------------------------------------------------------------------------
 # STT-модели
 # ---------------------------------------------------------------------------
-
-# Путь к Nemotron-модели (папка с config.json / model.safetensors)
-NEMOTRON_MODEL_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "nemotron-project"
-)
-# Язык для Nemotron: ru-RU, en-US, auto и т.д.
-NEMOTRON_LANGUAGE = "ru-RU"
-# Задержка стриминга (мс): 80 / 320 / 560 / 1120
-NEMOTRON_LATENCY_MS = 320
-
 
 class NemotronSTT:
     """
@@ -554,6 +577,144 @@ def arecord_command(extra_args=None):
 
 
 # ---------------------------------------------------------------------------
+# Погода через метео-API напрямую (Open-Meteo — бесплатно, без ключа)
+# ---------------------------------------------------------------------------
+# Ключевые слова, по которым определяем запрос о погоде
+WEATHER_KEYWORDS = [
+    "погод", "погоду", "погода", "погоде", "погоды",
+    "градус", "температур", "тепло", "холодн", "мороз",
+    "дождь", "дожд", "снег", "ветер", "ветр", "осадк",
+    "солнечн", "облачн", "прогноз погоды",
+]
+
+# Небольшой словарь городов → координаты (широта, долгота) и форма в предложном падеже
+CITY_COORDS = {
+    "москв": (55.7558, 37.6173, "Москве"),
+    "питер": (59.9311, 30.3609, "Питере"),
+    "петербург": (59.9311, 30.3609, "Петербурге"),
+    "санкт-петербург": (59.9311, 30.3609, "Санкт-Петербурге"),
+    "новосибирск": (55.0084, 82.9357, "Новосибирске"),
+    "екатеринбург": (56.8389, 60.6057, "Екатеринбурге"),
+    "казан": (55.7963, 49.1088, "Казани"),
+    "нижн": (56.2965, 43.9361, "Нижнем Новгороде"),
+    "самара": (53.2415, 50.2212, "Самаре"),
+    "омск": (54.9914, 73.3645, "Омске"),
+    "челябинск": (55.1644, 61.4368, "Челябинске"),
+    "ростов": (47.2357, 39.7015, "Ростове-на-Дону"),
+    "уфа": (54.7388, 55.9721, "Уфе"),
+    "волгоград": (48.7071, 44.5169, "Волгограде"),
+    "перм": (58.0105, 56.2502, "Перми"),
+    "красноярск": (56.0153, 92.8932, "Красноярске"),
+    "воронеж": (51.6720, 39.1843, "Воронеже"),
+    "саратов": (51.5406, 46.0086, "Саратове"),
+    "краснодар": (45.0355, 38.9753, "Краснодаре"),
+    "сочи": (43.5855, 39.7231, "Сочи"),
+    "минск": (53.9006, 27.5590, "Минске"),
+    "алматы": (43.2220, 76.8512, "Алматы"),
+    "астана": (51.1605, 71.4704, "Астане"),
+}
+
+
+def is_weather_query(text: str) -> bool:
+    """Определяет, спрашивает ли пользователь о погоде."""
+    import re
+
+    low = text.lower()
+    return any(re.search(rf"\b{kw}", low) for kw in WEATHER_KEYWORDS)
+
+
+def extract_city(text: str) -> Optional[str]:
+    """
+    Пытается найти город в тексте вопроса.
+    Возвращает название города или None.
+    """
+    import re
+
+    low = text.lower()
+    for key in CITY_COORDS:
+        if key in low:
+            # Возвращаем каноничное имя (первый ключ в кортеже)
+            return key
+    return None
+
+
+def fetch_weather(city: Optional[str] = None) -> Optional[str]:
+    """
+    Получает погоду через Open-Meteo API.
+    Возвращает строку с прогнозом или None при ошибке/не-найденном городе.
+    """
+    import requests as _requests
+
+    if city:
+        info = CITY_COORDS.get(city)
+        if not info:
+            return None
+        lat, lon, city_name = info
+    else:
+        lat, lon, city_name = 55.7558, 37.6173, "Москве"  # Москва по умолчанию
+
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code",
+        "hourly": "temperature_2m",
+        "forecast_days": 1,
+        "timezone": "Europe/Moscow",
+    }
+    try:
+        resp = _requests.get(url, params=params, timeout=15)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        current = data.get("current", {})
+        temp = current.get("temperature_2m")
+        humidity = current.get("relative_humidity_2m")
+        wind = current.get("wind_speed_10m")
+        if temp is None:
+            return None
+        desc = _weather_code_desc(current.get("weather_code"))
+        parts = [
+            f"Сейчас в {city_name}: {temp:.0f} градусов",
+            desc,
+        ]
+        if humidity is not None:
+            parts.append(f"влажность {humidity:.0f}%")
+        if wind is not None:
+            parts.append(f"ветер {wind:.0f} км/ч")
+        return ". ".join(parts) + "."
+    except Exception as e:
+        print(f"⚠️ Ошибка запроса погоды: {e}", file=sys.stderr)
+        return None
+
+
+def _weather_code_desc(code) -> str:
+    """Переводит код погоды WMO в короткое русское описание."""
+    if code is None:
+        return ""
+    code = int(code)
+    if code == 0:
+        return "ясно"
+    if code in (1, 2, 3):
+        return "переменная облачность"
+    if code in (45, 48):
+        return "туман"
+    if code in (51, 53, 55, 56, 57):
+        return "морось"
+    if code in (61, 63, 65, 66, 67):
+        return "дождь"
+    if code in (71, 73, 75, 77):
+        return "снег"
+    if code in (80, 81, 82):
+        return "ливень"
+    if code in (85, 86):
+        return "снегопад"
+    if code in (95, 96, 99):
+        return "гроза"
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # Логирование заданных вопросов
 # ---------------------------------------------------------------------------
 # Файл журнала вопросов (переопределяется тестами)
@@ -614,6 +775,10 @@ class VoiceAssistant:
         stt: str = "kairos",
         new_chat: bool = False,
         no_clean: bool = False,
+        tts_speaker: str = "eugene",
+        vad_threshold: float = 0.3,
+        preload: bool = False,
+        barge_in: bool = False,
     ):
         self.rag = rag_client
         self.tts = neural_speaker
@@ -625,9 +790,22 @@ class VoiceAssistant:
         self._stt = stt
         self._new_chat = new_chat
         self._no_clean = no_clean
+        self._tts_speaker = tts_speaker
+        self._vad_threshold = vad_threshold
+        self._preload = preload
+        self._barge_in = barge_in
 
-        # STT-модель: грузим один раз и переиспользуем
-        self._asr = None  # лениво инициализируется при первой фразе
+        # Флаг прерывания озвучки (barge-in): при речи во время ответа
+        # озвучка будет прервана, чтобы ассистент сразу слушал новый вопрос.
+        self._interrupt_tts = False
+
+        # TTS-поток: при barge-in озвучка идёт в фоне, не блокируя обработку.
+        self._tts_thread: Optional[threading.Thread] = None
+
+        # STT-модели: грузим лениво и переиспользуем
+        self._asr = None          # выбранная модель (kairos или nemotron)
+        self._asr_kairos = None   # отдельная Kairos-модель (для --stt auto)
+        self._asr_nemotron = None # отдельная Nemotron-модель (для --stt auto)
 
         self.is_recording = False
         self.noise_profile: Optional[np.ndarray] = None
@@ -677,10 +855,13 @@ class VoiceAssistant:
 
             audio_tensor = torch.from_numpy(chunk).float().unsqueeze(0)
             prob = self._vad_model(audio_tensor, SAMPLE_RATE).item()
-            is_speech = prob > VAD_THRESHOLD
+            is_speech = prob > self._vad_threshold
             current_time = time.time()
 
             if is_speech:
+                # Если идёт озвучка ответа и включён barge-in — прерываем её
+                if self._barge_in and self._tts_thread and self._tts_thread.is_alive():
+                    self._interrupt_tts = True
                 if not self._speech_started:
                     self._speech_started = True
                     self._current_phrase = []
@@ -757,19 +938,35 @@ class VoiceAssistant:
         if self._asr is not None:
             return self._asr
 
-        if self._stt == "nemotron":
+        if self._stt in ("nemotron", "auto"):
             print("[STT] Инициализация Nemotron-модели...")
-            self._asr = NemotronSTT(
+            self._asr_nemotron = NemotronSTT(
                 model_path=NEMOTRON_MODEL_PATH,
                 language=NEMOTRON_LANGUAGE,
                 latency_ms=NEMOTRON_LATENCY_MS,
             )
-        else:
-            print("[STT] Инициализация Kairos-модели...")
-            from kairos_asr import KairosASR
+            if self._stt == "nemotron":
+                self._asr = self._asr_nemotron
+        if self._stt in ("kairos", "auto"):
+            if self._asr_kairos is None:
+                print("[STT] Инициализация Kairos-модели...")
+                from kairos_asr import KairosASR
 
-            self._asr = KairosASR(device="auto")
+                self._asr_kairos = KairosASR(device="auto")
+            if self._stt == "kairos":
+                self._asr = self._asr_kairos
         return self._asr
+
+    def _select_stt(self, audio_np: np.ndarray) -> str:
+        """
+        При --stt auto выбирает модель по длине фразы:
+        короткие (<=2с) — Kairos (быстро), длинные — Nemotron (точнее).
+        Иначе возвращает выбранную модель как есть.
+        """
+        if self._stt != "auto":
+            return self._stt
+        duration = len(audio_np) / SAMPLE_RATE
+        return "kairos" if duration <= 2.0 else "nemotron"
 
     def _handle_phrase(self, audio_np: np.ndarray):
         """Полный пайплайн: Шумоподавление → STT → RAG → TTS"""
@@ -778,6 +975,38 @@ class VoiceAssistant:
             self._handle_phrase_inner(audio_np)
         finally:
             self._busy = False
+
+    def _speak(self, text: str) -> None:
+        """
+        Озвучивает текст. При --barge-in — в отдельном потоке,
+        чтобы можно было прервать озвучку новым вопросом.
+        """
+        if not text:
+            return
+
+        def _do_speak():
+            try:
+                self.tts.speak(
+                    text,
+                    speaker=self._tts_speaker,
+                    save_file=False,
+                    sample_rate=TTS_SAMPLE_RATE,
+                )
+            except Exception as e:
+                print(f"❌ Ошибка синтеза речи: {e}", file=sys.stderr)
+            finally:
+                self._interrupt_tts = False
+
+        if self._barge_in:
+            # Ждём завершения предыдущей озвучки (быстрое прерывание флагом)
+            if self._tts_thread and self._tts_thread.is_alive():
+                self._interrupt_tts = True
+                self._tts_thread.join(timeout=2.0)
+            self._interrupt_tts = False
+            self._tts_thread = threading.Thread(target=_do_speak, daemon=True)
+            self._tts_thread.start()
+        else:
+            _do_speak()
 
     def _handle_phrase_inner(self, audio_np: np.ndarray):
         with self._processing_lock:
@@ -796,6 +1025,11 @@ class VoiceAssistant:
                 except ImportError:
                     pass
 
+            # 2. Нормализация громкости (RMS) для стабильного распознавания
+            peak = np.abs(audio_np).max()
+            if peak > 0 and peak < 1.0:
+                audio_np = audio_np / peak * 0.9
+
             # 2. Сохраняем во временный WAV
             tmp_path = None
             try:
@@ -806,11 +1040,26 @@ class VoiceAssistant:
                 sf.write(tmp_path, audio_np, SAMPLE_RATE, subtype="PCM_16")
 
                 # 3. Распознаём речь (STT)
-                asr = self._get_asr()
-                if self._stt == "nemotron":
-                    text = asr.transcribe(wav_file=tmp_path)
+                # Для --stt auto выбираем модель по длине фразы
+                chosen = self._select_stt(audio_np)
+                if chosen == "nemotron":
+                    # Убеждаемся, что Nemotron загружена
+                    if self._asr_nemotron is None:
+                        print("[STT] Инициализация Nemotron-модели (auto)...")
+                        self._asr_nemotron = NemotronSTT(
+                            model_path=NEMOTRON_MODEL_PATH,
+                            language=NEMOTRON_LANGUAGE,
+                            latency_ms=NEMOTRON_LATENCY_MS,
+                        )
+                    text = self._asr_nemotron.transcribe(wav_file=tmp_path)
                 else:
-                    result = asr.transcribe(wav_file=tmp_path)
+                    # Kairos (по умолчанию или авто для коротких фраз)
+                    if self._asr_kairos is None:
+                        print("[STT] Инициализация Kairos-модели...")
+                        from kairos_asr import KairosASR
+
+                        self._asr_kairos = KairosASR(device="auto")
+                    result = self._asr_kairos.transcribe(wav_file=tmp_path)
                     text = result.full_text.strip()
             except Exception as e:
                 print(f"❌ Ошибка распознавания речи: {e}", file=sys.stderr)
@@ -842,6 +1091,24 @@ class VoiceAssistant:
             mirea_related = is_mirea_related(clean_text)
             if query_text != clean_text:
                 print(f"🔄 МИРЭА-нормализация: {query_text}")
+
+            # ---- Погода: отвечаем напрямую из метео-API (без RAG/подтверждения) ----
+            if is_weather_query(clean_text):
+                city = extract_city(clean_text)
+                weather = fetch_weather(city)
+                if weather:
+                    print(f"🌤️ {weather}")
+                    log_question(
+                        raw_text=text,
+                        query_text=query_text,
+                        mirea=False,
+                        web_search=False,
+                        answer=weather,
+                    )
+                    print("🔊 Озвучиваю ответ...")
+                    self._speak(weather)
+                    print("✅ Готово. Слушаю дальше...\n")
+                    return
 
             # Подтверждение: спрашиваем, хочет ли пользователь узнать об этом
             if not self._no_confirm:
@@ -878,20 +1145,15 @@ class VoiceAssistant:
                         query_text=query_text,
                         use_web_search=True,
                         use_agent_search=False,
-                        max_results=30,
+                        max_results=10,
                     )
                 answer = clean_html(rag_result.get("response"))
                 # Обрезаем, чтобы не было слишком длинно для TTS
-                answer = answer[:700]
+                answer = answer[:999]
                 print(f"🤖 Ответ RAG: {answer[:200]}...")
             except Exception as e:
                 print(f"❌ Ошибка RAG-запроса: {e}", file=sys.stderr)
-                self.tts.speak(
-                    "Извините, произошла ошибка при обработке запроса.",
-                    speaker=TTS_SPEAKER,
-                    save_file=False,
-                    sample_rate=TTS_SAMPLE_RATE,
-                )
+                self._speak("Извините, произошла ошибка при обработке запроса.")
                 return
 
             if not answer or answer == "Ответ отсутствует":
@@ -918,15 +1180,7 @@ class VoiceAssistant:
 
             # 5. Озвучиваем ответ
             print("🔊 Озвучиваю ответ...")
-            try:
-                self.tts.speak(
-                    answer,
-                    speaker=TTS_SPEAKER,
-                    save_file=False,
-                    sample_rate=TTS_SAMPLE_RATE,
-                )
-            except Exception as e:
-                print(f"❌ Ошибка синтеза речи: {e}", file=sys.stderr)
+            self._speak(answer)
 
             print("✅ Готово. Слушаю дальше...\n")
 
@@ -956,10 +1210,13 @@ class VoiceAssistant:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 tmp_path = f.name
             sf.write(tmp_path, a, SAMPLE_RATE, subtype="PCM_16")
-            asr = self._get_asr()
-            if self._stt == "nemotron":
-                return asr.transcribe(wav_file=tmp_path)
-            result = asr.transcribe(wav_file=tmp_path)
+            # Для короткого ответа (да/нет) всегда используем Kairos (быстро)
+            if self._asr_kairos is None:
+                print("[STT] Инициализация Kairos-модели (ответ)...")
+                from kairos_asr import KairosASR
+
+                self._asr_kairos = KairosASR(device="auto")
+            result = self._asr_kairos.transcribe(wav_file=tmp_path)
             return result.full_text.strip()
         except Exception as e:
             print(f"❌ Ошибка распознавания ответа: {e}", file=sys.stderr)
@@ -978,7 +1235,7 @@ class VoiceAssistant:
             clean_question_for_speech = "этот вопрос"
         self.tts.speak(
             f"Вы хотели бы узнать об {clean_question_for_speech}?",
-            speaker=TTS_SPEAKER,
+            speaker=self._tts_speaker,
             save_file=False,
             sample_rate=TTS_SAMPLE_RATE,
         )
@@ -1065,6 +1322,12 @@ class VoiceAssistant:
 
         self.is_recording = True
 
+        # Прогрев модели: предзагружаем STT в фоне, чтобы первая фраза не ждала
+        if self._preload:
+            print("🔥 Прогрев STT-модели в фоне...")
+            preload_thread = threading.Thread(target=self._get_asr, daemon=True)
+            preload_thread.start()
+
         # Фоновый воркер для обработки готовых фраз
         self._worker_thread = threading.Thread(target=self._phrase_worker, daemon=True)
         self._worker_thread.start()
@@ -1099,8 +1362,8 @@ def main():
         help="Отключить подтверждение — отправлять запрос сразу в ИИ без вопроса пользователю"
     )
     parser.add_argument(
-        "--stt", choices=["kairos", "nemotron"], default="kairos",
-        help="Модель распознавания речи: kairos (по умолчанию) или nemotron (NVIDIA Nemotron 3.5 ASR)"
+        "--stt", choices=["kairos", "nemotron", "auto"], default="kairos",
+        help="Модель распознавания речи: kairos (по умолчанию), nemotron (NVIDIA), auto (выбор по длине фразы)"
     )
     parser.add_argument(
         "--new-chat", action="store_true",
@@ -1110,17 +1373,46 @@ def main():
         "--no-clean", action="store_true",
         help="НЕ чистить текст вопроса (не удалять имена и мат) перед отправкой в ИИ"
     )
+    parser.add_argument(
+        "--vad-threshold", type=float, default=VAD_THRESHOLD,
+        help="Порог VAD (0..1, ниже = чувствительнее к тишине/шуму)"
+    )
+    parser.add_argument(
+        "--silence-timeout", type=float, default=SILENCE_TIMEOUT_SEC,
+        help="Пауза тишины перед завершением фразы (сек)"
+    )
+    parser.add_argument(
+        "--min-speech", type=float, default=MIN_SPEECH_DURATION_SEC,
+        help="Минимальная длительность фразы (сек)"
+    )
+    parser.add_argument(
+        "--speaker", default=TTS_SPEAKER,
+        help="Голос TTS (eugene, xenia, aidar, baya, kseniya)"
+    )
+    parser.add_argument(
+        "--preload", action="store_true",
+        help="Прогреть STT-модель при старте (первая фраза быстрее)"
+    )
+    parser.add_argument(
+        "--barge-in", action="store_true",
+        help="Прерывать озвучку ответа, если пользователь начал говорить"
+    )
     args = parser.parse_args()
 
     print("=" * 50)
     print("  Голосовой ассистент (Микрофон → RAG → TTS)")
     print(f"  STT-модель: {args.stt}")
+    print(f"  VAD-порог: {args.vad_threshold} | Таймаут: {args.silence_timeout}с | Голос: {args.speaker}")
     if args.no_confirm:
         print("  ⚡ Режим: без подтверждения (сразу ответ)")
     if args.new_chat:
         print("  🆕 Новый чат (контекст сброшен)")
     if args.no_clean:
         print("  🧽 Без очистки слов (имя/мат сохраняются в вопросе)")
+    if args.preload:
+        print("  🔥 Прогрев модели при старте")
+    if args.barge_in:
+        print("  ⏭️ Barge-in: озвучку можно прервать речью")
     print("=" * 50)
 
     # 1. Инициализация RAG-клиента
@@ -1142,7 +1434,7 @@ def main():
 
     # 3. Инициализация VAD
     print("\n[3/3] Инициализация VAD...")
-    vad = SileroVAD(sample_rate=SAMPLE_RATE, threshold=VAD_THRESHOLD)
+    vad = SileroVAD(sample_rate=SAMPLE_RATE, threshold=args.vad_threshold)
     print("✅ VAD готов")
 
     # 4. Запуск ассистента
@@ -1150,12 +1442,16 @@ def main():
         rag_client=rag,
         neural_speaker=neural_speaker,
         vad=vad,
-        silence_timeout=SILENCE_TIMEOUT_SEC,
-        min_speech_duration=MIN_SPEECH_DURATION_SEC,
+        silence_timeout=args.silence_timeout,
+        min_speech_duration=args.min_speech,
         no_confirm=args.no_confirm,
         stt=args.stt,
         new_chat=args.new_chat,
         no_clean=args.no_clean,
+        tts_speaker=args.speaker,
+        vad_threshold=args.vad_threshold,
+        preload=args.preload,
+        barge_in=args.barge_in,
     )
 
     try:

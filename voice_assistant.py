@@ -685,6 +685,54 @@ def rephrase_answer_with_ai(
         return raw_answer
 
 
+def ask_ollama_direct(
+    question: str,
+    max_words: int = 80,
+) -> str:
+    """
+    Отвечает на вопрос напрямую через Ollama (без веб-поиска).
+    Используется как fallback, когда поиск ничего не нашёл (0 контекстов) —
+    например, для разговорных реплик («Здесь ты», «Привет», «Что ты умеешь»).
+
+    Возвращает пустую строку при ошибке.
+    """
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Europe/Moscow"))
+    except Exception:
+        now = datetime.now()
+    now_str = now.strftime("%d.%m.%Y %H:%M")
+
+    prompt = (
+        "Ты — робот Валера, дружелюбный голосовой ассистент. "
+        f"Сегодня {now_str} по московскому времени.\n"
+        "Отвечай коротко, живо, по-русски, разговорно, "
+        f"не более {max_words} слов. Без ссылок и форматирования.\n\n"
+        f"Пользователь: {question}\n"
+        "Валера:"
+    )
+    try:
+        resp = requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            json={
+                "model": REPHRASE_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "keep_alive": "30m",
+                "options": {"num_predict": 200, "temperature": 0.6},
+            },
+            timeout=60,
+        )
+        if resp.status_code != 200:
+            return ""
+        text = resp.json().get("response", "").strip()
+        return text[:1000]
+    except Exception as e:
+        print(f"⚠️ Прямой вопрос к LLM не удался: {e}", file=sys.stderr)
+        return ""
+
+
 def warmup_ollama(model: str = REPHRASE_MODEL, timeout: int = 120) -> None:
     """
     Прогревает LLM-модель в Ollama коротким вызовом, чтобы она загрузилась
@@ -1143,10 +1191,19 @@ class VoiceAssistant:
                         chat_id=self._chat_id,
                         query_text=query_text,
                         use_web_search=True,
-                        use_agent_search=use_agent,
+                        use_agent_search=True,
                         max_results=5 if use_agent else 5,
                     )
                 answer = clean_html(rag_result.get("response"))
+                # Если поиск ничего не дал (0 контекстов или пустой/обрывочный
+                # ответ типа «В данный момент я.») — отвечаем напрямую через LLM,
+                # как на обычную реплику диалога (например, «Здесь ты», «Привет»).
+                n_contexts = len(rag_result.get("contexts", []))
+                if n_contexts == 0 or len(answer.strip()) < 10:
+                    print(f"🔍 Поиск не дал контекстов ({n_contexts}), отвечаю через LLM напрямую...")
+                    direct = ask_ollama_direct(query_text)
+                    if direct:
+                        answer = direct
                 # Пересказываем ответ через ИИ, чтобы озвучивать живой текст,
                 # а не сырые ссылки/сниппеты из поиска.
                 answer_ai = rephrase_answer_with_ai(query_text, answer)

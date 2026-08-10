@@ -616,6 +616,63 @@ def log_question(
         print(f"⚠️ Не удалось записать в лог: {e}", file=sys.stderr)
 
 
+# ---------------------------------------------------------------------------
+# Обработка ответа через ИИ (пересказ для голосового вывода)
+# ---------------------------------------------------------------------------
+# Адрес Ollama для локального пересказа ответа. Берём из .env, дефолт 11434.
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+REPHRASE_MODEL = os.getenv("REPHRASE_MODEL", "valera_live:latest")
+
+
+def rephrase_answer_with_ai(
+    question: str,
+    raw_answer: str,
+    max_words: int = 80,
+) -> str:
+    """
+    Пересказывает «сырой» ответ RAG (со ссылками/сниппетами) через локальную
+    модель Ollama в короткий разговорный ответ, пригодный для озвучки.
+
+    Убирает URL, форматирование и избыточность — оставляет суть как живой
+    ответ ассистента. Если Ollama недоступна — возвращает исходный текст.
+    """
+    if not raw_answer or len(raw_answer.strip()) < 5:
+        return raw_answer
+
+    prompt = (
+        "Ты — голосовой ассистент. Пользователь спросил: "
+        f"\"{question}\"\n\n"
+        "Ниже приведён черновой ответ из поиска (может содержать ссылки и "
+        "служебный текст). Перескажи его КОРОТКО, по-русски, разговорно, "
+        f"не более {max_words} слов. НЕ упоминай URL и ссылки, не цитируй "
+        "источники. Просто дай полезный ответ человеку.\n\n"
+        f"Черновик: {raw_answer}\n\n"
+        "Ответ:"
+    )
+    try:
+        resp = requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            json={
+                "model": REPHRASE_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"num_predict": 200, "temperature": 0.5},
+            },
+            timeout=60,
+        )
+        if resp.status_code != 200:
+            return raw_answer
+        data = resp.json()
+        text = data.get("response", "").strip()
+        # Падаем обратно на черновик, если модель вернула пусто
+        if not text:
+            return raw_answer
+        return text[:1000]
+    except Exception as e:
+        print(f"⚠️ Не удалось пересказать ответ через ИИ: {e}", file=sys.stderr)
+        return raw_answer
+
+
 class VoiceAssistant:
     """
     Голосовой ассистент:
@@ -988,10 +1045,15 @@ class VoiceAssistant:
                         chat_id=self._chat_id,
                         query_text=query_text,
                         use_web_search=True,
-                        use_agent_search=False,
-                        max_results=10,
+                        use_agent_search=True,
+                        max_results=5,
                     )
                 answer = clean_html(rag_result.get("response"))
+                # Пересказываем ответ через ИИ, чтобы озвучивать живой текст,
+                # а не сырые ссылки/сниппеты из поиска.
+                answer_ai = rephrase_answer_with_ai(query_text, answer)
+                if answer_ai and answer_ai.strip():
+                    answer = answer_ai
                 # Обрезаем, чтобы не было слишком длинно для TTS
                 answer = answer[:999]
                 print(f"🤖 Ответ RAG: {answer[:200]}...")

@@ -89,7 +89,7 @@ class OllamaService(LLMService):
             if message['role'] == 'system':
                 system_content = message['content']
                 break
-        
+
         # Добавляем текущую дату, чтобы модель могла отвечать на вопросы о «сегодня»
         system_content = f"{system_content}\n\n{self._now_context()}\n\n"
         
@@ -97,7 +97,7 @@ class OllamaService(LLMService):
         # This fixes "stale context wins": the newest user question and the last
         # assistant reply should dominate, older messages are just background.
         system_content = (
-            f"{system_content}\n"
+            f"{system_content}\n\n"
             "Conversation dynamics: The messages at the END of the conversation are "
             "the most important. The very last user message is your current question "
             "and must be answered first. The most recent assistant replies and the "

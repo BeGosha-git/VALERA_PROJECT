@@ -1191,7 +1191,7 @@ class VoiceAssistant:
                         chat_id=self._chat_id,
                         query_text=query_text,
                         use_web_search=True,
-                        use_agent_search=True,
+                        use_agent_search=use_agent,
                         max_results=5 if use_agent else 5,
                     )
                 answer = clean_html(rag_result.get("response"))

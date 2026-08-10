@@ -22,6 +22,11 @@ ALL_WEB_ENGINES = [
     "mwmbl", "bing", "marginalia", "gigablast",
 ]
 
+# Движки, которые дают нерелевантный мусор для русского поиска (чешские форумы
+# у seznam, YouTube/несортированный мусор у presearch/mullvad). Их НЕ включаем
+# в активные — они только замедляют поиск и портят качество ответов.
+JUNK_ENGINES = {"seznam", "mojeek", "mullvad", "presearch", "stract", "marginalia", "gigablast", "yandex"}
+
 
 class SearXNGService:
     """
@@ -47,18 +52,30 @@ class SearXNGService:
     # ------------------------------------------------------------------
     # Динамический пинг движков
     # ------------------------------------------------------------------
-    def _ping_engines(self, test_query="тест", ping_timeout=5, max_engines=8):
+    def _ping_engines(self, test_query="тест", ping_timeout=3, max_engines=8):
         """
         Пингует каждый веб-движок коротким запросом и возвращает список
         тех, что реально ответили результатами. Блокированные/недоступные
         движки пропускаются, чтобы не ждать их таймауты в каждом запросе.
+
+        Пинг выполняется ПАРАЛЛЕЛЬНО (по пулу потоков), чтобы не ждать
+        последовательно таймауты заблокированных движков.
         """
-        active = []
         # Приоритет: сначала релевантные для русского поиска движки (mwmbl, bing),
         # чтобы они гарантированно попали в топ-max_engines. Остальные — после.
-        ordered = ["mwmbl", "bing", "wikipedia", "github", "seznam", "mojeek"] + \
-                  [e for e in ALL_WEB_ENGINES if e not in ("mwmbl", "bing", "wikipedia", "github", "seznam", "mojeek")]
-        for engine in ordered:
+        # Пингуем НЕ все движки: заблокированные (google, brave, duckduckgo...)
+        # известны заранее и только зря грузят SearXNG параллельными запросами.
+        # Приоритетные всегда проверяем; из остальных берём небольшой набор.
+        # Мусорные движки (JUNK_ENGINES) не пингуем и не включаем — они дают
+        # нерелевантные результаты и замедляют поиск.
+        priority = [e for e in ("mwmbl", "bing", "wikipedia", "github", "seznam", "mojeek")
+                    if e not in JUNK_ENGINES]
+        secondary = [e for e in ALL_WEB_ENGINES if e not in priority and e not in JUNK_ENGINES]
+        # Проверяем приоритетные + максимум 3 из остальных (которые могли стать
+        # доступными), чтобы не перегружать SearXNG фоновым пингом.
+        ordered = priority + secondary[:3]
+
+        def _ping_one(engine):
             try:
                 resp = requests.get(
                     self.api_url,
@@ -74,15 +91,27 @@ class SearXNGService:
                 )
                 if resp.status_code != 200:
                     logger.info(f"  [PING] {engine}: статус {resp.status_code} — пропуск")
-                    continue
+                    return engine, False
                 data = resp.json()
                 n = len(data.get('results', []))
                 logger.info(f"  [PING] {engine}: {n} результатов — {'✅ рабочий' if n > 0 else '⏭️ пропуск'}")
-                if data.get('results'):
-                    active.append(engine)
+                return engine, bool(data.get('results'))
             except Exception as e:
                 logger.info(f"  [PING] {engine}: ошибка ({e}) — пропуск")
-                continue
+                return engine, False
+
+        active = []
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=min(len(ordered), 6)) as pool:
+            futures = {pool.submit(_ping_one, e): e for e in ordered}
+            for fut in as_completed(futures):
+                engine, ok = fut.result()
+                if ok:
+                    active.append(engine)
+
+        # Восстанавливаем приоритетный порядок рабочих движков
+        active.sort(key=lambda e: ordered.index(e) if e in ordered else len(ordered))
+
         if not active:
             # Ничего не ответило — фолбэк на проверенные релевантные движки
             active = ["mwmbl", "bing", "wikipedia", "github"]
@@ -101,7 +130,8 @@ class SearXNGService:
         cache_fresh = cached is not None and (now - SearXNGService._active_engines_timestamp <= self._ENGINES_CACHE_TTL)
 
         if cache_fresh:
-            return cached
+            # Отфильтровываем мусорные движки на случай, если кэш старый
+            return [e for e in cached if e not in JUNK_ENGINES] or ["mwmbl", "bing", "wikipedia", "github"]
 
         # Кэш пуст/устарел: для быстрого ответа используем надёжный фолбэк,
         # а полный пинг выполняем в фоне (результат применится со следующего запроса).
@@ -144,62 +174,88 @@ class SearXNGService:
                 logger.warning("No active SearXNG engines, returning empty")
                 return []
 
-            params = {
-                'q': query,
-                'format': 'json',
-                # НЕ передаём 'categories': он перекрывает 'engines' и заставляет
-                # SearXNG вызывать ВСЕ движки категории (включая заблокированные),
-                # из-за чего запрос ждёт их таймауты (~12-14с). 'engines' уже
-                # отфильтрован пингом до рабочих, поэтому категорию не задаём.
-                'results': min(num_results, 25),  # Prevent overly large requests
-                'language': 'all',
-                'engines': ','.join(active_engines),
-                'timeout': '8',  # hard cap so we don't wait for slow engines
-            }
-            
-            # Make the API request
-            logger.info(f"🔍 [SEARXNG] Запрос: '{query}' | движки: {active_engines} | лимит: {min(num_results, 25)}")
+            # Делим движки на две группы для ПАРАЛЛЕЛЬНОГО поиска.
+            # Внутри SearXNG движки выполняются последовательно, поэтому один
+            # запрос со всеми движками = сумма их таймаутов (bing ~2.1с + mwmbl
+            # 0.6с + ...). Параллельные запросы по группам сокращают время до
+            # максимума по группам (fast ~1с, slow ~2.1с) вместо суммы.
+            fast_engines = [e for e in active_engines if e in ("mwmbl", "wikipedia", "github")]
+            slow_engines = [e for e in active_engines if e not in fast_engines]
+
             headers = {
                 'Accept': 'application/json',
                 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
             }
-            
+
+            def _query_engines(engines):
+                if not engines:
+                    return []
+                params = {
+                    'q': query,
+                    'format': 'json',
+                    # НЕ передаём 'categories': он перекрывает 'engines' и заставляет
+                    # SearXNG вызывать ВСЕ движки категории (включая заблокированные),
+                    # из-за чего запрос ждёт их таймауты. 'engines' уже отфильтрован
+                    # пингом до рабочих, поэтому категорию не задаём.
+                    'results': min(num_results, 25),  # Prevent overly large requests
+                    'language': 'all',
+                    'engines': ','.join(engines),
+                    'timeout': '8',  # hard cap so we don't wait for slow engines
+                }
+                import time as _t
+                _t0 = _t.time()
+                try:
+                    resp = requests.get(self.api_url, params=params, headers=headers, timeout=20)
+                    _dt = _t.time() - _t0
+                    logger.info(f"⏱️ [SEARXNG] '{query[:40]}' | {engines} → {_dt:.2f}с (статус {resp.status_code})")
+                    if resp.status_code != 200:
+                        return []
+                    try:
+                        data = resp.json()
+                    except json.JSONDecodeError:
+                        logger.error("❌ [SEARXNG] Не удалось распарсить JSON ответ")
+                        return []
+                    unresponsive = data.get('unresponsive_engines', [])
+                    if unresponsive:
+                        logger.warning(f"⚠️ [SEARXNG] Неответившие движки: {unresponsive}")
+                    return self._format_results(data)
+                except Exception as e:
+                    logger.error(f"❌ [SEARXNG] Ошибка группы {engines}: {e}")
+                    return []
+
+            logger.info(f"🔍 [SEARXNG] Запрос: '{query}' | движки: {active_engines} | лимит: {min(num_results, 25)}")
+
+            # Параллельные запросы по группам (максимум 2 группы — быстрые + остальные)
             import time as _t
+            from concurrent.futures import ThreadPoolExecutor, as_completed
             _t0 = _t.time()
-            response = requests.get(
-                self.api_url, 
-                params=params,
-                headers=headers,
-                timeout=25
-            )
+            groups = [fast_engines, slow_engines]
+            results = []
+            with ThreadPoolExecutor(max_workers=min(len(groups), 2)) as pool:
+                futures = [pool.submit(_query_engines, g) for g in groups if g]
+                for fut in as_completed(futures):
+                    results.extend(fut.result())
+
             _dt = _t.time() - _t0
-            logger.info(f"⏱️ [SEARXNG] Ответ получен за {_dt:.2f}с (статус {response.status_code})")
-            
-            # Check the response status
-            if response.status_code != 200:
-                logger.error(f"❌ [SEARXNG] Ошибка: статус {response.status_code}")
-                return []
-            
-            # Parse the results
-            try:
-                search_results = response.json()
-            except json.JSONDecodeError:
-                logger.error("❌ [SEARXNG] Не удалось распарсить JSON ответ")
-                return []
-            
-            # Логируем ошибки движков (unresponsive)
-            unresponsive = search_results.get('unresponsive_engines', [])
-            if unresponsive:
-                logger.warning(f"⚠️ [SEARXNG] Неответившие движки: {unresponsive}")
-            
-            # Extract and format the relevant information
-            formatted_results = self._format_results(search_results)
-            logger.info(f"✅ [SEARXNG] Найдено {len(formatted_results)} результатов по запросу '{query}'")
-            for i, r in enumerate(formatted_results[:5], 1):
+            logger.info(f"⏱️ [SEARXNG] Суммарно за {_dt:.2f}с")
+
+            # Дедупликация по URL (один сайт может прийти от нескольких движков)
+            seen = set()
+            deduped = []
+            for r in results:
+                url = r.get('url', '')
+                if url and url in seen:
+                    continue
+                if url:
+                    seen.add(url)
+                deduped.append(r)
+
+            logger.info(f"✅ [SEARXNG] Найдено {len(deduped)} результатов по запросу '{query}'")
+            for i, r in enumerate(deduped[:5], 1):
                 logger.info(f"   [{i}] {r.get('title', '')[:60]} | {r.get('url', '')[:80]}")
-            
-            return formatted_results
-            
+
+            return deduped
+
         except Exception as e:
             logger.error(f"Error during SearXNG search: {str(e)}")
             return []

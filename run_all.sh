@@ -2,7 +2,7 @@
 # run_all.sh – объединённый запуск WebRAgent (Docker) + Ollama + TTS
 # ============================================================================
 #
-#   ./run_all.sh [talk|voice|voice-fast] [--stt MODEL] [--keep-ollama] [--preload] [--barge-in]
+#   ./run_all.sh [talk|voice|voice-fast] [--stt MODEL] [--keep-ollama] [--preload] [--barge-in] [--proxy URL]
 #
 # Режимы:
 #   talk          — TALK.py (по умолчанию)
@@ -18,6 +18,8 @@
 #   --no-clean      — НЕ чистить текст вопроса (сохранять имена/мат в вопросе)
 #   --preload       — прогреть STT-модель при старте (первая фраза быстрее)
 #   --barge-in      — прерывать озвучку ответа, если пользователь начал говорить
+#   --proxy URL     — HTTP-прокси для исходящих запросов (SearXNG→поисковики,
+#                     приложение, Ollama). Пример: --proxy http://127.0.0.1:12334
 #
 # Важно про Ollama:
 #   По умолчанию скрипт ОСТАНАВЛИВАЕТ все процессы `ollama serve`, запущенные
@@ -47,6 +49,14 @@ KEEP_OLLAMA=0
 if [[ "$EXTRA_ARGS" == *"--keep-ollama"* ]]; then
     KEEP_OLLAMA=1
     EXTRA_ARGS="${EXTRA_ARGS//--keep-ollama/}"
+fi
+
+# Разбираем флаг --proxy URL (прокси для исходящих запросов SearXNG и приложения)
+PROXY=""
+if [[ "$EXTRA_ARGS" == *"--proxy"* ]]; then
+    # Извлекаем значение после --proxy (в формате: --proxy http://host:port)
+    PROXY="$(echo "$EXTRA_ARGS" | sed -n 's/.*--proxy[ =]\?\([^ ]*\).*/\1/p')"
+    EXTRA_ARGS="$(echo "$EXTRA_ARGS" | sed 's/--proxy[ =]\?[^ ]*//')"
 fi
 
 # PID своей Ollama (запущенной этим скриптом)
@@ -218,7 +228,16 @@ ensure_model
 echo ""
 echo "[4/5] Запуск WebRAgent через Docker Compose..."
 cd "$WEBRAGENT_DIR"
-docker compose up -d
+if [ -n "$PROXY" ]; then
+    echo "  🌐 Прокси для SearXNG (исходящие запросы к поисковикам): $PROXY"
+    # Внутри контейнера searxng хост доступен как host.docker.internal,
+    # поэтому заменяем 127.0.0.1/localhost на этот адрес для прокси.
+    PROXY_URL_FOR_DOCKER="$(echo "$PROXY" | sed -E 's#//(127\.0\.0\.1|localhost):#//host.docker.internal:#')"
+    echo "  → Для Docker-контейнера: $PROXY_URL_FOR_DOCKER"
+    PROXY_URL="$PROXY_URL_FOR_DOCKER" docker compose up -d
+else
+    docker compose up -d
+fi
 cd "$SCRIPT_DIR"
 
 # Даём сервисам время подняться
@@ -226,6 +245,15 @@ echo "Ожидание запуска сервисов (5 секунд)..."
 sleep 5
 
 # 5. Запуск приложения
+# Если задан прокси — экспортируем его в окружение (requests в приложении и
+# Ollama подхватят HTTP_PROXY/HTTPS_PROXY автоматически).
+if [ -n "$PROXY" ]; then
+    export HTTP_PROXY="$PROXY"
+    export HTTPS_PROXY="$PROXY"
+    export ALL_PROXY="$PROXY"
+    export NO_PROXY="localhost,127.0.0.1,::1,searxng,qdrant,mongodb,app"
+fi
+
 if [ "$RUN_MODE" = "voice" ]; then
     # --- Режим голосового ассистента (с подтверждением) ---
     echo ""

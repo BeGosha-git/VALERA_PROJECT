@@ -47,6 +47,14 @@ services:
       - INSTANCE_NAME=RAG Web Search
       - AUTOCOMPLETE=google
       - ENABLE_METRICS=0
+      # Прокси для исходящих запросов к поисковикам (Google, Yandex и т.п.).
+      # host.docker.internal указывает на хост, где живёт прокси (127.0.0.1).
+      # Значение можно переопределить: PROXY_URL=http://host:port docker compose up -d
+      - HTTP_PROXY=${PROXY_URL:-}
+      - HTTPS_PROXY=${PROXY_URL:-}
+      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1,::1,searxng}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     cap_drop:
       - ALL

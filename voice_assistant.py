@@ -74,11 +74,6 @@ RAG_BASE_URL = os.getenv("RAG_BASE_URL", "http://localhost:5000")
 RAG_USERNAME = os.getenv("RAG_USERNAME", "admin")
 RAG_PASSWORD = os.getenv("RAG_PASSWORD", "change_me_in_production")
 
-# Прокси для внешних запросов (Ollama/веб-поиск), если сеть требует.
-# Формат: http://user:pass@host:port  или  socks5://host:port
-# Можно задать в .env (PROXY_URL) или через --proxy при запуске.
-PROXY_URL = os.getenv("PROXY_URL", "").strip()
-
 # Файл, где хранится chat_id WebRAgent.
 # Благодаря этому контекст разговора сохраняется между перезапусками ассистента.
 CHAT_ID_FILE = os.getenv(
@@ -290,22 +285,14 @@ class RAGClient:
         password: str,
         login_endpoint: str = "/auth/login",
         use_csrf: bool = True,
-        proxy: str = "",
     ):
         self.base_url = base_url.rstrip("/")
         self.username = username
         self.password = password
         self.login_endpoint = login_endpoint
         self.use_csrf = use_csrf
-        self.proxy = proxy
         self.session = requests.Session()
         self.session.headers.update({"X-Requested-With": "XMLHttpRequest"})
-        # Прокси применяется ко ВСЕМ запросам сессии (http/https/socks).
-        if proxy:
-            self.session.proxies.update({
-                "http": proxy,
-                "https": proxy,
-            })
         self._logged_in = False
 
     def login(self) -> bool:
@@ -637,13 +624,6 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 REPHRASE_MODEL = os.getenv("REPHRASE_MODEL", "valera_live:latest")
 
 
-def _get_proxies() -> dict:
-    """Возвращает словарь прокси для requests (пустой, если прокси не задан)."""
-    if PROXY_URL:
-        return {"http": PROXY_URL, "https": PROXY_URL}
-    return {}
-
-
 def rephrase_answer_with_ai(
     question: str,
     raw_answer: str,
@@ -690,7 +670,6 @@ def rephrase_answer_with_ai(
                 "keep_alive": "30m",  # держим модель в памяти между вызовами
                 "options": {"num_predict": 200, "temperature": 0.5},
             },
-            proxies=_get_proxies(),
             timeout=60,
         )
         if resp.status_code != 200:
@@ -743,7 +722,6 @@ def ask_ollama_direct(
                 "keep_alive": "30m",
                 "options": {"num_predict": 200, "temperature": 0.6},
             },
-            proxies=_get_proxies(),
             timeout=60,
         )
         if resp.status_code != 200:
@@ -770,7 +748,6 @@ def warmup_ollama(model: str = REPHRASE_MODEL, timeout: int = 120) -> None:
                 "keep_alive": "30m",
                 "options": {"num_predict": 5},
             },
-            proxies=_get_proxies(),
             timeout=timeout,
         )
         if resp.status_code == 200:
@@ -1536,21 +1513,26 @@ def main():
         help="Прерывать озвучку ответа, если пользователь начал говорить"
     )
     parser.add_argument(
-        "--proxy", default=PROXY_URL,
-        help="Прокси для внешних запросов (http://user:pass@host:port или socks5://host:port)"
+        "--proxy", default=None,
+        help="HTTP-прокси для исходящих запросов, например http://127.0.0.1:12334"
     )
     args = parser.parse_args()
 
-    # Прокси: если задан через CLI, применяем его для всех функций (пересказ, прогрев)
+    # Если задан прокси — применяем его ко всем исходящим запросам процесса
+    # (requests в RAGClient/Ollama читают переменные окружения).
     if args.proxy:
-        globals()["PROXY_URL"] = args.proxy
+        os.environ['HTTP_PROXY'] = args.proxy
+        os.environ['HTTPS_PROXY'] = args.proxy
+        os.environ['ALL_PROXY'] = args.proxy
+        os.environ['NO_PROXY'] = os.environ.get(
+            'NO_PROXY', 'localhost,127.0.0.1,::1,searxng,qdrant,mongodb,app'
+        )
+        print(f"  🌐 Прокси: {args.proxy}")
 
     print("=" * 50)
     print("  Голосовой ассистент (Микрофон → RAG → TTS)")
     print(f"  STT-модель: {args.stt}")
     print(f"  VAD-порог: {args.vad_threshold} | Таймаут: {args.silence_timeout}с | Голос: {args.speaker}")
-    if args.proxy:
-        print(f"  🌐 Прокси: {args.proxy}")
     if args.no_confirm:
         print("  ⚡ Режим: без подтверждения (сразу ответ)")
     if args.new_chat:
@@ -1569,7 +1551,6 @@ def main():
         base_url=RAG_BASE_URL,
         username=RAG_USERNAME,
         password=RAG_PASSWORD,
-        proxy=args.proxy,
     )
     if not rag.login():
         print("❌ Не удалось войти в WebRAgent. Проверьте, что сервис запущен.")

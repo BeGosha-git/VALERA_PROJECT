@@ -688,11 +688,14 @@ def rephrase_answer_with_ai(
 def ask_ollama_direct(
     question: str,
     max_words: int = 80,
+    history: Optional[list] = None,
 ) -> str:
     """
     Отвечает на вопрос напрямую через Ollama (без веб-поиска).
-    Используется как fallback, когда поиск ничего не нашёл (0 контекстов) —
-    например, для разговорных реплик («Здесь ты», «Привет», «Что ты умеешь»).
+    Используется для разговорных реплик («Здесь ты», «Привет», «Что ты умеешь»)
+    и как fallback, когда поиск ничего не нашёл.
+
+    history: необязательный список {role, content} для контекста диалога.
 
     Возвращает пустую строку при ошибке.
     """
@@ -704,11 +707,22 @@ def ask_ollama_direct(
         now = datetime.now()
     now_str = now.strftime("%d.%m.%Y %H:%M")
 
+    # Строим контекст диалога (если есть история)
+    history_text = ""
+    if history:
+        parts = []
+        for m in history[-6:]:  # последние 6 сообщений
+            role = "Пользователь" if m.get("role") == "user" else "Валера"
+            parts.append(f"{role}: {m.get('content', '')[:200]}")
+        if parts:
+            history_text = "Недавний диалог:\n" + "\n".join(parts) + "\n\n"
+
     prompt = (
         "Ты — робот Валера, дружелюбный голосовой ассистент. "
         f"Сегодня {now_str} по московскому времени.\n"
         "Отвечай коротко, живо, по-русски, разговорно, "
         f"не более {max_words} слов. Без ссылок и форматирования.\n\n"
+        f"{history_text}"
         f"Пользователь: {question}\n"
         "Валера:"
     )
@@ -1028,6 +1042,53 @@ class VoiceAssistant:
         # Всё остальное (короткие и средние вопросы) — быстрый поиск
         return False
 
+    @staticmethod
+    def _is_conversational(text: str) -> bool:
+        """
+        Детектор разговорных реплик — фраз, которые НЕ требуют веб-поиска,
+        а являются продолжением диалога («Где ты это вычитал?», «Понятно»,
+        «Ага», «Расскажи ещё», «Что ты умеешь?»).
+
+        Возвращает True, если реплику нужно отправить напрямую в LLM.
+        """
+        import re
+
+        low = text.lower().strip()
+        if not low:
+            return True
+
+        # Короткие односложные реплики
+        short_phrases = {
+            "привет", "здравствуй", "здравствуйте", "да", "нет", "ага",
+            "угу", "понятно", "ясно", "ок", "окей", "спасибо", "пока",
+            "до свидания", "ахах", "ха", "круто", "класс", "зачем",
+            "где ты", "где ты это", "где ты это вычитал", "откуда",
+            "откуда ты", "откуда знаешь", "откуда ты знаешь", "почему так",
+            "почему ты так", "что ты умеешь", "ты здесь", "здесь ты",
+            "расскажи ещё", "ещё", "ещё что", "молодец", "хорошо",
+            "ладно", "ну да", "и что", "ну и что", "а что", "как дела",
+            "как ты", "ты тут", "ты слышишь",
+        }
+        if low in short_phrases:
+            return True
+
+        # Реплики, содержащие ссылку на предыдущий ответ ("ты сказал", "вычитал", "откуда")
+        conversational_markers = [
+            "ты сказал", "ты говорил", "ты упомянул", "вычитал",
+            "откуда ты", "зачем ты", "почему ты", "где ты",
+            "как ты", "ты что", "ты прав", "не прав", "согласен",
+            "не согласен", "переспроси", "повтори", "ещё раз",
+        ]
+        if any(m in low for m in conversational_markers) and len(low.split()) <= 10:
+            return True
+
+        # Вопросительные про сам диалог/бота (не про внешнюю информацию)
+        self_referential = ["ты", "тебя", "тебе", "тобой"]
+        if any(w in low for w in self_referential) and ("умеешь" in low or "знаешь" in low or "робот" in low or "бот" in low):
+            return True
+
+        return False
+
     def _handle_phrase(self, audio_np: np.ndarray):
         """Полный пайплайн: Шумоподавление → STT → RAG → TTS"""
         self._busy = True
@@ -1151,6 +1212,29 @@ class VoiceAssistant:
             mirea_related = is_mirea_related(clean_text)
             if query_text != clean_text:
                 print(f"🔄 МИРЭА-нормализация: {query_text}")
+
+            # Разговорные реплики («Где ты это вычитал?», «Привет», «Что ты умеешь?»)
+            # НЕ требуют веб-поиска — отвечаем напрямую через LLM с контекстом диалога.
+            if not mirea_related and self._is_conversational(clean_text):
+                print("💬 Разговорная реплика — отвечаю через LLM напрямую...")
+                direct = ask_ollama_direct(query_text, history=self._conversation_history)
+                if direct:
+                    answer = direct
+                    print(f"🤖 Ответ: {answer[:200]}...")
+                    log_question(
+                        raw_text=text,
+                        query_text=query_text,
+                        mirea=False,
+                        web_search=False,
+                        answer=answer,
+                    )
+                    self._conversation_history.append({"role": "user", "content": query_text})
+                    self._conversation_history.append({"role": "assistant", "content": answer})
+                    self._conversation_history = self._conversation_history[-20:]
+                    print("🔊 Озвучиваю ответ...")
+                    self._speak(answer)
+                    print("✅ Готово. Слушаю дальше...\n")
+                    return
 
             # Подтверждение: спрашиваем, хочет ли пользователь узнать об этом
             if not self._no_confirm:

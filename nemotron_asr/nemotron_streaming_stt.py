@@ -229,9 +229,6 @@ class NemotronStreamingASR:
         Генератор mel-фич для стриминга.
         Разбивает аудио на чанки и выдаёт тензоры (1, T_mel, 128).
         """
-        device = self.model.device
-        dtype = self.model.dtype
-
         # Первый чанк (уже посчитан в transcribe)
         yield first_inputs["input_features"][:, : self.processor.num_mel_frames_first_audio_chunk, :]
 
@@ -242,10 +239,17 @@ class NemotronStreamingASR:
         while True:
             end_idx = start_idx + self.samples_per_chunk
             if end_idx > len(audio):
-                break
+                # Последний неполный чанк — паддим нулями до полного размера,
+                # чтобы хвост фразы (последние слова) не терялся.
+                if start_idx >= len(audio):
+                    break
+                chunk = np.zeros(self.samples_per_chunk, dtype=np.float32)
+                chunk[: len(audio) - start_idx] = audio[start_idx:len(audio)]
+            else:
+                chunk = audio[start_idx:end_idx]
 
             inputs = self.processor(
-                audio[start_idx:end_idx],
+                chunk,
                 sampling_rate=self.sampling_rate,
                 is_streaming=True,
                 is_first_audio_chunk=False,
@@ -306,7 +310,7 @@ class NemotronStreamingASR:
             **first_inputs,
             "input_features": self._make_feature_generator(audio, first_inputs),
             "streamer": streamer,
-            "max_new_tokens": 512,
+            "max_new_tokens": 1024,
         }
 
         thread = Thread(target=self.model.generate, kwargs=generate_kwargs, daemon=True)
@@ -319,7 +323,8 @@ class NemotronStreamingASR:
             full_text_parts.append(text_chunk)
         print()
 
-        thread.join(timeout=10)
+        # Ждём завершения генерации, чтобы не оборвать конец фразы
+        thread.join(timeout=60)
         return "".join(full_text_parts).strip()
 
 

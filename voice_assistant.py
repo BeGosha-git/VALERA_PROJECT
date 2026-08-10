@@ -50,6 +50,12 @@ RAG_BASE_URL = "http://localhost:5000"
 RAG_USERNAME = "admin"
 RAG_PASSWORD = "change_me_in_production"
 
+# Файл, где хранится chat_id WebRAgent.
+# Благодаря этому контекст разговора сохраняется между перезапусками ассистента.
+CHAT_ID_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "chat_id.txt"
+)
+
 # TTS
 TTS_SPEAKER = "eugene"
 TTS_SAMPLE_RATE = 48000
@@ -149,20 +155,28 @@ class NemotronSTT:
 
     def _make_feature_generator(self, audio: np.ndarray, first_inputs: dict):
         """Генератор mel-фич для стримингового RNNT."""
-        device = self.model.device
+        mel_frame_idx = self.processor.num_mel_frames_first_audio_chunk
+        start_idx = mel_frame_idx * self.hop_length - self.n_fft // 2
+
+        # Первый чанк (уже посчитан в transcribe)
         yield first_inputs["input_features"][
             :, : self.processor.num_mel_frames_first_audio_chunk, :
         ]
 
-        mel_frame_idx = self.processor.num_mel_frames_first_audio_chunk
-        start_idx = mel_frame_idx * self.hop_length - self.n_fft // 2
-
         while True:
             end_idx = start_idx + self.samples_per_chunk
             if end_idx > len(audio):
-                break
+                # Последний неполный чанк — паддим нулями до полного размера,
+                # чтобы хвост фразы (последние слова) попал в распознавание.
+                if start_idx >= len(audio):
+                    break
+                chunk = np.zeros(self.samples_per_chunk, dtype=np.float32)
+                chunk[: len(audio) - start_idx] = audio[start_idx:len(audio)]
+            else:
+                chunk = audio[start_idx:end_idx]
+
             inputs = self.processor(
-                audio[start_idx:end_idx],
+                chunk,
                 sampling_rate=self.sampling_rate,
                 is_streaming=True,
                 is_first_audio_chunk=False,
@@ -220,7 +234,7 @@ class NemotronSTT:
             **first_inputs,
             "input_features": self._make_feature_generator(audio, first_inputs),
             "streamer": streamer,
-            "max_new_tokens": 512,
+            "max_new_tokens": 1024,
         }
         thread = threading.Thread(
             target=self.model.generate, kwargs=generate_kwargs, daemon=True
@@ -230,7 +244,8 @@ class NemotronSTT:
         parts = []
         for text_chunk in streamer:
             parts.append(text_chunk)
-        thread.join(timeout=10)
+        # Ждём, пока генерация действительно закончится (не обрезаем хвост)
+        thread.join(timeout=60)
         return "".join(parts).strip()
 
 
@@ -349,6 +364,89 @@ class RAGClient:
         except requests.RequestException as e:
             raise RuntimeError(f"Ошибка соединения при получении коллекций: {e}")
 
+    # ------------------------------------------------------------------
+    # Чат-API WebRAgent (хранит историю на сервере в MongoDB)
+    # ------------------------------------------------------------------
+    def create_chat(self) -> Optional[str]:
+        """
+        Создаёт новый чат на сервере WebRAgent.
+        Возвращает chat_id или None при ошибке.
+        """
+        if not self._logged_in:
+            raise RuntimeError("Необходимо сначала выполнить login()")
+
+        url = f"{self.base_url}/chat/new"
+        try:
+            response = self.session.post(url)
+            if response.status_code != 200:
+                print(
+                    f"❌ Ошибка создания чата: статус {response.status_code}, ответ: {response.text}",
+                    file=sys.stderr,
+                )
+                return None
+            data = response.json()
+            return data.get("chat_id")
+        except requests.RequestException as e:
+            print(f"❌ Ошибка соединения при создании чата: {e}", file=sys.stderr)
+            return None
+
+    def chat_query(
+        self,
+        chat_id: str,
+        query_text: str,
+        collection_id: Optional[str] = None,
+        use_agent_search: bool = False,
+        use_web_search: bool = False,
+        max_results: int = 4,
+    ) -> dict:
+        """
+        Отправляет запрос в существующий чат.
+        WebRAgent сам хранит историю и передаёт контекст (последние 10 сообщений).
+        """
+        if not self._logged_in:
+            raise RuntimeError("Необходимо сначала выполнить login()")
+        if not query_text:
+            raise ValueError("query_text не может быть пустым")
+        if not use_web_search and not collection_id:
+            raise ValueError("collection_id обязателен, если use_web_search=False")
+
+        data = {
+            "query": query_text,
+            "use_agent_search": "on" if use_agent_search else "",
+            "use_web_search": "on" if use_web_search else "",
+            "agent_strategy": "direct",
+            "max_results": str(max(1, min(max_results, 10))),
+        }
+        if collection_id:
+            data["collection_id"] = collection_id
+
+        query_url = f"{self.base_url}/chat/{chat_id}/query"
+        try:
+            response = self.session.post(query_url, data=data)
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"Ошибка запроса: статус {response.status_code}, ответ: {response.text}"
+                )
+            return response.json()
+        except requests.RequestException as e:
+            raise RuntimeError(f"Ошибка соединения при выполнении запроса: {e}")
+
+    def get_chat_messages(self, chat_id: str, limit: int = 50):
+        """Получает сообщения чата с сервера."""
+        if not self._logged_in:
+            raise RuntimeError("Необходимо сначала выполнить login()")
+
+        url = f"{self.base_url}/chat/{chat_id}/messages"
+        try:
+            response = self.session.get(url, params={"limit": limit})
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"Ошибка получения сообщений чата: статус {response.status_code}"
+                )
+            return response.json()
+        except requests.RequestException as e:
+            raise RuntimeError(f"Ошибка соединения при получении сообщений: {e}")
+
     def close(self):
         self.session.close()
 
@@ -455,6 +553,46 @@ def arecord_command(extra_args=None):
     return cmd
 
 
+# ---------------------------------------------------------------------------
+# Логирование заданных вопросов
+# ---------------------------------------------------------------------------
+# Файл журнала вопросов (переопределяется тестами)
+LOG_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "questions.log"
+)
+
+
+def log_question(
+    raw_text: str = "",
+    query_text: str = "",
+    mirea: bool = False,
+    collection_id: Optional[str] = None,
+    web_search: bool = False,
+    answer: str = "",
+) -> None:
+    """
+    Записывает заданный вопрос (и ответ) в журнал LOG_FILE.
+    Полезно для отладки/аудита того, что реально уходит в ИИ.
+    """
+    import json
+    from datetime import datetime
+
+    entry = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "raw_text": raw_text,
+        "query_text": query_text,
+        "mirea_related": mirea,
+        "collection_id": collection_id,
+        "web_search": web_search,
+        "answer": answer,
+    }
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"⚠️ Не удалось записать в лог: {e}", file=sys.stderr)
+
+
 class VoiceAssistant:
     """
     Голосовой ассистент:
@@ -474,6 +612,8 @@ class VoiceAssistant:
         min_speech_duration: float = 0.5,
         no_confirm: bool = False,
         stt: str = "kairos",
+        new_chat: bool = False,
+        no_clean: bool = False,
     ):
         self.rag = rag_client
         self.tts = neural_speaker
@@ -483,6 +623,8 @@ class VoiceAssistant:
         self.min_speech_duration = min_speech_duration
         self._no_confirm = no_confirm
         self._stt = stt
+        self._new_chat = new_chat
+        self._no_clean = no_clean
 
         # STT-модель: грузим один раз и переиспользуем
         self._asr = None  # лениво инициализируется при первой фразе
@@ -493,7 +635,12 @@ class VoiceAssistant:
         self._vad_buffer = np.array([], dtype=np.float32)
         self._collection_id: Optional[str] = None  # кэш ID коллекции для МИРЭА
 
-        # История последних 10 обменов (user/assistant) для контекста ИИ
+        # Чат WebRAgent: контекст вопросов/ответов хранится на сервере (MongoDB).
+        # Создаём чат при старте, далее каждый запрос идёт через /chat/<id>/query,
+        # а WebRAgent сам передаёт модель последние сообщения как контекст.
+        self._chat_id: Optional[str] = None
+
+        # Локальная история (резерв) — держим последние 10 обменов
         self._conversation_history: list = []
 
         # Флаг занятости: пока идёт обработка (STT/RAG/TTS),
@@ -602,6 +749,28 @@ class VoiceAssistant:
                 continue  # не обрабатываем новые фразы, пока заняты
             self._handle_phrase(audio_np)
 
+    def _get_asr(self):
+        """
+        Возвращает STT-модель согласно self._stt.
+        Грузится лениво при первом использовании.
+        """
+        if self._asr is not None:
+            return self._asr
+
+        if self._stt == "nemotron":
+            print("[STT] Инициализация Nemotron-модели...")
+            self._asr = NemotronSTT(
+                model_path=NEMOTRON_MODEL_PATH,
+                language=NEMOTRON_LANGUAGE,
+                latency_ms=NEMOTRON_LATENCY_MS,
+            )
+        else:
+            print("[STT] Инициализация Kairos-модели...")
+            from kairos_asr import KairosASR
+
+            self._asr = KairosASR(device="auto")
+        return self._asr
+
     def _handle_phrase(self, audio_np: np.ndarray):
         """Полный пайплайн: Шумоподавление → STT → RAG → TTS"""
         self._busy = True
@@ -637,11 +806,12 @@ class VoiceAssistant:
                 sf.write(tmp_path, audio_np, SAMPLE_RATE, subtype="PCM_16")
 
                 # 3. Распознаём речь (STT)
-                from kairos_asr import KairosASR
-
-                asr = KairosASR(device="auto")
-                result = asr.transcribe(wav_file=tmp_path)
-                text = result.full_text.strip()
+                asr = self._get_asr()
+                if self._stt == "nemotron":
+                    text = asr.transcribe(wav_file=tmp_path)
+                else:
+                    result = asr.transcribe(wav_file=tmp_path)
+                    text = result.full_text.strip()
             except Exception as e:
                 print(f"❌ Ошибка распознавания речи: {e}", file=sys.stderr)
                 return
@@ -653,10 +823,15 @@ class VoiceAssistant:
                 print("🔇 (пусто)")
                 return
 
-            # Чистим текст вопроса (убираем имена/мат) для теста
-            clean_text = clean_question(text)
-            if clean_text != text:
-                print(f"🧹 После очистки: {clean_text}")
+            if self._no_clean:
+                # --- Режим БЕЗ очистки слов: используем распознанный текст как есть ---
+                clean_text = text
+                print(f"🗣️ (без очистки) Текст: {clean_text}")
+            else:
+                # Чистим текст вопроса (убираем имена/мат) для теста
+                clean_text = clean_question(text)
+                if clean_text != text:
+                    print(f"🧹 После очистки: {clean_text}")
 
             if not clean_text:
                 print("🚫 Текст пустой после очистки.")
@@ -680,30 +855,30 @@ class VoiceAssistant:
                     collection_id = self._get_collection_id()
                     if collection_id:
                         print(f"📚 Поиск по коллекции (МИРЭА): {collection_id}")
-                        rag_result = self.rag.query(
+                        rag_result = self.rag.chat_query(
+                            chat_id=self._chat_id,
                             query_text=query_text,
                             collection_id=collection_id,
                             use_web_search=False,
                             use_agent_search=False,
                             max_results=3,
-                            conversation_context=self._conversation_history,
                         )
                     else:
                         print("⚠️ Нет коллекций — ищу в интернете.")
-                        rag_result = self.rag.query(
+                        rag_result = self.rag.chat_query(
+                            chat_id=self._chat_id,
                             query_text=query_text,
                             use_web_search=True,
                             use_agent_search=False,
                             max_results=3,
-                            conversation_context=self._conversation_history,
                         )
                 else:
-                    rag_result = self.rag.query(
+                    rag_result = self.rag.chat_query(
+                        chat_id=self._chat_id,
                         query_text=query_text,
                         use_web_search=True,
-                        use_agent_search=True,
-                        max_results=5,
-                        conversation_context=self._conversation_history,
+                        use_agent_search=False,
+                        max_results=30,
                     )
                 answer = clean_html(rag_result.get("response"))
                 # Обрезаем, чтобы не было слишком длинно для TTS
@@ -721,6 +896,16 @@ class VoiceAssistant:
 
             if not answer or answer == "Ответ отсутствует":
                 answer = "К сожалению, я не смог найти ответ на ваш вопрос."
+
+            # Логируем заданный вопрос и ответ (для отладки/аудита)
+            log_question(
+                raw_text=text,
+                query_text=query_text,
+                mirea=mirea_related,
+                collection_id=self._collection_id if mirea_related else None,
+                web_search=not mirea_related,
+                answer=answer,
+            )
 
             # Сохраняем обмен в историю (держим последние 10)
             self._conversation_history.append(
@@ -758,8 +943,6 @@ class VoiceAssistant:
 
     def _record_answer(self, seconds: float = 3.0) -> str:
         """Записывает ответ пользователя (да/нет) и распознаёт его."""
-        from kairos_asr import KairosASR
-
         proc = subprocess.run(
             arecord_command(["-d", str(int(max(seconds, 1)))]),
             capture_output=True,
@@ -773,7 +956,9 @@ class VoiceAssistant:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 tmp_path = f.name
             sf.write(tmp_path, a, SAMPLE_RATE, subtype="PCM_16")
-            asr = KairosASR(device="auto")
+            asr = self._get_asr()
+            if self._stt == "nemotron":
+                return asr.transcribe(wav_file=tmp_path)
             result = asr.transcribe(wav_file=tmp_path)
             return result.full_text.strip()
         except Exception as e:
@@ -785,7 +970,10 @@ class VoiceAssistant:
 
     def _confirm(self, question: str) -> bool:
         """Спрашивает подтверждение и возвращает True/False (ответ да/нет)."""
-        clean_question_for_speech = clean_question(question)
+        if self._no_clean:
+            clean_question_for_speech = question
+        else:
+            clean_question_for_speech = clean_question(question)
         if not clean_question_for_speech:
             clean_question_for_speech = "этот вопрос"
         self.tts.speak(
@@ -811,9 +999,54 @@ class VoiceAssistant:
                 print(f"❌ Не удалось получить коллекции: {e}", file=sys.stderr)
         return self._collection_id
 
+    def _load_chat_id(self) -> Optional[str]:
+        """Загружает сохранённый chat_id из файла."""
+        try:
+            if os.path.exists(CHAT_ID_FILE):
+                with open(CHAT_ID_FILE, "r", encoding="utf-8") as f:
+                    cid = f.read().strip()
+                    return cid if cid else None
+        except Exception as e:
+            print(f"⚠️ Не удалось прочитать {CHAT_ID_FILE}: {e}", file=sys.stderr)
+        return None
+
+    def _save_chat_id(self, chat_id: str) -> None:
+        """Сохраняет chat_id в файл для продолжения контекста между запусками."""
+        try:
+            with open(CHAT_ID_FILE, "w", encoding="utf-8") as f:
+                f.write(chat_id)
+        except Exception as e:
+            print(f"⚠️ Не удалось сохранить chat_id: {e}", file=sys.stderr)
+
+    def _clear_chat_id_file(self) -> None:
+        """Удаляет файл chat_id (для принудительного нового чата)."""
+        try:
+            if os.path.exists(CHAT_ID_FILE):
+                os.remove(CHAT_ID_FILE)
+        except Exception as e:
+            print(f"⚠️ Не удалось удалить {CHAT_ID_FILE}: {e}", file=sys.stderr)
+
     def start(self):
         if self.is_recording:
             return
+
+        # Используем существующий чат (контекст сохраняется между запусками)
+        # или создаём новый, если его нет / запрошен новый.
+        if not self._chat_id:
+            if self._new_chat:
+                self._clear_chat_id_file()
+            saved = self._load_chat_id()
+            if saved and not self._new_chat:
+                self._chat_id = saved
+                print(f"💬 Продолжаю существующий чат: {self._chat_id}")
+            else:
+                print("💬 Создание нового чата в WebRAgent...")
+                self._chat_id = self.rag.create_chat()
+                if self._chat_id:
+                    self._save_chat_id(self._chat_id)
+                    print(f"✅ Чат создан: {self._chat_id}")
+                else:
+                    print("⚠️ Не удалось создать чат — контекст разговора работать не будет.")
 
         # Шумовой профиль ДО запуска основного захвата
         if NOISE_REDUCTION:
@@ -865,12 +1098,29 @@ def main():
         "--no-confirm", action="store_true",
         help="Отключить подтверждение — отправлять запрос сразу в ИИ без вопроса пользователю"
     )
+    parser.add_argument(
+        "--stt", choices=["kairos", "nemotron"], default="kairos",
+        help="Модель распознавания речи: kairos (по умолчанию) или nemotron (NVIDIA Nemotron 3.5 ASR)"
+    )
+    parser.add_argument(
+        "--new-chat", action="store_true",
+        help="Начать новый чат (забыть предыдущий контекст разговора)"
+    )
+    parser.add_argument(
+        "--no-clean", action="store_true",
+        help="НЕ чистить текст вопроса (не удалять имена и мат) перед отправкой в ИИ"
+    )
     args = parser.parse_args()
 
     print("=" * 50)
     print("  Голосовой ассистент (Микрофон → RAG → TTS)")
+    print(f"  STT-модель: {args.stt}")
     if args.no_confirm:
         print("  ⚡ Режим: без подтверждения (сразу ответ)")
+    if args.new_chat:
+        print("  🆕 Новый чат (контекст сброшен)")
+    if args.no_clean:
+        print("  🧽 Без очистки слов (имя/мат сохраняются в вопросе)")
     print("=" * 50)
 
     # 1. Инициализация RAG-клиента
@@ -903,6 +1153,9 @@ def main():
         silence_timeout=SILENCE_TIMEOUT_SEC,
         min_speech_duration=MIN_SPEECH_DURATION_SEC,
         no_confirm=args.no_confirm,
+        stt=args.stt,
+        new_chat=args.new_chat,
+        no_clean=args.no_clean,
     )
 
     try:

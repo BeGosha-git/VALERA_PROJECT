@@ -18,8 +18,23 @@ venv/
 *.mp3
 temp/
 
+# Модели ML (слишком большие для git — хранить локально / LFS / HuggingFace)
+*.safetensors
+*.gguf
+*.nemo
+*.pt
+*.pth
+*.onnx
+*.ckpt
+*.bin
+
 # IDE / OS
 .idea/
 .vscode/
 *.swp
 .DS_Store
+
+# Логи и временные файлы
+questions.log
+*.partial
+temp/

@@ -1,4 +1,5 @@
 import os
+import threading
 from flask import Flask
 from flask_login import LoginManager
 from dotenv import load_dotenv
@@ -53,5 +54,18 @@ def create_app():
     # Initialize admin user from environment variables
     with app.app_context():
         User.initialize_admin()
+
+    # Предзагрузка активных движков SearXNG в фоне, чтобы первый запрос
+    # не ждал пинг (~20с). Пинг идёт один раз и кэшируется на уровне класса.
+    def _prewarm_searxng():
+        try:
+            from app.services.searxng_service import SearXNGService
+            svc = SearXNGService()
+            svc._get_active_engines()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Pre-warm SearXNG engines failed: {e}")
+
+    threading.Thread(target=_prewarm_searxng, daemon=True).start()
     
     return app

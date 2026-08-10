@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import time
 import requests
 from urllib.parse import urlencode
 from app.services.llm_service import LLMFactory
@@ -9,11 +10,30 @@ from app.services.llm_service import LLMFactory
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# Все веб-движки, которые могут работать. При запуске мы пингуем каждый
+# и оставляем только отвечающие (см. _ping_engines). Блокированные (google,
+# brave, duckduckgo, qwant, startpage...) не исключаем навсегда — если они
+# снова станут доступны, они автоматически включатся.
+ALL_WEB_ENGINES = [
+    "google", "brave", "duckduckgo", "qwant", "startpage",
+    "seznam", "mojeek", "mullvad", "wikipedia", "github",
+    "yandex", "presearch", "stract",
+]
+
+
 class SearXNGService:
     """
     Service for performing web searches using SearXNG
     """
-    
+
+    # Кэш рабочих движков на уровне КЛАССА: SearXNGService создаётся заново
+    # на каждый HTTP-запрос, поэтому инстанс-кэш не помогает. Классовый кэш
+    # переживает запросы и делает пинг только один раз на процесс.
+    _active_engines_cache = None
+    _active_engines_timestamp = 0.0
+    _ENGINES_CACHE_TTL = 600  # 10 минут
+
     def __init__(self):
         """Initialize SearXNG service with configuration from environment variables"""
         self.base_url = os.environ.get('SEARXNG_URL', 'http://searxng:8080')
@@ -22,6 +42,77 @@ class SearXNGService:
         self.results_per_page = int(os.environ.get('SEARXNG_RESULTS_PER_PAGE', 10))
         
         logger.info(f"Initialized SearXNGService with URL: {self.base_url}")
+
+    # ------------------------------------------------------------------
+    # Динамический пинг движков
+    # ------------------------------------------------------------------
+    def _ping_engines(self, test_query="тест", ping_timeout=5, max_engines=8):
+        """
+        Пингует каждый веб-движок коротким запросом и возвращает список
+        тех, что реально ответили результатами. Блокированные/недоступные
+        движки пропускаются, чтобы не ждать их таймауты в каждом запросе.
+        """
+        active = []
+        for engine in ALL_WEB_ENGINES:
+            try:
+                resp = requests.get(
+                    self.api_url,
+                    params={
+                        'q': test_query,
+                        'format': 'json',
+                        'engines': engine,
+                        'results': 1,
+                    },
+                    headers={'Accept': 'application/json',
+                             'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0'},
+                    timeout=ping_timeout,
+                )
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                if data.get('results'):
+                    active.append(engine)
+            except Exception:
+                continue
+        if not active:
+            # Ничего не ответило — фолбэк на проверенные базовые
+            active = ["seznam", "mojeek", "wikipedia", "github"]
+        logger.info(f"Active SearXNG engines after ping: {active}")
+        return active[:max_engines]
+
+    def _get_active_engines(self):
+        """
+        Возвращает рабочие движки (кэш на уровне класса, TTL 10 минут).
+        Если кэш пуст (например, новый процесс при Flask reloader) — сразу
+        используем проверенный фолбэк без долгого пинга, а полный пинг
+        запускаем в фоне, чтобы не блокировать первый запрос.
+        """
+        now = time.time()
+        cached = SearXNGService._active_engines_cache
+        cache_fresh = cached is not None and (now - SearXNGService._active_engines_timestamp <= self._ENGINES_CACHE_TTL)
+
+        if cache_fresh:
+            return cached
+
+        # Кэш пуст/устарел: для быстрого ответа используем надёжный фолбэк,
+        # а полный пинг выполняем в фоне (результат применится со следующего запроса).
+        fallback = ["seznam", "mullvad", "wikipedia", "github"]
+
+        def _background_ping():
+            try:
+                SearXNGService._active_engines_cache = self._ping_engines()
+                SearXNGService._active_engines_timestamp = time.time()
+            except Exception:
+                pass
+
+        import threading
+        t = threading.Thread(target=_background_ping, daemon=True)
+        t.start()
+
+        # Кэшируем фолбэк, чтобы последующие запросы не запускали пинг повторно
+        SearXNGService._active_engines_cache = fallback
+        SearXNGService._active_engines_timestamp = now
+        return fallback
     
     def search(self, query, num_results=10, search_type='general'):
         """
@@ -36,24 +127,27 @@ class SearXNGService:
             list: List of search results with title, snippet, and URL
         """
         try:
-            # Format the request parameters.
-            # - language 'all' (NOT 'en') so Russian queries are not restricted.
-            # - categories: 'web' covers web-search engines (seznam, mojeek, ...)
-            #   that actually respond, while 'general' alone only hits google/brave/
-            #   duckduckgo which are usually rate-limited/blocked from this network.
-            # - engines: explicitly prefer engines that respond and are less likely
-            #   to be blocked; SearXNG still uses other configured engines as well.
+            # Определяем рабочие движки (пинг с кэшированием)
+            active_engines = self._get_active_engines()
+            if not active_engines:
+                logger.warning("No active SearXNG engines, returning empty")
+                return []
+
             params = {
                 'q': query,
                 'format': 'json',
-                'categories': 'web,general',
+                # НЕ передаём 'categories': он перекрывает 'engines' и заставляет
+                # SearXNG вызывать ВСЕ движки категории (включая заблокированные),
+                # из-за чего запрос ждёт их таймауты (~12-14с). 'engines' уже
+                # отфильтрован пингом до рабочих, поэтому категорию не задаём.
                 'results': min(num_results, 25),  # Prevent overly large requests
                 'language': 'all',
-                'engines': 'seznam,mojeek,mullvad,wikipedia,github,yandex,startpage,google,brave',
+                'engines': ','.join(active_engines),
+                'timeout': '8',  # hard cap so we don't wait for slow engines
             }
             
             # Make the API request
-            logger.info(f"Performing SearXNG search for: {query}")
+            logger.info(f"Performing SearXNG search for: {query} (engines: {active_engines})")
             headers = {
                 'Accept': 'application/json',
                 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'

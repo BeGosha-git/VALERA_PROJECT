@@ -1,4 +1,6 @@
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from app.services.llm_service import LLMFactory
 from app.services.searxng_service import SearXNGService
 from app.services.base_agent_service import BaseAgentService
@@ -43,47 +45,84 @@ class WebSearchAgentService(BaseAgentService):
         else:
             return self.process_query_direct(query, max_results, max_tokens)
     
+    def _process_subquery(self, subquery, max_results):
+        """
+        Обрабатывает один подзапрос (для параллельного выполнения).
+        Использует СЫРЫЕ результаты поиска (без LLM-интерпретации каждого
+        подзапроса) — это значительно быстрее. Финальный синтез ответа
+        делает один LLM-вызов в _synthesize_answer.
+        """
+        try:
+            results = self.searxng_service.search(
+                query=subquery,
+                num_results=max_results
+            )
+            # Формируем компактный ответ из сниппетов для синтеза
+            answer = self._format_raw_results_for_synthesis(subquery, results)
+            return {
+                'subquery': subquery,
+                'answer': answer,
+                'contexts': results
+            }
+        except Exception as e:
+            logger.error(f"Subquery failed ({subquery}): {e}")
+            return {
+                'subquery': subquery,
+                'answer': '',
+                'contexts': []
+            }
+
+    @staticmethod
+    def _format_raw_results_for_synthesis(subquery, results):
+        """Собирает сырые результаты в компактный текст для синтеза."""
+        if not results:
+            return ""
+        parts = [f"По запросу '{subquery}' найдено:"]
+        for r in results[:5]:
+            title = r.get('title', '')
+            snippet = r.get('snippet', '') or r.get('content', '')
+            if title:
+                parts.append(f"- {title}: {snippet}")
+        return "\n".join(parts)
+
     def process_query_direct(self, query, max_results=5, max_tokens=1500):
         """
-        Process a query using the direct decomposition strategy
+        Process a query using the direct decomposition strategy.
+        Subqueries are searched IN PARALLEL to reduce latency.
         """
         # Step 1: Decompose the query into search subqueries
         subqueries = self._decompose_query(query, is_web_search=True)
-        
-        # Step 2: Process each subquery to get web search results
+
+        # Step 2: Process each subquery IN PARALLEL (big latency win)
         intermediate_results = []
         all_contexts = []
-        
-        for subquery in subqueries:
-            # Process each subquery with web search
-            result = self.searxng_service.process_query(
-                query=subquery,
-                max_results=max_results
-            )
-            
-            # Store intermediate results
-            intermediate_results.append({
-                'subquery': subquery,
-                'answer': result['response'],
-                'contexts': result['contexts']
-            })
-            
-            # Add contexts to the overall context collection
-            for context in result['contexts']:
-                # Make sure each context has source_type set to 'web'
-                if 'source_type' not in context:
-                    context['source_type'] = 'web'
-                all_contexts.append(context)
-        
+
+        with ThreadPoolExecutor(max_workers=min(len(subqueries), 4)) as pool:
+            futures = {
+                pool.submit(self._process_subquery, sq, max_results): sq
+                for sq in subqueries
+            }
+            for future in as_completed(futures):
+                result = future.result()
+                if result['answer']:
+                    intermediate_results.append(result)
+                    for context in result['contexts']:
+                        if 'source_type' not in context:
+                            context['source_type'] = 'web'
+                        all_contexts.append(context)
+
+        # Keep original subquery order if possible
+        intermediate_results.sort(key=lambda r: subqueries.index(r['subquery']) if r['subquery'] in subqueries else 0)
+
         # Step 3: Synthesize a comprehensive answer from intermediate results
         synthesized_response = self._synthesize_answer(query, intermediate_results, is_web_search=True)
-        
+
         # Get the model information from the LLM service
         model_info = {
             'provider': self.llm_service.get_provider_name(),
             'model': self.llm_service.get_model_name()
         }
-        
+
         # Format final response with all information
         return {
             'query': query,
@@ -113,7 +152,7 @@ class WebSearchAgentService(BaseAgentService):
         # Step 2: Use initial results to generate informed subqueries
         subqueries = self._decompose_query_informed(query, initial_response, initial_contexts, is_web_search=True)
         
-        # Step 3: Process each subquery to get intermediate answers
+        # Step 3: Process each subquery IN PARALLEL
         intermediate_results = []
         all_contexts = []
         
@@ -131,27 +170,20 @@ class WebSearchAgentService(BaseAgentService):
                 context['source_type'] = 'web'
             all_contexts.append(context)
         
-        # Process each subquery
-        for subquery in subqueries:
-            # Process each subquery with web search
-            result = self.searxng_service.process_query(
-                query=subquery,
-                max_results=max_results
-            )
-            
-            # Store intermediate results
-            intermediate_results.append({
-                'subquery': subquery,
-                'answer': result['response'],
-                'contexts': result['contexts']
-            })
-            
-            # Add contexts to the overall context collection
-            for context in result['contexts']:
-                # Make sure each context has source_type set to 'web'
-                if 'source_type' not in context:
-                    context['source_type'] = 'web'
-                all_contexts.append(context)
+        # Process remaining subqueries in parallel
+        with ThreadPoolExecutor(max_workers=min(len(subqueries), 4)) as pool:
+            futures = {
+                pool.submit(self._process_subquery, sq, max_results): sq
+                for sq in subqueries
+            }
+            for future in as_completed(futures):
+                result = future.result()
+                if result['answer']:
+                    intermediate_results.append(result)
+                    for context in result['contexts']:
+                        if 'source_type' not in context:
+                            context['source_type'] = 'web'
+                        all_contexts.append(context)
         
         # Step 4: Synthesize a comprehensive answer from intermediate results
         synthesized_response = self._synthesize_answer(query, intermediate_results, is_web_search=True)

@@ -656,6 +656,7 @@ def rephrase_answer_with_ai(
                 "model": REPHRASE_MODEL,
                 "prompt": prompt,
                 "stream": False,
+                "keep_alive": "30m",  # держим модель в памяти между вызовами
                 "options": {"num_predict": 200, "temperature": 0.5},
             },
             timeout=60,
@@ -887,6 +888,39 @@ class VoiceAssistant:
         duration = len(audio_np) / SAMPLE_RATE
         return "kairos" if duration <= 2.0 else "nemotron"
 
+    @staticmethod
+    def _should_use_agent_search(text: str) -> bool:
+        """
+        Эвристика сложности вопроса для выбора между быстрым веб-поиском
+        и агентным (декомпозиция на подзапросы).
+
+        Простые вопросы (короткие, <=5 слов, без перечислений и сравнений)
+        → False (быстрый поиск, 1 вызов LLM).
+        Сложные (длинные, с деталями, перечислениями, сравнениями) → True.
+        """
+        import re
+
+        words = text.split()
+        word_count = len(words)
+
+        # Длинные вопросы с деталями — агентный поиск
+        if word_count >= 8:
+            return True
+
+        # Вопросы со сравнением / перечислением / уточнением — агентный
+        complex_markers = [
+            "сравни", "отличи", "разниц", "лучше", "хуже", "чем",
+            "а также", "и что", "подробн", "детальн", "объясни", "почему",
+            "как работает", "что будет", "в чём разница",
+            "первое", "второе", "во-первых", "во-вторых",
+        ]
+        low = text.lower()
+        if any(m in low for m in complex_markers):
+            return True
+
+        # Всё остальное (короткие и средние вопросы) — быстрый поиск
+        return False
+
     def _handle_phrase(self, audio_np: np.ndarray):
         """Полный пайплайн: Шумоподавление → STT → RAG → TTS"""
         self._busy = True
@@ -1041,12 +1075,17 @@ class VoiceAssistant:
                             max_results=3,
                         )
                 else:
+                    # Адаптивно: простые вопросы — быстрый веб-поиск без декомпозиции,
+                    # сложные (многословные / многосторонние) — агентный поиск.
+                    use_agent = self._should_use_agent_search(query_text)
+                    if use_agent:
+                        print("🔍 Агентный поиск (сложный вопрос)...")
                     rag_result = self.rag.chat_query(
                         chat_id=self._chat_id,
                         query_text=query_text,
                         use_web_search=True,
-                        use_agent_search=True,
-                        max_results=5,
+                        use_agent_search=use_agent,
+                        max_results=5 if use_agent else 5,
                     )
                 answer = clean_html(rag_result.get("response"))
                 # Пересказываем ответ через ИИ, чтобы озвучивать живой текст,

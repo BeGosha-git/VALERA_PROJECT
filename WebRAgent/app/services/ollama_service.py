@@ -44,6 +44,7 @@ class OllamaService(LLMService):
                 "model": self.model,
                 "prompt": full_prompt,
                 "stream": False,
+                "keep_alive": "30m",  # держим модель в памяти между вызовами
                 "options": {
                     "num_predict": max_tokens
                 }
@@ -122,6 +123,7 @@ class OllamaService(LLMService):
                 "model": self.model,
                 "prompt": conversation_prompt,
                 "stream": False,
+                "keep_alive": "30m",  # держим модель в памяти между вызовами
                 "options": {
                     "num_predict": max_tokens
                 }

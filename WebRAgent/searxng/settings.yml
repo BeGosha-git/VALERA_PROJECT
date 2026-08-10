@@ -187,9 +187,9 @@ ui:
 #
 outgoing:
   # default timeout in seconds, can be override by engine
-  request_timeout: 3.0
+  request_timeout: 12.0
   # the maximum timeout in seconds
-  # max_request_timeout: 10.0
+  max_request_timeout: 20.0
   # suffix of searx_useragent, could contain information like an email address
   # to the administrator
   useragent_suffix: ""
@@ -1978,8 +1978,9 @@ engines:
     categories: general
     search_type: web
     shortcut: yd
-    disabled: true
-    inactive: true
+    # yandex включён — доступность определяется динамическим пингом при запуске
+    # disabled: true
+    # inactive: true
 
   - name: yandex images
     engine: yandex
@@ -2228,7 +2229,10 @@ engines:
   - name: seznam
     shortcut: szn
     engine: seznam
-    disabled: true
+    categories: [general, web]
+    # enabled — seznam is one of the few engines that works reliably
+    # without API keys and is not blocked by anti-bot measures.
+    # disabled: true
 
   # - name: deepl
   #   engine: deepl
@@ -2243,7 +2247,8 @@ engines:
     shortcut: mjk
     engine: mojeek
     categories: [general, web]
-    disabled: true
+    # enabled — mojeek works without API key and is not blocked.
+    # disabled: true
 
   - name: mojeek images
     shortcut: mjkimg

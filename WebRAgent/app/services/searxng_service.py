@@ -221,9 +221,13 @@ class SearXNGService:
         search_results = self.search(query, max_results, search_type)
         logger.info(f"[SEARXNG] process_query: '{query}' → {len(search_results)} результатов")
         
-        # Convert web search results to contextual format expected by RAG interface
+        # Convert web search results to contextual format expected by RAG interface.
+        # LIMIT to top N relevant contexts for the LLM — if we pass 40+ results
+        # (including junk from weak engines), the model drowns in noise and says
+        # "cannot find". Top 5 relevant (already sorted by score) is enough.
+        MAX_CONTEXTS_FOR_LLM = 5
         contexts = []
-        for result in search_results:
+        for result in search_results[:MAX_CONTEXTS_FOR_LLM]:
             contexts.append({
                 'document_id': f"web_{hash(result['url'])}",
                 'document_title': result['title'],
@@ -348,6 +352,12 @@ class SearXNGService:
         """Format SearXNG results into a standardized structure"""
         formatted = []
         
+        # Движки, которые дают РЕЛЕВАНТНЫЕ русские результаты (mwmbl, bing).
+        # Их результаты получают повышенный score, чтобы гарантированно попасть
+        # в топ-5 контекста для LLM. Остальные (wikipedia, seznam, github...)
+        # часто дают мусор, который вытесняет полезное.
+        PRIORITY_ENGINES = {"mwmbl", "bing", "presearch"}
+
         # Check if results exist and extract them
         if 'results' not in search_results:
             return formatted
@@ -357,12 +367,18 @@ class SearXNGService:
             if 'url' not in result or 'title' not in result:
                 continue
                 
+            engine = result.get('engine', 'web')
+            score = float(result.get('score', 0.95))
+            # Приоритетные движки — сильный буст score (0.95 → 1.0)
+            if engine in PRIORITY_ENGINES:
+                score = max(score, 1.0)
+
             formatted_result = {
                 'title': result.get('title', ''),
                 'url': result.get('url', ''),
                 'snippet': result.get('content', ''),
-                'source': result.get('engine', 'web'),
-                'score': float(result.get('score', 0.95))
+                'source': engine,
+                'score': score
             }
             
             formatted.append(formatted_result)
@@ -376,9 +392,14 @@ class SearXNGService:
                 by_url[url] = item
         formatted = list(by_url.values())
 
-        # Sort by relevance (score) descending, so the most relevant results
-        # appear first.
-        formatted.sort(key=lambda x: x.get('score', 0.0), reverse=True)
+        # Сортировка: сначала ВСЕ результаты приоритетных движков (mwmbl, bing,
+        # presearch), затем остальные. Внутри каждой группы — по score убыванию.
+        # Это гарантирует, что релевантные русские результаты всегда попадают
+        # в топ-5 контекста для LLM, а мусор (wikipedia, boursorama...) — в конец.
+        def _sort_key(item):
+            return (1 if item.get('source') not in PRIORITY_ENGINES else 0,
+                    -item.get('score', 0.0))
+        formatted.sort(key=_sort_key)
         return formatted
     
     def _generate_search_summary(self, query, contexts):

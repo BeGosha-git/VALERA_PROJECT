@@ -639,13 +639,24 @@ def rephrase_answer_with_ai(
     if not raw_answer or len(raw_answer.strip()) < 5:
         return raw_answer
 
+    # Текущая дата/время — чтобы пересказ не «плавал» в датах
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Europe/Moscow"))
+    except Exception:
+        now = datetime.now()
+    now_str = now.strftime("%d.%m.%Y %H:%M")
+
     prompt = (
         "Ты — голосовой ассистент. Пользователь спросил: "
         f"\"{question}\"\n\n"
+        f"Сегодня {now_str} по московскому времени.\n\n"
         "Ниже приведён черновой ответ из поиска (может содержать ссылки и "
         "служебный текст). Перескажи его КОРОТКО, по-русски, разговорно, "
         f"не более {max_words} слов. НЕ упоминай URL и ссылки, не цитируй "
-        "источники. Просто дай полезный ответ человеку.\n\n"
+        "источники. Все английские слова (feelsLike, slight, cloudy и т.п.) "
+        "переводи на русский. Просто дай полезный ответ человеку.\n\n"
         f"Черновик: {raw_answer}\n\n"
         "Ответ:"
     )

@@ -674,6 +674,31 @@ def rephrase_answer_with_ai(
         return raw_answer
 
 
+def warmup_ollama(model: str = REPHRASE_MODEL, timeout: int = 120) -> None:
+    """
+    Прогревает LLM-модель в Ollama коротким вызовом, чтобы она загрузилась
+    в VRAM до первого реального запроса (иначе первый ответ ждёт cold start).
+    """
+    try:
+        resp = requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            json={
+                "model": model,
+                "prompt": "Привет",  # короткий прогрев
+                "stream": False,
+                "keep_alive": "30m",
+                "options": {"num_predict": 5},
+            },
+            timeout=timeout,
+        )
+        if resp.status_code == 200:
+            print(f"🔥 LLM прогрев: {model} готова")
+        else:
+            print(f"⚠️ LLM прогрев: статус {resp.status_code}", file=sys.stderr)
+    except Exception as e:
+        print(f"⚠️ LLM прогрев не удался: {e}", file=sys.stderr)
+
+
 class VoiceAssistant:
     """
     Голосовой ассистент:
@@ -877,6 +902,29 @@ class VoiceAssistant:
                 self._asr = self._asr_kairos
         return self._asr
 
+    def _warmup_all(self):
+        """
+        Полный прогрев всех ИИ-компонентов перед началом работы:
+        STT (Nemotron/Kairos) + LLM (Ollama). Вызывается всегда при старте,
+        чтобы первый вопрос не ждал загрузку моделей в память/VRAM.
+        """
+        print("🔥 Полный прогрев ИИ-моделей...")
+        # 1. Прогрев STT (та, что будет использоваться)
+        try:
+            self._get_asr()
+            print("   ✅ STT готова")
+        except Exception as e:
+            print(f"   ⚠️ Прогрев STT не удался: {e}", file=sys.stderr)
+
+        # 2. Прогрев LLM (Ollama)
+        try:
+            warmup_ollama(model=REPHRASE_MODEL)
+            print("   ✅ LLM готова")
+        except Exception as e:
+            print(f"   ⚠️ Прогрев LLM не удался: {e}", file=sys.stderr)
+
+        print("🔥 Прогрев завершён.")
+
     def _select_stt(self, audio_np: np.ndarray) -> str:
         """
         При --stt auto выбирает модель по длине фразы:
@@ -912,7 +960,7 @@ class VoiceAssistant:
             "сравни", "отличи", "разниц", "лучше", "хуже", "чем",
             "а также", "и что", "подробн", "детальн", "объясни", "почему",
             "как работает", "что будет", "в чём разница",
-            "первое", "второе", "во-первых", "во-вторых",
+            "первое", "второе", "во-первых", "во-вторых", "узнай", "найди"
         ]
         low = text.lower()
         if any(m in low for m in complex_markers):
@@ -1267,11 +1315,10 @@ class VoiceAssistant:
 
         self.is_recording = True
 
-        # Прогрев модели: предзагружаем STT в фоне, чтобы первая фраза не ждала
-        if self._preload:
-            print("🔥 Прогрев STT-модели в фоне...")
-            preload_thread = threading.Thread(target=self._get_asr, daemon=True)
-            preload_thread.start()
+        # Полный прогрев всех ИИ-моделей (STT + LLM) в фоне — всегда при старте,
+        # чтобы первый вопрос не ждал загрузку моделей в память/VRAM.
+        preload_thread = threading.Thread(target=self._warmup_all, daemon=True)
+        preload_thread.start()
 
         # Фоновый воркер для обработки готовых фраз
         self._worker_thread = threading.Thread(target=self._phrase_worker, daemon=True)

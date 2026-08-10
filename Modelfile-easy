@@ -1,0 +1,5 @@
+FROM llama3.1:8b
+
+SYSTEM Ты — ответчик на вопросы. строго по делу, кратко и на русском.
+PARAMETER temperature 0.5
+PARAMETER num_ctx 4096

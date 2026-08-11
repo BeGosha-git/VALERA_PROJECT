@@ -29,6 +29,7 @@ from core.conversation import Conversation, conversation, create_new_conversatio
 from core.model import model
 from core.search import search_and_format
 from db.database import db
+from db.documents import search_documents_formatted
 from db.knowledge_base import vector_store
 
 router = APIRouter()
@@ -88,23 +89,49 @@ async def list_devices():
 
 @router.post("/chat/text", response_model=TextOnlyResponse)
 async def chat_text(req: TextRequest):
-    """Send text message, get text response."""
+    """Send text message, get text response.
+
+    Automatically searches:
+      1. Uploaded documents (RAG) — always if rag_enabled
+      2. Internet (DuckDuckGo) — if the query looks like a web search
+    """
     if not model.is_loaded:
         raise HTTPException(status_code=503, detail="Model not loaded yet.")
 
     session_id, conv = get_or_create_session(req.session_id)
 
-    # Internet search if enabled and query looks like a search
+    # 1. RAG: search uploaded documents
+    doc_context = ""
+    rag_used = False
+    if settings.rag_enabled:
+        doc_context = search_documents_formatted(req.text, settings.rag_top_k)
+        rag_used = bool(doc_context)
+
+    # 2. Internet search if enabled and query looks like a search
     search_context = ""
     search_used = False
     if req.enable_search and _is_search_query(req.text):
         search_context = search_and_format(req.text)
         search_used = True
 
-    # Build user message with optional search context
+    # Build user message with optional contexts
     user_text = req.text
-    if search_context:
-        user_text = f"{req.text}\n\n{search_context}\n\nОтветь на вопрос пользователя, используя результаты поиска."
+    if doc_context and search_context:
+        user_text = (
+            f"{req.text}\n\n{doc_context}\n\n{search_context}\n\n"
+            f"Ответь на вопрос пользователя, используя информацию из документов "
+            f"и результаты поиска."
+        )
+    elif doc_context:
+        user_text = (
+            f"{req.text}\n\n{doc_context}\n\n"
+            f"Ответь на вопрос пользователя, используя информацию из документов."
+        )
+    elif search_context:
+        user_text = (
+            f"{req.text}\n\n{search_context}\n\n"
+            f"Ответь на вопрос пользователя, используя результаты поиска."
+        )
 
     conv.add_user_message(text=user_text)
 
@@ -138,7 +165,7 @@ async def chat_text(req: TextRequest):
         session_id=session_id,
         text=response_text,
         inference_time_ms=round(inference_ms, 1),
-        search_used=search_used,
+        search_used=search_used or rag_used,
     )
 
 
@@ -175,16 +202,32 @@ async def chat_voice(
     # Build user message
     user_text = text_hint or ""
 
+    # RAG: search uploaded documents (based on text hint if provided)
+    doc_context = ""
+    rag_used = False
+    if settings.rag_enabled and user_text:
+        doc_context = search_documents_formatted(user_text, settings.rag_top_k)
+        rag_used = bool(doc_context)
+
     # Internet search based on text hint if provided
     search_context = ""
     search_used = False
     if enable_search and text_hint and _is_search_query(text_hint):
         search_context = search_and_format(text_hint)
         search_used = True
-        if user_text:
-            user_text = f"{user_text}\n\n{search_context}\n\nОтветь на вопрос, используя результаты поиска."
-        else:
-            user_text = f"Ответь на вопрос, используя эти результаты поиска:\n{search_context}"
+
+    # Combine contexts into the prompt
+    if doc_context or search_context:
+        parts = []
+        if doc_context:
+            parts.append(doc_context)
+        if search_context:
+            parts.append(search_context)
+        combined = "\n\n".join(parts)
+        user_text = (
+            f"{user_text}\n\n{combined}\n\n"
+            f"Ответь на вопрос пользователя, используя предоставленную информацию."
+        )
 
     conv.add_user_message(text=user_text, audio_path=str(audio_path))
 
@@ -235,7 +278,7 @@ async def chat_voice(
         text=response_text,
         audio_url=audio_url,
         inference_time_ms=round(inference_ms, 1),
-        search_used=search_used,
+        search_used=search_used or rag_used,
     )
 
 

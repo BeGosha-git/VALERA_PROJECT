@@ -50,6 +50,25 @@ class KnowledgeEntry(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class Document(Base):
+    """Uploaded documents (.doc, .docx, .pdf, .txt, .md) for the knowledge base.
+
+    The content is chunked and embedded into ChromaDB for semantic retrieval.
+    """
+
+    __tablename__ = "documents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    filename = Column(String(512), nullable=False)       # original file name
+    stored_path = Column(String(1024), nullable=False)   # path on disk
+    file_type = Column(String(32), nullable=False)       # .doc / .docx / .pdf / ...
+    file_size = Column(Integer, nullable=False)          # bytes
+    num_chunks = Column(Integer, default=0)              # chunks stored in vector DB
+    status = Column(String(32), default="processing")    # processing | ready | error
+    error = Column(Text, nullable=True)                  # error message if failed
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Database:
     """SQLite database manager."""
 
@@ -171,6 +190,75 @@ class Database:
             ).first()
             if entry:
                 sess.delete(entry)
+                sess.commit()
+                return True
+            return False
+
+    # ---- Document methods ----
+
+    def add_document(
+        self,
+        filename: str,
+        stored_path: str,
+        file_type: str,
+        file_size: int,
+    ) -> Document:
+        """Register a new uploaded document."""
+        with self.get_session() as sess:
+            doc = Document(
+                filename=filename,
+                stored_path=stored_path,
+                file_type=file_type,
+                file_size=file_size,
+            )
+            sess.add(doc)
+            sess.commit()
+            sess.refresh(doc)
+            return doc
+
+    def update_document(
+        self,
+        doc_id: int,
+        num_chunks: Optional[int] = None,
+        status: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> Optional[Document]:
+        """Update document processing status."""
+        with self.get_session() as sess:
+            doc = sess.query(Document).filter(Document.id == doc_id).first()
+            if not doc:
+                return None
+            if num_chunks is not None:
+                doc.num_chunks = num_chunks
+            if status is not None:
+                doc.status = status
+            if error is not None:
+                doc.error = error
+            sess.commit()
+            sess.refresh(doc)
+            return doc
+
+    def get_document(self, doc_id: int) -> Optional[Document]:
+        """Get a document by ID."""
+        with self.get_session() as sess:
+            return sess.query(Document).filter(Document.id == doc_id).first()
+
+    def get_all_documents(self, limit: int = 100) -> list[Document]:
+        """List all uploaded documents."""
+        with self.get_session() as sess:
+            return (
+                sess.query(Document)
+                .order_by(Document.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+
+    def delete_document(self, doc_id: int) -> bool:
+        """Delete a document record."""
+        with self.get_session() as sess:
+            doc = sess.query(Document).filter(Document.id == doc_id).first()
+            if doc:
+                sess.delete(doc)
                 sess.commit()
                 return True
             return False

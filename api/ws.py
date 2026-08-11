@@ -21,6 +21,7 @@ from core.audio_io import audio_to_wav_bytes
 from core.conversation import Conversation, create_new_conversation
 from core.model import model
 from core.search import search_and_format
+from db.documents import search_documents_formatted
 
 ws_router = APIRouter()
 
@@ -100,16 +101,25 @@ async def ws_chat(websocket: WebSocket):
                 with open(user_audio_path, "wb") as f:
                     f.write(audio_bytes)
 
-            # Search enhancement
+            # Search enhancement (documents RAG + internet)
+            contexts = []
+            if settings.rag_enabled and user_text:
+                doc_ctx = search_documents_formatted(user_text, settings.rag_top_k)
+                if doc_ctx:
+                    contexts.append(doc_ctx)
+
             if settings.search_enabled and user_text:
                 from api.routes import _is_search_query
                 if _is_search_query(user_text):
                     search_ctx = search_and_format(user_text)
                     if search_ctx:
-                        user_text = (
-                            f"{user_text}\n\n{search_ctx}\n\n"
-                            f"Ответь на вопрос пользователя, используя результаты поиска."
-                        )
+                        contexts.append(search_ctx)
+
+            if contexts:
+                user_text = (
+                    f"{user_text}\n\n" + "\n\n".join(contexts) + "\n\n"
+                    f"Ответь на вопрос пользователя, используя предоставленную информацию."
+                )
 
             conv.add_user_message(text=user_text, audio_path=user_audio_path)
 

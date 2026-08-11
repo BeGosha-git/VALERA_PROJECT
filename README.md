@@ -1,12 +1,13 @@
 # 🎙️ QWEN-VALERA — Голосовой Ассистент
 
-Голосовой ассистент на базе **Qwen3-Omni-30B-A3B-Instruct** с локальной базой знаний и доступом в интернет.
+Голосовой ассистент на базе **Qwen3-Omni-30B-A3B-Instruct** с локальной базой знаний из ваших документов и доступом в интернет.
 
 ## ✨ Возможности
 
 - 🎤 **Голосовой вход** — микрофон → распознавание речи (встроенный ASR модели)
 - 🔊 **Голосовой выход** — ИИ → речь (встроенный TTS модели, голос "Ethan")
 - 💬 **Текстовый чат** — полноценный многоходовой диалог
+- 📄 **База знаний из документов** — загружайте `.doc`, `.docx`, `.pdf`, `.txt` — ИИ разобьёт их на чанки, токенизирует (эмбеддинги) и всегда сможет отвечать по их содержимому (RAG)
 - 🌐 **Интернет-поиск** — DuckDuckGo (бесплатно, без API-ключа)
 - 🗄️ **Локальная база данных** — SQLite + ChromaDB (векторный поиск)
 - 🔌 **REST API + WebSocket** — для интеграции с любыми приложениями
@@ -20,10 +21,26 @@
 | Платформа | Jetson AGX Orin (или x86 + NVIDIA GPU) |
 | JetPack | **6.x** (CUDA 12) |
 | VRAM | 64 GB (у нас хватает с запасом) |
-| Память модели | ~10 GB (AWQ 4-bit) |
 | Python | 3.10 |
 
 > ⚠️ **Важно:** Qwen3-Omni требует JetPack 6.x. Если у вас JetPack 5.x — см. `JETPACK_UPGRADE.md`.
+
+## 🧠 Выбор модели (квантование)
+
+| Модель | Размер | Качество | Работает на Jetson (Ampere)? |
+|--------|--------|----------|------------------------------|
+| `AWQ-8bit` **(по умолчанию)** | ~42 GB | Лучшее | ✅ Да |
+| `AWQ-4bit` | ~27 GB | Хорошее | ✅ Да |
+| `NVFP4` (25 GB) | ~26 GB | Лучше 4-bit | ❌ **Нет** — нужен Blackwell (FP4-железо) |
+
+**Почему не NVFP4?** Ваш Jetson AGX Orin — архитектура **Ampere (sm_87)**, в которой **нет FP4-аппаратных ядер** (они появились только в Blackwell: RTX 5090, B200). Модели NVFP4 (25 GB) физически не запустятся. AWQ — целочисленное квантование, работает на любой архитектуре.
+
+Смена модели — в `.env`:
+```ini
+VALERA_MODEL_NAME_OR_PATH=cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-8bit
+# или для экономии памяти:
+# VALERA_MODEL_NAME_OR_PATH=cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-4bit
+```
 
 ## 🚀 Быстрый старт
 
@@ -70,6 +87,12 @@ python client.py --mode voice
 | `POST` | `/api/v1/chat/voice` | Голосовой чат (audio → text + audio) |
 | `POST` | `/api/v1/chat/voice/raw` | Голосовой чат (возвращает WAV напрямую) |
 | `GET` | `/api/v1/audio/{filename}` | Скачать сгенерированный аудиофайл |
+| `POST` | `/api/v1/documents/upload` | Загрузить документ (.doc/.docx/.pdf/.txt/.md) |
+| `GET` | `/api/v1/documents` | Список документов |
+| `GET` | `/api/v1/documents/{id}` | Статус обработки документа |
+| `DELETE` | `/api/v1/documents/{id}` | Удалить документ + его чанки |
+| `POST` | `/api/v1/documents/search` | Семантический поиск по документам |
+| `GET` | `/api/v1/documents/stats` | Статистика базы документов |
 | `POST` | `/api/v1/knowledge` | Добавить в базу знаний |
 | `POST` | `/api/v1/knowledge/search` | Поиск по базе знаний |
 | `GET` | `/api/v1/sessions` | Активные сессии |
@@ -78,6 +101,46 @@ python client.py --mode voice
 | `GET` | `/api/v1/devices` | Список аудиоустройств |
 | `WS` | `/ws/chat` | Реалтайм-голосовой чат |
 | `GET` | `/docs` | Swagger документация |
+
+### 📄 База знаний из документов (RAG)
+
+Загрузите свои документы — ИИ **токенизирует их** (разобьёт на чанки и превратит в векторные эмбеддинги) и будет **автоматически подгружать нужные фрагменты** при каждом вашем вопросе:
+
+```python
+import requests
+
+# 1. Загружаем документ
+with open("инструкция.docx", "rb") as f:
+    resp = requests.post(
+        "http://localhost:8765/api/v1/documents/upload",
+        files={"file": ("инструкция.docx", f)},
+    )
+    doc = resp.json()
+    print("Document ID:", doc["id"], "| status:", doc["status"])
+
+# 2. Проверяем, что обработался
+resp = requests.get(f"http://localhost:8765/api/v1/documents/{doc['id']}")
+print(resp.json())  # status: "ready", num_chunks: N
+
+# 3. Теперь можно просто задавать вопросы — нужные чанки подтянутся сами
+resp = requests.post("http://localhost:8765/api/v1/chat/text", json={
+    "text": "Что написано в инструкции о настройке?",
+})
+print(resp.json()["text"])
+```
+
+**Или через CLI** (без запуска сервера):
+```bash
+python docs_tool.py index path/to/file.docx   # добавить документ
+python docs_tool.py index path/to/folder/     # добавить все документы из папки
+python docs_tool.py search "мой вопрос"       # поиск по документам
+python docs_tool.py list                      # список документов
+python docs_tool.py test                      # тест: создать и проиндексировать пример
+```
+
+**Поддерживаемые форматы:** `.doc`, `.docx`, `.pdf`, `.txt`, `.md`, `.rtf`, `.log`
+
+> 💡 **Как работает RAG:** при вопросе модель находит 5 (настраивается `VALERA_RAG_TOP_K`) самых похожих чанков в ChromaDB и подставляет их в промпт. Модель отвечает на основе ваших документов. Эмбеддинги считаются локально на CPU (`intfloat/multilingual-e5-small`, поддержка русского).
 
 ### Пример: голосовой запрос (Python)
 
@@ -112,6 +175,7 @@ requests.post("http://localhost:8765/api/v1/knowledge", json={
 QWEN-VALERA/
 ├── main.py              # FastAPI сервер (точка входа)
 ├── client.py            # Терминальный голосовой/текстовый клиент
+├── docs_tool.py         # CLI для управления документами (без сервера)
 ├── config.py            # Конфигурация
 ├── test_model.py        # Тест модели
 ├── download_model.py    # Скачивание модели
@@ -119,6 +183,7 @@ QWEN-VALERA/
 ├── run.sh               # Быстрый запуск
 ├── api/
 │   ├── routes.py        # REST endpoints
+│   ├── document_routes.py # Загрузка и поиск документов
 │   ├── ws.py            # WebSocket (реалтайм)
 │   └── schemas.py       # Pydantic-схемы
 ├── core/
@@ -127,7 +192,8 @@ QWEN-VALERA/
 │   ├── conversation.py  # Многоходовые диалоги
 │   └── search.py        # Интернет-поиск
 ├── db/
-│   ├── database.py      # SQLite (история, знания)
+│   ├── database.py      # SQLite (история, знания, документы)
+│   ├── documents.py     # Парсинг/чанкование/эмбеддинг документов
 │   └── knowledge_base.py # ChromaDB (векторный поиск)
 └── utils/helpers.py     # Утилиты
 ```
@@ -156,7 +222,9 @@ Qwen3-Omni — это **end-to-end мультимодальная модель**
 
 ```ini
 # Модель
-VALERA_MODEL_NAME_OR_PATH=cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-4bit
+# Высокое качество (~42 GB): cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-8bit
+# Сбалансировано (~27 GB):   cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-4bit
+VALERA_MODEL_NAME_OR_PATH=cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-8bit
 VALERA_SPEAKER_VOICE=Ethan          # голос модели
 VALERA_ATTN_IMPLEMENTATION=sdpa     # для Jetson (flash-attn не доступен)
 
@@ -171,6 +239,12 @@ VALERA_TEMPERATURE=0.6
 # Поиск
 VALERA_SEARCH_ENABLED=true
 VALERA_SEARCH_REGION=ru-ru
+
+# Документы (RAG база знаний)
+VALERA_RAG_ENABLED=true             # авто-поиск по документам при каждом вопросе
+VALERA_RAG_TOP_K=5                  # сколько чанков подставлять в промпт
+VALERA_CHUNK_SIZE=800               # размер чанка (символов)
+VALERA_CHUNK_OVERLAP=150            # перекрытие чанков
 ```
 
 ## 🐛 Отладка
@@ -179,6 +253,7 @@ VALERA_SEARCH_REGION=ru-ru
 - Swagger: `http://localhost:8765/docs`
 - Статус: `curl http://localhost:8765/api/v1/health`
 - Аудиоустройства: `python client.py --list-devices`
+- Документы: `python docs_tool.py test`
 
 ## 📝 Лицензия
 

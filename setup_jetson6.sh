@@ -50,8 +50,10 @@ echo "$PASSWORD" | sudo -S apt-get install -y -qq \
     build-essential \
     git \
     wget \
+    antiword \
+    catdoc \
     2>&1 | tail -2
-echo "  ✓ System packages installed"
+echo "  ✓ System packages installed (incl. antiword/catdoc for .doc files)"
 echo ""
 
 # ── Conda environment ────────────────────────────────────────────────────────
@@ -127,6 +129,9 @@ $CONDA_PIP install -q \
     huggingface_hub \
     requests \
     numpy \
+    python-docx \
+    pypdf \
+    sentence-transformers \
     2>&1 | tail -2
 
 echo "  ✓ Python packages installed"
@@ -155,8 +160,9 @@ echo ""
 # ── Model download ───────────────────────────────────────────────────────────
 
 echo "[5/5] Downloading model..."
-echo "  Model: cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-4bit"
-echo "  Size: ~10 GB (AWQ 4-bit quantized)"
+echo "  Model: ${VALERA_MODEL_NAME_OR_PATH:-cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-8bit}"
+echo "  Size: ~42 GB (AWQ 8-bit, high quality)"
+echo "  To use the lighter ~27 GB model, set VALERA_MODEL_NAME_OR_PATH in .env"
 echo ""
 read -p "  Download now? (y/n, recommended: y) " -n 1 -r
 echo ""

@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
+from api.document_routes import router as document_router
 from api.routes import router
 from api.ws import ws_router
 from config import settings
@@ -86,6 +87,9 @@ app.add_middleware(
 
 # Routes
 app.include_router(router, prefix="/api/v1")
+
+# Document management routes
+app.include_router(document_router, prefix="/api/v1")
 
 # WebSocket routes
 app.include_router(ws_router)

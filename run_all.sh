@@ -38,7 +38,8 @@ MIC_DIR="$SCRIPT_DIR/mic_to_text"
 CONDA_ENV_NAME="tts_env"
 MIC_ENV_NAME="mic_to_text_env"
 MODELFILE_PATH="$SCRIPT_DIR/Modelfile"
-OLLAMA_MODEL_NAME="valera_live:latest"
+#OLLAMA_MODEL_NAME="valera_live:latest"
+OLLAMA_MODEL_NAME="true_valera:latest"
 
 # Режим запуска и доп. аргументы
 RUN_MODE="${1:-talk}"

@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual envs
+venv/
+.venv/
+env/
+
+# Data
+data/
+*.log
+
+# Models (download separately)
+models/
+!models/.gitkeep
+
+# Config with secrets
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ChromaDB
+chroma/

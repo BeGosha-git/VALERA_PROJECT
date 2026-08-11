@@ -160,9 +160,9 @@ echo ""
 # ── Model download ───────────────────────────────────────────────────────────
 
 echo "[5/5] Downloading model..."
-echo "  Model: ${VALERA_MODEL_NAME_OR_PATH:-cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-8bit}"
-echo "  Size: ~42 GB (AWQ 8-bit, high quality)"
-echo "  To use the lighter ~27 GB model, set VALERA_MODEL_NAME_OR_PATH in .env"
+echo "  Model: ${VALERA_MODEL_NAME_OR_PATH:-cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-4bit}"
+echo "  Size: ~27 GB (AWQ 4-bit) — fits 64GB eMMC with JetPack 6"
+echo "  (AWQ-8bit ~42GB is NOT recommended on a 59GB eMMC.)"
 echo ""
 read -p "  Download now? (y/n, recommended: y) " -n 1 -r
 echo ""

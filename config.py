@@ -16,10 +16,10 @@ class Settings(BaseSettings):
 
     # ---- Model ----
     # Quality options (all work on Jetson AGX Orin, Ampere sm_87):
-    #   "cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-8bit"  (~42 GB, best quality, fits 64 GB)
-    #   "cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-4bit"  (~27 GB, default, more headroom)
+    #   "cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-8bit"  (~42 GB, best quality; fits only if you have SPARE disk)
+    #   "cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-4bit"  (~27 GB, DEFAULT — best fit for 64GB eMMC w/ JetPack 6)
     # NOTE: NVFP4 (25 GB) does NOT work on Jetson — requires Blackwell FP4 hardware.
-    model_name_or_path: str = "cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-8bit"
+    model_name_or_path: str = "cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-4bit"
     model_device: str = "auto"  # "auto" for device_map, "cuda:0" for single GPU
     model_dtype: str = "auto"  # auto-detect from config
     # On Jetson: "sdpa" (flash-attn is not available for ARM64).

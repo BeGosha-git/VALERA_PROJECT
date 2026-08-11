@@ -1,165 +1,168 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# JETPACK UPGRADE GUIDE — Jetson AGX Orin from 5.1.2 to 6.x
+# ОБНОВЛЕНИЕ JetPack 5.1.2 → 6.x НА Jetson AGX Orin (eMMC, 64 ГБ, без NVMe)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-## ⚠️  ВАЖНО: Сделайте резервную копию данных!
+## ⚠️ 1. РЕЗЕРВНАЯ КОПИЯ — ОБЯЗАТЕЛЬНО, ПЕРЕД НАЧАЛОМ!
 
-Обновление JetPack **переустанавливает систему** и стирает данные на устройстве.
-Все файлы в `~/Desktop/QWEN-VALERA` нужно скопировать на другой компьютер / USB-накопитель
-**ПЕРЕД** обновлением.
+Перепрошивка JetPack **СТИРАЕТ ВСЁ** на eMMC. Сохраните свои файлы на
+**внешний накопитель** (USB-флешка / SD-карта / другой ПК):
 
 ```bash
-# Скопируйте проект в безопасное место (например, на USB или другой ПК)
-rsync -av ~/Desktop/QWEN-VALERA/ /media/usb/QWEN-VALERA/
+# СОХРАНИТЕ ПРОЕКТ (ОБЯЗАТЕЛЬНО) на USB/SD/другой ПК:
+rsync -av ~/Desktop/QWEN-VALERA/ /media/usb/</any-temporary>/QWEN-VALERA/
+
+# Проверьте, что скопировалось:
+ls /media/usb/.../QWEN-VALERA/README.md
+```
+
+**Без внешнего накопителя вы не сможете перепрошить — это блокирующий шаг.**
+
+---
+
+## 2. ВАЖНО: Про прошивку
+
+| Факт | Детали |
+|------|--------|
+| ❌ Jetson НЕ может перепрошить сам себя | Для этого нужен внешний ПК с Ubuntu |
+| ✅ SDK Manager живёт на внешнем ПК | НЕ на Jetson (на Jetson он не прошьёт) |
+| ✅ Для AGX Orin eMMC команда: | `sudo ./flash.sh jetson-agx-orin-devkit internal` |
+| 🔌 Порт USB-C | Тот, что рядом с 40-pin header |
+| ⚙️ Force Recovery Mode | Спец. комбинация кнопок (ниже) |
+
+**Вам понадобится второй компьютер с Ubuntu 20.04/22.04 (x86_64)**
+или Ubuntu VM. Это можно сделать двумя способами:
+
+---
+
+## 3. Способ A: SDK Manager (рекомендуется, на внешнем ПК)
+
+### A.1. Установите SDK Manager на внешний ПК (Ubuntu x86_64)
+```bash
+# Скачайте .deb с https://developer.nvidia.com/sdk-manager (версия для x64)
+sudo apt install ./sdkmanager_*.deb
+sdkmanager
+```
+
+### A.2. Подключите Jetson к ПК (Force Recovery Mode)
+1. **Выключите** Jetson (полное отключение питания).
+2. Подключите USB-C кабель от ПК к **порту USB-C рядом с 40-pin header**.
+3. Зажмите **кнопку Force Recovery** (по центру платы, рядом с USB-C).
+4. Не отпуская, нажмите и отпустите кнопку **Power** (Reset).
+5. Отпустите **Force Recovery**.
+6. Проверьте на ПК:
+```bash
+lsusb
+# Должно появиться: NVIDIA Corp. APX  (ID 0955:7023 для AGX Orin 64GB)
+```
+
+### A.3. Прошивка через SDK Manager
+1. В SDK Manager выберите **Jetson AGX Orin Developer Kit**.
+2. JetPack version: **6.2** (свежая, у вас уже r36.4 репозитории).
+3. **Только Jetson Linux** (не отмечайте DeepStream и доп. пакеты — экономьте место).
+4. **Storage Device**: `eMMC` (важно! у вас без NVMe).
+5. Нажмите **Continue → Flash and Install**.
+6. Дождитесь завершения (15–30 мин). Jetson перезагрузится с JetPack 6.
+
+### A.4. После перезагрузки
+- Задайте язык, Wi-Fi, имя пользователя и пароль.
+- **Jetson 6.2 имеет Python 3.10 встроенный.**
+
+---
+
+## 4. Способ B: ручная прошивка через файлы L4T (без SDK Manager GUI)
+
+Если SDK Manager не запускается — можно вручную, тоже с внешнего ПК:
+
+```bash
+# На внешнем ПК (Ubuntu), скачайте L4T R36.4:
+#  - Jetson_Linux_R36.4.0_aarch64.tbz2
+#  - Tegra_Linux_Sample-Root-Filesystem_R36.4.0_aarch64.tbz2
+# с https://developer.nvidia.com/embedded/jetson-linux-r364
+
+# Распакуйте:
+tar xf Jetson_Linux_R36.4.0_aarch64.tbz2
+cd Linux_for_Tegra/
+sudo tar xpf ../Tegra_Linux_Sample-Root-Filesystem_R36.4.0_aarch64.tbz2 -C rootfs/
+sudo ./tools/l4t_flash_prerequisites.sh
+sudo ./apply_binaries.sh
+
+# Подключите Jetson в Force Recovery Mode (как в A.2)
+# Запишите JetPack 6.2 на eMMC:
+sudo ./flash.sh jetson-agx-orin-devkit internal
 ```
 
 ---
 
-## Зачем нужно обновление?
+## 5. ДИСК: модель на eMMC 59 ГБ
 
-| Компонент | JetPack 5.1.2 (сейчас) | JetPack 6.x (нужно для Qwen3-Omni) |
-|-----------|----------------------|-----------------------------------|
-| Python    | 3.8 (старый)          | 3.10 / 3.11 ✅ |
-| CUDA      | 11.4                  | 12.2 ✅ |
-| PyTorch   | 2.1.0 (макс)          | 2.5.0 ✅ |
-| Transformers | 4.46.3 (макс)      | последняя ✅ |
-| Qwen3-Omni | ❌ не работает     | ✅ работает |
+После чистой прошивки JetPack 6.2:
 
----
+| Компонент | Размер | Итог |
+|-----------|--------|------|
+| JetPack 6.2 (eMMC) | ~15-18 ГБ | |
+| **AWQ-4bit модель** ✅ | ~27 ГБ | Итого ~45 ГБ → влезает |
+| ~~AWQ-8bit~~ | ~42 ГБ | Впритык (60 > 59) — не рекомендую |
+| ~~NVFP4~~ | ~26 ГБ | ❌ Не работает на Jetson (Ampere) |
 
-## Способ 1: SDK Manager (рекомендуется)
-
-### Требования
-- Компьютер с Ubuntu x86_64 (ПК или ноутбук)
-- Кабель USB-C для подключения Jetson к ПК
-- Питание для Jetson
-
-### Шаги
-1. **Установите NVIDIA SDK Manager** на ПК:
-   ```bash
-   # Скачайте с https://developer.nvidia.com/sdk-manager
-   sudo apt install ./sdkmanager_*.deb
-   ```
-
-2. **Подключите Jetson** к ПК через USB-C (режим recovery):
-   - Выключите Jetson
-   - Зажмите кнопку **RECOVERY** (в центре платы, рядом с USB-C)
-   - Не отпуская RECOVERY, нажмите и отпустите кнопку **RESET**
-   - Отпустите RECOVERY
-   - Проверьте: `lsusb` должен показать `NVIDIA Corp. APX`
-
-3. **Запустите SDK Manager**:
-   ```bash
-   sdkmanager
-   ```
-   - Выберите: `Jetson AGX Orin Developer Kit`
-   - JetPack: **6.0** или новее (6.1, 6.2)
-   - Отметьте только **Jetson Linux** (без DeepStream и т.д.)
-   - Нажмите **Continue** → **Flash**
-
-4. **Дождитесь завершения** (обычно 15–30 минут). Jetson перезагрузится.
-
-5. **После перезагрузки** настройте JetPack (язык, Wi-Fi, пользователь, пароль).
+👉 **Используйте AWQ-4bit** — уже настроено по умолчанию в проекте.
 
 ---
 
-## Способ 2: SD-карта / USB (без SDK Manager)
+## 6. После прошивки: установка проекта
 
-Если нет ПК с Ubuntu — скачайте образ JetPack 6 для SD-карты:
-- JetPack 6.1 SD card image: https://developer.nvidia.com/embedded/jetson-linux
-- Запишите образ на SD-карту (минимум 64 ГБ) через BalenaEtcher
-- Вставьте SD-карту в Jetson, включите питание
-- Система установится с SD-карты
+```bash
+# 1. Скопируйте проект с внешнего накопителя обратно:
+rsync -av /media/usb/.../QWEN-VALERA/ ~/Desktop/QWEN-VALERA/
+cd ~/Desktop/QWEN-VALERA
 
----
+# 2. Запустите установку (JetPack 6 = Python 3.10, всё совместимо):
+chmod +x setup_jetson6.sh
+bash setup_jetson6.sh
+#  - установит NVIDIA Jetson PyTorch 2.5.0
+#  - скачает AWQ-4bit модель (~27 ГБ)
 
-## После обновления
+# 3. Проверка:
+conda activate qwen-valera
+python -c "import torch; print(torch.cuda.is_available())"   # True
+python test_model.py                                          # все тесты
 
-1. **Скопируйте проект обратно**:
-   ```bash
-   cp -r /media/usb/QWEN-VALERA ~/Desktop/
-   cd ~/Desktop/QWEN-VALERA
-   ```
-
-2. **Удалите старый miniconda** (если был установлен):
-   ```bash
-   rm -rf ~/miniconda3
-   ```
-
-3. **Запустите установку**:
-   ```bash
-   chmod +x setup_jetson6.sh
-   bash setup_jetson6.sh
-   ```
-
-4. **Проверьте**:
-   ```bash
-   conda activate qwen-valera
-   python -c "import torch; print(torch.cuda.is_available())"
-   # Должно вывести: True
-   ```
-
-5. **Запустите сервер**:
-   ```bash
-   python main.py
-   ```
-
-6. **Запустите клиент** (в другом терминале):
-   ```bash
-   python client.py --mode voice
-   ```
+# 4. Запуск:
+python main.py        # сервер
+python client.py --mode voice   # голосовой клиент
+```
 
 ---
 
-## Возможные проблемы
+## 7. Troubleshooting
 
 | Проблема | Решение |
 |----------|---------|
-| SDK Manager не видит Jetson | Проверьте режим recovery: `lsusb` должен показывать `NVIDIA Corp. APX` |
-| Установка зависла | Попробуйте другой USB-кабель (данные, не зарядка) |
-| Память SD-карты мала | Нужно минимум 64 ГБ |
-| Теряется Wi-Fi | Настройте заново после установки |
+| `lsusb` не видит APX | CRITICAL: используйте USB-C порт рядом с 40-pin header, проверьте кабель (data, не charge-only) |
+| SDK Manager не находит Jetson | Снова переведите в Recovery Mode, проверьте `lsusb` |
+| Не хватает места под модель | Используйте AWQ-4bit (уже по умолчанию). Не ставьте доп. пакеты SDK Manager. |
+| Потерян Wi-Fi после прошивки | Настройте заново при первом запуске |
 | Пароль sudo | Задайте новый при установке JetPack 6 |
+| SDK Manager просит аккаунт NVIDIA | Нужен бесплатный аккаунт developer.nvidia.com |
 
 ---
 
-## Итоговая архитектура после обновления
+## 8. Итоговая архитектура (после JetPack 6.2)
 
 ```
-┌────────────────────────────────────────────────────┐
-│                 Jetson AGX Orin 64GB                │
-│                 JetPack 6.x + CUDA 12               │
-│                                                     │
-│  ┌──────────────────────────────────────────────┐   │
-│  │  FastAPI Server (:8765)                      │   │
-│  │  ┌──────────┐ ┌─────────┐ ┌──────────────┐   │   │
-│  │  │ /chat/   │ │ /chat/  │ │ /documents/  │   │   │
-│  │  │  voice   │ │  text   │ │ (RAG база    │   │   │
-│  │  └────┬─────┘ └────┬────┘ │  из .doc)    │   │   │
-│  │       └──────┬──────┘     └──────────────┘   │   │
-│  │              ▼                                │   │
-│  │  ┌─────────────────────────┐                  │   │
-│  │  │  Qwen3-Omni (AWQ 8-bit) │   ~42 GB         │   │
-│  │  │  Thinker + Talker       │   (влезает       │   │
-│  │  └──────┬──────────┬───────┘    в 64 GB)      │   │
-│  │         │          │                         │   │
-│  │  audio out       text out                     │   │
-│  │  (нативный TTS)  (нативный ASR)               │   │
-│  └──────────────────────────────────────────────┘   │
-│                                                     │
-│  Микрофон → API → Qwen3-Omni → API → Динамики       │
-│              (понял речь)    (сгенерировал голос)    │
-│                                                     │
-│  .doc/.docx → токенизация → ChromaDB → ответы по    │
-│  вашим документам (RAG)                             │
-│  Интернет-поиск: DuckDuckGo (только это не локально)│
-└────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│  Jetson AGX Orin 64GB, JetPack 6.2 (eMMC, CUDA 12)│
+│                                                   │
+│  ┌─────────────────────────────────────────────┐  │
+│  │  FastAPI Server (:8765)                     │  │
+│  │  /chat/voice  /chat/text  /documents (RAG)  │  │
+│  └─────────────────────┬───────────────────────┘  │
+│                        ▼                          │
+│  ┌─────────────────────────────────────────┐      │
+│  │  Qwen3-Omni AWQ-4bit (~27 ГБ)           │      │
+│  │  Thinker + Talker (встроенные ASR + TTS)│      │
+│  └─────────────────────────────────────────┘      │
+│                                                   │
+│  .doc/.docx → токенизация → ChromaDB → RAG        │
+│  Интернет: DuckDuckGo (только это не локально)    │
+└───────────────────────────────────────────────────┘
 ```
-
-### 📄 Модель
-
-По умолчанию используется **AWQ-8bit** (~42 GB) — лучшее качество квантования,
-которое работает на Jetson. Для экономии памяти — **AWQ-4bit** (~27 GB).
-
-> **NVFP4 (25 GB) НЕ работает на Jetson AGX Orin** (архитектура Ampere без
-> FP4-аппаратных ядер, нужен Blackwell). Не пытайтесь её скачивать.

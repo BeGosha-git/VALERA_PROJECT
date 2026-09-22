@@ -15,11 +15,16 @@ class Settings(BaseSettings):
     chroma_path: Path = data_dir / "chroma"
 
     # ---- Model ----
-    # Quality options (all work on Jetson AGX Orin, Ampere sm_87):
-    #   "cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-8bit"  (~42 GB, best quality; fits only if you have SPARE disk)
-    #   "cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-4bit"  (~27 GB, DEFAULT — best fit for 64GB eMMC w/ JetPack 6)
-    # NOTE: NVFP4 (25 GB) does NOT work on Jetson — requires Blackwell FP4 hardware.
-    model_name_or_path: str = "cyankiwi/Qwen3-Omni-30B-A3B-Instruct-AWQ-4bit"
+    # Модель должна запускаться «из коробки»: transformers всё равно
+    # материализует веса квантованных моделей в fp16, поэтому на 61 GB RAM
+    # помещается максимум ~10B параметров.
+    #   "Qwen/Qwen2.5-Omni-7B"  (~20.8 GB, bf16, DEFAULT)
+    #   "Qwen/Qwen2.5-Omni-3B"  (~11.2 GB, быстрее, качество ниже)
+    # Классы модели/процессора подбираются автоматически по architectures
+    # из config.json (см. core/model.py), так что подходит и Qwen3-Omni.
+    # NOTE: NVFP4/FP8 модели НЕ работают на Jetson — нет аппаратных ядер
+    #       в Ampere (sm_87), они есть только в Blackwell.
+    model_name_or_path: str = "Qwen/Qwen2.5-Omni-7B"
     model_device: str = "auto"  # "auto" for device_map, "cuda:0" for single GPU
     model_dtype: str = "auto"  # auto-detect from config
     # On Jetson: "sdpa" (flash-attn is not available for ARM64).
@@ -34,7 +39,18 @@ class Settings(BaseSettings):
     sample_rate: int = 24000  # model native sample rate
 
     # ---- Generation ----
-    max_new_tokens: int = 2048
+    # Текстовому чату озвучка не нужна — там лимит больше.
+    # У Qwen2.5-Omni это thinker_max_new_tokens (по умолчанию был 1024!).
+    max_new_tokens: int = 256
+
+    # Голосовой режим: КАЖДАЯ секунда синтезированной речи стоит ~13 с
+    # генерации на Jetson. Поэтому реплика должна быть короткой:
+    # ~80 токенов ≈ 40–50 слов ≈ 15–20 с речи.
+    voice_max_new_tokens: int = 80
+
+    # Жёсткий предел на длину озвучки (в кадрах кодек-токенов, ~12.5 кадр/с).
+    # Страховка от «монологов»: 400 кадров ≈ 32 с максимум.
+    talker_max_new_tokens: int = 400
     temperature: float = 0.6
     top_p: float = 0.95
     top_k: int = 20

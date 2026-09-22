@@ -9,6 +9,7 @@ import io
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import unquote
 
 import numpy as np
 import requests
@@ -94,11 +95,13 @@ def send_audio(audio: np.ndarray, sample_rate: int, session_id: str = None,
 
     # Parse audio response
     audio_data, sr = sf.read(io.BytesIO(resp.content))
+    # Заголовок приходит percent-encoded UTF-8 (HTTP допускает только latin-1)
     return {
-        "text": resp.headers.get("X-Response-Text", ""),
+        "text": unquote(resp.headers.get("X-Response-Text", "")),
         "audio": audio_data,
         "sample_rate": sr,
         "session_id": resp.headers.get("X-Session-Id", ""),
+        "audio_path": resp.headers.get("X-Audio-Path", ""),
     }
 
 
@@ -191,6 +194,8 @@ def voice_mode(sample_rate: int = 24000, duration: float = 10.0, device: int = N
         # Play audio
         if result["audio"] is not None and len(result["audio"]) > 0:
             play_audio(result["audio"], result["sample_rate"])
+            if result.get("audio_path"):
+                print(f"💾 Файл ответа: {result['audio_path']}")
 
 
 def main():
@@ -219,15 +224,24 @@ def main():
 
     # Check server
     try:
-        r = requests.get(f"{args.server}/health", timeout=5)
+        r = requests.get(f"{API_BASE}/health", timeout=5)
+        r.raise_for_status()
         health = r.json()
         print(f"✅ Server: {args.server}")
-        print(f"   Model loaded: {health['model_loaded']}")
+        model_loaded = health.get("model_loaded")
+        print(f"   Model loaded: {model_loaded}")
+        if not model_loaded:
+            print("   ⏳ Модель ещё загружается (~7 минут после старта сервера).")
+            print("      Подождите и запустите клиент снова.")
         if health.get("gpu_memory_used_gb"):
             print(f"   GPU memory: {health['gpu_memory_used_gb']:.1f}/{health['gpu_memory_total_gb']:.1f} GB")
     except requests.exceptions.ConnectionError:
         print(f"❌ Cannot connect to {args.server}")
         print("   Start the server first: python main.py")
+        sys.exit(1)
+    except requests.exceptions.HTTPError as exc:
+        print(f"❌ Server error: {exc}")
+        print("   Проверьте лог сервера: data/valera.log")
         sys.exit(1)
 
     if args.mode == "text":

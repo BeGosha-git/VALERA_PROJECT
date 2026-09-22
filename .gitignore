@@ -18,7 +18,13 @@ data/
 
 # Models (download separately)
 models/
+models
 !models/.gitkeep
+
+# Установщики и распакованные дистрибутивы (сотни МБ — не для репозитория)
+Miniconda3-*.sh
+mini.sh
+\\/
 
 # Config with secrets
 .env.local

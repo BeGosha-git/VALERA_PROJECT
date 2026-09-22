@@ -1,0 +1,34 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# QWEN-VALERA — системные пакеты (apt) для NVIDIA Jetson AGX Orin, JetPack 6.x
+#
+# Одна строка = один пакет. Строки, начинающиеся с '#', игнорируются.
+#
+# Установка:
+#     sudo bash setup_jetson6.sh          # ставит всё сам
+# или вручную:
+#     sudo apt-get update
+#     grep -v '^#' apt-deps.txt | xargs sudo apt-get install -y
+#
+# Проверено на: L4T 36.5.2 (JetPack 6.2), CUDA 12.6, aarch64
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Звук: микрофон/динамики (sounddevice) и конвертация аудио (pydub) ─────────
+ffmpeg
+portaudio19-dev
+
+# ── Python и сборка колёс ─────────────────────────────────────────────────────
+python3-pip
+python3-venv
+build-essential
+git
+wget
+
+# ── Парсинг .doc (бинарный формат Word) ───────────────────────────────────────
+# Без них работают только .docx/.pdf/.txt/.md
+antiword
+catdoc
+
+# ── BLAS: Jetson-сборка PyTorch слинкована с OpenBLAS ────────────────────────
+# Без libopenblas импорт torch падает с "libopenblas.so.0: cannot open shared
+# object file" — на Jetson этот пакет обычно уже стоит, но лучше проверить.
+libopenblas-dev

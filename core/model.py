@@ -1,9 +1,17 @@
-"""Model loading and inference using Qwen3-Omni with Transformers.
+"""Model loading and inference using Qwen-Omni models with Transformers.
 
-The Qwen3-Omni model is natively end-to-end: it accepts audio/text/images/video
-and outputs BOTH text and speech audio. No separate ASR/TTS needed.
+Qwen-Omni models are natively end-to-end: they accept audio/text/images/video
+and output BOTH text and speech audio. No separate ASR/TTS needed.
+
+Поддерживаются семейства:
+  • Qwen3-Omni  (Qwen3OmniMoe*)  — 30B-A3B, требует много памяти
+  • Qwen2.5-Omni (Qwen2_5Omni*)  — 7B/3B, работает «из коробки»
+
+Классы выбираются автоматически по `architectures` из config.json модели,
+поэтому достаточно поменять VALERA_MODEL_NAME_OR_PATH в .env.
 """
 
+import json
 import time
 from pathlib import Path
 from typing import Optional, Generator
@@ -14,13 +22,144 @@ from loguru import logger
 
 from config import settings
 
+# префикс в architectures → (класс модели, класс процессора)
+MODEL_FAMILIES: dict[str, tuple[str, str]] = {
+    "qwen3omnimoe": ("Qwen3OmniMoeForConditionalGeneration", "Qwen3OmniMoeProcessor"),
+    "qwen25omni": ("Qwen2_5OmniForConditionalGeneration", "Qwen2_5OmniProcessor"),
+    "qwen2omni": ("Qwen2_5OmniForConditionalGeneration", "Qwen2_5OmniProcessor"),
+}
+
+# Qwen2.5-Omni синтезирует голос ТОЛЬКО если первым сообщением идёт ИМЕННО этот
+# системный промпт (проверка: transformers/models/qwen2_5_omni/
+# processing_qwen2_5_omni.py:330). Персона ассистента добавляется ВТОРЫМ
+# system-сообщением — шаблон это допускает и предупреждения не выдаёт.
+QWEN25_OMNI_SYSTEM_PROMPT = (
+    "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, "
+    "capable of perceiving auditory and visual inputs, as well as generating "
+    "text and speech."
+)
+
+
+def _prepare_conversation(conversation: list[dict], family: str) -> list[dict]:
+    """Подгоняет сообщения под требования семейства модели.
+
+    Для Qwen2.5-Omni канонический системный промпт обязателен для голосового
+    вывода, поэтому исходный system-промпт (персона) переносится во второе
+    system-сообщение.
+    """
+    if not family.startswith("qwen25") and not family.startswith("qwen2omni"):
+        return conversation
+
+    messages = list(conversation)
+    persona = None
+    if messages and messages[0].get("role") == "system":
+        content = messages.pop(0).get("content") or []
+        parts = [c.get("text", "") for c in content if c.get("type") == "text"]
+        persona = "\n".join(p for p in parts if p).strip() or None
+
+    prepared = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": QWEN25_OMNI_SYSTEM_PROMPT}],
+        }
+    ]
+    if persona:
+        prepared.append({"role": "system", "content": [{"type": "text", "text": persona}]})
+    return prepared + messages
+
+
+def _normalize(name: str) -> str:
+    """'Qwen2_5OmniModel' → 'qwen25omnimodel' (для сравнения префиксов)."""
+    return (name or "").lower().replace("_", "").replace("-", "")
+
+
+def _read_architectures(path: str) -> list[str]:
+    """Читает architectures из config.json (локально или с HuggingFace)."""
+    cfg_file = Path(path) / "config.json"
+    try:
+        if cfg_file.exists():
+            cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
+        else:
+            from huggingface_hub import hf_hub_download
+
+            cfg = json.loads(
+                Path(hf_hub_download(path, "config.json")).read_text(encoding="utf-8")
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Не удалось прочитать config.json ({exc})")
+        return []
+    return cfg.get("architectures") or []
+
+
+def resolve_model_classes(path: str) -> tuple[type, type]:
+    """Подбирает классы модели и процессора по architectures из config.json."""
+    import transformers
+
+    archs = _read_architectures(path)
+    logger.info(f"architectures: {archs or '—'}")
+
+    for prefix, (model_name, proc_name) in MODEL_FAMILIES.items():
+        if any(prefix in _normalize(a) for a in archs):
+            model_cls = getattr(transformers, model_name, None)
+            proc_cls = getattr(transformers, proc_name, None)
+            if model_cls is not None and proc_cls is not None:
+                logger.info(f"Классы модели: {model_name} / {proc_name}")
+                return model_cls, proc_cls
+
+    logger.warning(
+        "Неизвестное семейство модели — использую Qwen3OmniMoe по умолчанию"
+    )
+    return (
+        transformers.Qwen3OmniMoeForConditionalGeneration,
+        transformers.Qwen3OmniMoeProcessor,
+    )
+
+
+def local_model_problem(local_dir: Path) -> Optional[str]:
+    """Описывает проблему, если локальная копия модели неполная, иначе None.
+
+    Нужно, чтобы не пытаться загрузить модель, которая ЕЩЁ СКАЧИВАЕТСЯ: у неё
+    уже может быть config.json, но не быть весов или preprocessor_config.json,
+    и падение получается невнятным, например:
+        Can't load image processor for '.../models/Qwen2.5-Omni-7B'
+    """
+    if not (local_dir / "config.json").exists():
+        return "нет config.json"
+
+    # Если есть индекс шардов — проверяем, что все шарды скачаны
+    index = local_dir / "model.safetensors.index.json"
+    if index.exists():
+        try:
+            weight_map = json.loads(index.read_text(encoding="utf-8"))["weight_map"]
+            missing = sorted(
+                {shard for shard in weight_map.values()
+                 if not (local_dir / shard).exists()}
+            )
+        except Exception:  # noqa: BLE001 — индекс может быть ещё не дописан
+            missing = ["model.safetensors.index.json"]
+        if missing:
+            return (
+                f"не хватает {len(missing)} файлов весов "
+                f"(например, {missing[0]})"
+            )
+    elif not (
+        any(local_dir.glob("*.safetensors")) or any(local_dir.glob("*.bin"))
+    ):
+        return "не скачаны веса модели (*.safetensors)"
+
+    if not (local_dir / "preprocessor_config.json").exists():
+        return "нет preprocessor_config.json (нужен процессору модели)"
+
+    return None
+
 
 class QwenOmniModel:
-    """Manages the Qwen3-Omni model lifecycle and inference."""
+    """Manages the Qwen-Omni model lifecycle and inference."""
 
     def __init__(self):
         self.model = None
         self.processor = None
+        self.family = ""
         self._loaded = False
 
     @property
@@ -30,26 +169,35 @@ class QwenOmniModel:
     def load(self, model_path: Optional[str] = None) -> None:
         """Load the model and processor.
 
-        Uses AWQ 4-bit quantized model (~10 GB) to fit in 64 GB VRAM.
-        On Jetson, falls back to sdpa attention if flash-attn is unavailable.
+        Классы модели/процессора выбираются по config.json, поэтому подходят и
+        Qwen3-Omni, и Qwen2.5-Omni. On Jetson, falls back to sdpa attention if
+        flash-attn is unavailable.
         """
         path = model_path or settings.model_name_or_path
 
-        # If local path exists, use it; otherwise download from HuggingFace
+        # Если есть ПОЛНАЯ локальная копия — берём её, иначе — репозиторий HF
         local_dir = settings.model_dir
         if local_dir.exists() and any(local_dir.iterdir()):
+            problem = local_model_problem(local_dir)
+            if problem:
+                raise RuntimeError(
+                    f"Локальная копия модели неполная: {problem}.\n"
+                    f"  Путь: {local_dir}\n"
+                    f"  Похоже, загрузка ещё идёт или прервалась. Дождитесь её\n"
+                    f"  окончания или запустите загрузку заново:\n"
+                    f"      python download_model.py"
+                )
             path = str(local_dir)
             logger.info(f"Using local model from {path}")
         else:
             logger.info(f"Model will be downloaded from HuggingFace: {path}")
 
-        from transformers import (
-            Qwen3OmniMoeForConditionalGeneration,
-            Qwen3OmniMoeProcessor,
-        )
+        ModelClass, ProcessorClass = resolve_model_classes(path)
+        self.family = "qwen25omni" if "Qwen2" in ModelClass.__name__ else "qwen3omnimoe"
+        logger.info(f"Семейство модели: {self.family}")
 
         logger.info("Loading processor...")
-        self.processor = Qwen3OmniMoeProcessor.from_pretrained(path)
+        self.processor = ProcessorClass.from_pretrained(path)
 
         # Choose attention implementation based on availability
         attn = settings.attn_implementation
@@ -71,9 +219,7 @@ class QwenOmniModel:
         if attn:
             load_kwargs["attn_implementation"] = attn
 
-        self.model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
-            path, **load_kwargs
-        )
+        self.model = ModelClass.from_pretrained(path, **load_kwargs)
         self._loaded = True
         logger.info("Model loaded successfully!")
 
@@ -95,6 +241,7 @@ class QwenOmniModel:
         speaker: Optional[str] = None,
         max_new_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        with_audio: bool = True,
     ) -> tuple[str, Optional[np.ndarray]]:
         """Generate text and audio response from a conversation.
 
@@ -103,6 +250,8 @@ class QwenOmniModel:
             speaker: Voice name for audio output (e.g., "Ethan").
             max_new_tokens: Max tokens to generate.
             temperature: Sampling temperature.
+            with_audio: Синтезировать речь. Для текстового чата выключаем —
+                ветка Talker на Jetson работает в разы медленнее текста.
 
         Returns:
             Tuple of (text_response, audio_waveform).
@@ -114,6 +263,8 @@ class QwenOmniModel:
         from qwen_omni_utils import process_mm_info
 
         t0 = time.time()
+
+        conversation = _prepare_conversation(conversation, self.family)
 
         # Build chat template
         text = self.processor.apply_chat_template(
@@ -144,19 +295,42 @@ class QwenOmniModel:
         # Generate
         gen_kwargs = {
             "speaker": speaker or settings.speaker_voice,
-            "thinker_return_dict_in_generate": True,
             "use_audio_in_video": True,
-            "max_new_tokens": max_new_tokens or settings.max_new_tokens,
+            "return_audio": with_audio,
         }
+        limit = max_new_tokens or (
+            settings.voice_max_new_tokens if with_audio else settings.max_new_tokens
+        )
+        if self.family.startswith("qwen3"):
+            # Qwen3-Omni: текст возвращается объектом с .sequences только с этим флагом
+            gen_kwargs["thinker_return_dict_in_generate"] = True
+            gen_kwargs["max_new_tokens"] = limit
+        else:
+            # Qwen2.5-Omni: длина текста задаётся thinker_max_new_tokens (по умолч. 1024!)
+            gen_kwargs["thinker_max_new_tokens"] = limit
+        if with_audio:
+            # Синтез речи — самая дорогая часть (~13 с GPU на 1 с речи).
+            # Жёстко ограничиваем длину озвучки.
+            gen_kwargs["talker_max_new_tokens"] = settings.talker_max_new_tokens
         if temperature is not None:
             gen_kwargs["temperature"] = temperature
 
         with torch.no_grad():
-            text_ids, audio_tensor = self.model.generate(**inputs, **gen_kwargs)
+            result = self.model.generate(**inputs, **gen_kwargs)
+
+        # Семейства возвращают по-разному:
+        #   Qwen3-Omni   → (GenerateOutput(.sequences), audio)
+        #   Qwen2.5-Omni → (Tensor, audio)
+        if isinstance(result, (tuple, list)):
+            text_ids = result[0]
+            audio_tensor = result[1] if len(result) > 1 else None
+        else:
+            text_ids, audio_tensor = result, None
+        sequences = getattr(text_ids, "sequences", text_ids)
 
         # Decode text
         decoded = self.processor.batch_decode(
-            text_ids.sequences[:, inputs["input_ids"].shape[1]:],
+            sequences[:, inputs["input_ids"].shape[1]:],
             skip_special_tokens=True,
             clean_up_tokenization_spaces=False,
         )
@@ -165,7 +339,10 @@ class QwenOmniModel:
         # Convert audio tensor to numpy
         audio_waveform = None
         if audio_tensor is not None:
-            audio_waveform = audio_tensor.reshape(-1).detach().cpu().numpy()
+            if hasattr(audio_tensor, "detach"):  # torch.Tensor
+                audio_waveform = audio_tensor.reshape(-1).detach().cpu().numpy()
+            else:  # numpy.ndarray — Qwen2.5-Omni отдаёт именно его
+                audio_waveform = np.asarray(audio_tensor).reshape(-1)
 
         elapsed = time.time() - t0
         audio_dur = len(audio_waveform) / settings.sample_rate if audio_waveform is not None else 0

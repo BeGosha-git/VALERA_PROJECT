@@ -5,6 +5,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 import numpy as np
 import soundfile as sf
@@ -60,7 +61,12 @@ async def health_check():
 
     gpu_available = torch.cuda.is_available()
     allocated = torch.cuda.memory_allocated(0) / 1024**3 if gpu_available else None
-    total = torch.cuda.get_device_properties(0).total_mem / 1024**3 if gpu_available else None
+    # В torch >= 2.0 атрибут называется total_memory (старый total_mem убран)
+    if gpu_available:
+        props = torch.cuda.get_device_properties(0)
+        total = getattr(props, "total_memory", getattr(props, "total_mem", 0)) / 1024**3
+    else:
+        total = None
 
     return HealthResponse(
         status="ok",
@@ -137,9 +143,13 @@ async def chat_text(req: TextRequest):
 
     t0 = time.time()
     try:
-        response_text, audio = model.generate_response(conv.to_model_format())
+        # Текстовому чату озвучка не нужна: ветка Talker на Jetson работает
+        # в разы медленнее, поэтому отключаем её (return_audio=False)
+        response_text, audio = model.generate_response(
+            conv.to_model_format(), with_audio=False
+        )
     except Exception as e:
-        logger.error(f"Inference error: {e}")
+        logger.exception(f"Inference error: {e}")
         conv.history.pop()  # remove failed user message
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -237,7 +247,7 @@ async def chat_voice(
             conv.to_model_format()
         )
     except Exception as e:
-        logger.error(f"Inference error: {e}")
+        logger.exception(f"Inference error: {e}")
         conv.history.pop()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -327,12 +337,23 @@ async def chat_voice_raw(
         raise HTTPException(status_code=500, detail="Model did not generate audio.")
 
     wav_bytes = audio_to_wav_bytes(audio_waveform)
+
+    # Сохраняем озвученный ответ на диск — его можно переслушать/переслать
+    audio_filename = f"assistant_{session_id}_{uuid.uuid4().hex[:8]}.wav"
+    audio_dir = settings.data_dir / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    (audio_dir / audio_filename).write_bytes(wav_bytes)
+
+    # HTTP-заголовки допускают только latin-1, а ответ модели — Unicode (кириллица).
+    # Поэтому кодируем в percent-encoded UTF-8, клиент делает unquote().
     return Response(
         content=wav_bytes,
         media_type="audio/wav",
         headers={
             "X-Session-Id": session_id,
-            "X-Response-Text": response_text[:500],
+            "X-Response-Text": quote(response_text[:500], safe=""),
+            "X-Audio-Path": str(audio_dir / audio_filename),
+            "X-Audio-Url": f"/api/v1/audio/{audio_filename}",
         },
     )
 

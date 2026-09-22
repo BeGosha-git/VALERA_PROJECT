@@ -8,6 +8,28 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 ENV_NAME="qwen-valera"
+VALERA_STORAGE="${VALERA_STORAGE:-/mnt/valera}"
+
+# ── Внешнее хранилище (диск D) ────────────────────────────────────────────────
+# Окружение, кэши и модель лежат на внешнем диске (см. setup_external_storage.sh).
+if ! mountpoint -q "$VALERA_STORAGE" 2>/dev/null; then
+    echo "⏳ Подключаю внешнее хранилище ($VALERA_STORAGE)..."
+    sudo systemctl restart valera-storage.service 2>/dev/null \
+        || sudo /usr/local/bin/valera-storage.sh up 2>/dev/null \
+        || true
+fi
+
+if ! mountpoint -q "$VALERA_STORAGE" 2>/dev/null; then
+    echo "❌ Внешний диск (диск D) не подключён."
+    echo "   Подключите диск и выполните:  sudo bash setup_external_storage.sh"
+    exit 1
+fi
+
+# Переменные окружения (PIP_CACHE_DIR, CONDA_ENVS_PATH, HF_HOME, TMPDIR)
+if [ -f /etc/profile.d/valera-storage.sh ]; then
+    # shellcheck disable=SC1091
+    . /etc/profile.d/valera-storage.sh
+fi
 
 # Find conda
 if command -v conda &> /dev/null; then

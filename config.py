@@ -42,7 +42,6 @@ class Settings(BaseSettings):
     # Текстовому чату озвучка не нужна — там лимит больше.
     # У Qwen2.5-Omni это thinker_max_new_tokens (по умолчанию был 1024!).
     max_new_tokens: int = 256
-
     # Голосовой режим: КАЖДАЯ секунда синтезированной речи стоит ~13 с
     # генерации на Jetson. Поэтому реплика должна быть короткой:
     # ~80 токенов ≈ 40–50 слов ≈ 15–20 с речи.
@@ -51,6 +50,17 @@ class Settings(BaseSettings):
     # Жёсткий предел на длину озвучки (в кадрах кодек-токенов, ~12.5 кадр/с).
     # Страховка от «монологов»: 400 кадров ≈ 32 с максимум.
     talker_max_new_tokens: int = 400
+
+    # ---- Синтез речи (TTS) ----
+    # Чем озвучивать ответ:
+    #   "russian_tts" (по умолчанию) — Silero v3.1_ru, русский голос, CPU,
+    #                  ~2 с на секунду речи и GPU свободен
+    #   "model"      — встроенный Talker Qwen2.5-Omni, GPU, ~13 с на секунду речи
+    tts_backend: str = "russian_tts"
+    # Голос Silero: xenia (жен.), eugene / aidar / baya (муж.), kseniya, random
+    silero_speaker: str = "eugene"
+    # Путь к model.pt (по умолчанию russian_text_to_speech/model.pt)
+    silero_model_path: str = ""
     temperature: float = 0.6
     top_p: float = 0.95
     top_k: int = 20

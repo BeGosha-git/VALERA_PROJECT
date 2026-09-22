@@ -21,6 +21,7 @@ import torch
 from loguru import logger
 
 from config import settings
+from core.tts import synthesize, tts_uses_model
 
 # префикс в architectures → (класс модели, класс процессора)
 MODEL_FAMILIES: dict[str, tuple[str, str]] = {
@@ -242,6 +243,7 @@ class QwenOmniModel:
         max_new_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         with_audio: bool = True,
+        tts_backend: Optional[str] = None,
     ) -> tuple[str, Optional[np.ndarray]]:
         """Generate text and audio response from a conversation.
 
@@ -293,10 +295,14 @@ class QwenOmniModel:
             inputs = inputs.to(self.model.dtype)
 
         # Generate
+        # Озвучка встроенным Talker'ом включается только если выбран бэкенд
+        # "model". При "russian_tts" модель генерирует только текст, а речь
+        # синтезирует Silero на CPU — так в разы быстрее и GPU свободен.
+        use_model_talker = with_audio and tts_uses_model(tts_backend)
         gen_kwargs = {
             "speaker": speaker or settings.speaker_voice,
             "use_audio_in_video": True,
-            "return_audio": with_audio,
+            "return_audio": use_model_talker,
         }
         limit = max_new_tokens or (
             settings.voice_max_new_tokens if with_audio else settings.max_new_tokens
@@ -308,7 +314,7 @@ class QwenOmniModel:
         else:
             # Qwen2.5-Omni: длина текста задаётся thinker_max_new_tokens (по умолч. 1024!)
             gen_kwargs["thinker_max_new_tokens"] = limit
-        if with_audio:
+        if use_model_talker:
             # Синтез речи — самая дорогая часть (~13 с GPU на 1 с речи).
             # Жёстко ограничиваем длину озвучки.
             gen_kwargs["talker_max_new_tokens"] = settings.talker_max_new_tokens
@@ -343,6 +349,24 @@ class QwenOmniModel:
                 audio_waveform = audio_tensor.reshape(-1).detach().cpu().numpy()
             else:  # numpy.ndarray — Qwen2.5-Omni отдаёт именно его
                 audio_waveform = np.asarray(audio_tensor).reshape(-1)
+
+        # Бэкенд "russian_tts": модель дала только текст, речь делаем сами
+        # (Silero, CPU, русский голос).
+        if (
+            with_audio
+            and not use_model_talker
+            and audio_waveform is None
+            and text_response.strip()
+        ):
+            try:
+                tts_started = time.time()
+                audio_waveform = synthesize(text_response)
+                logger.info(
+                    f"Silero TTS: {len(audio_waveform) / settings.sample_rate:.1f} с "
+                    f"речи за {time.time() - tts_started:.1f} с"
+                )
+            except Exception as exc:  # озвучка не должна ронять ответ
+                logger.error(f"Ошибка синтеза речи (russian_tts): {exc}")
 
         elapsed = time.time() - t0
         audio_dur = len(audio_waveform) / settings.sample_rate if audio_waveform is not None else 0

@@ -7,7 +7,8 @@
 #   2. WebRAgent (Flask) — веб-интерфейс RAG, который по HTTP обращается к (1).
 #
 # Использование:
-#   bash run_all.sh              # запустить всё
+#   bash run_all.sh              # запустить всё (без клиента)
+#   bash run_all.sh --client     # + голосовой клиент (слушай → отвечай голосом)
 #   bash run_all.sh --no-web     # только модель (API)
 #   bash run_all.sh --no-model   # только WebRAgent (API уже запущен отдельно)
 
@@ -42,10 +43,12 @@ export MONGODB_DB="${MONGODB_DB:-ragapp}"
 
 RUN_MODEL=1
 RUN_WEB=1
+RUN_CLIENT=0
 for arg in "$@"; do
     case "$arg" in
         --no-web)   RUN_WEB=0 ;;
         --no-model) RUN_MODEL=0 ;;
+        --client)   RUN_CLIENT=1 ;;
         -h|--help)  sed -n '2,12p' "$0"; exit 0 ;;
     esac
 done
@@ -98,10 +101,23 @@ fi
 
 # --- 2. WebRAgent ------------------------------------------------------------
 if [ "$RUN_WEB" = "1" ]; then
-    echo "[2/2] Запускаю WebRAgent (Flask) на http://127.0.0.1:5000"
+    echo "[2/3] Запускаю WebRAgent (Flask) на http://127.0.0.1:5000"
     cd "$WEBRAGENT_DIR"
     [ -f .env ] || cp .env.example .env
-    exec "$PY" run.py
+    if [ "$RUN_CLIENT" = "1" ]; then
+        setsid nohup "$PY" run.py > /tmp/webagent.log 2>&1 < /dev/null &
+        WEB_PID=$!
+        sleep 5
+    else
+        exec "$PY" run.py
+    fi
 else
-    echo "[2/2] Запуск WebRAgent пропущен (--no-web)."
+    echo "[2/3] Запуск WebRAgent пропущен (--no-web)."
+fi
+
+# --- 3. Голосовой клиент -----------------------------------------------------
+if [ "$RUN_CLIENT" = "1" ]; then
+    cd "$SCRIPT_DIR"
+    echo "[3/3] Запускаю голосовой клиент (Ctrl+C — выход)"
+    exec "$PY" client.py --mode voice
 fi

@@ -31,6 +31,8 @@ from core.audio_io import audio_to_wav_bytes, list_audio_devices, load_audio
 from core.conversation import Conversation, conversation, create_new_conversation
 from core.model import model
 from core.search import search_and_format
+from core.tts import describe_backend
+from core.tts import describe_backend
 from db.database import db
 from db.documents import search_documents_formatted
 from db.knowledge_base import vector_store
@@ -76,6 +78,7 @@ async def health_check():
         gpu_available=gpu_available,
         gpu_memory_used_gb=round(allocated, 2) if allocated else None,
         gpu_memory_total_gb=round(total, 2) if total else None,
+        tts_backend=describe_backend(),
     )
 
 
@@ -191,6 +194,9 @@ async def chat_voice(
     session_id: Optional[str] = Form(None),
     text_hint: Optional[str] = Form(None, description="Optional text context"),
     enable_search: bool = Form(True),
+    tts_backend: Optional[str] = Form(
+        None, description="russian_tts (Silero, по умолчанию) или model"
+    ),
 ):
     """Send audio message, get text + audio response.
 
@@ -246,7 +252,7 @@ async def chat_voice(
     t0 = time.time()
     try:
         response_text, audio_waveform = model.generate_response(
-            conv.to_model_format()
+            conv.to_model_format(), tts_backend=tts_backend
         )
     except Exception as e:
         logger.exception(f"Inference error: {e}")
@@ -316,6 +322,9 @@ async def chat_voice_raw(
     audio: UploadFile = File(...),
     session_id: Optional[str] = Form(None),
     text_hint: Optional[str] = Form(None),
+    tts_backend: Optional[str] = Form(
+        None, description="russian_tts (Silero, по умолчанию) или model"
+    ),
 ):
     """Send audio, get raw WAV audio bytes back. For programmatic use."""
     if not model.is_loaded:
@@ -332,7 +341,9 @@ async def chat_voice_raw(
 
     conv.add_user_message(text=text_hint or "", audio_path=str(audio_path))
 
-    response_text, audio_waveform = model.generate_response(conv.to_model_format())
+    response_text, audio_waveform = model.generate_response(
+        conv.to_model_format(), tts_backend=tts_backend
+    )
     conv.add_assistant_message(text=response_text)
 
     if audio_waveform is None:

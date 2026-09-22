@@ -121,6 +121,17 @@ conda activate qwen-valera
 python client.py --mode voice
 ```
 
+Клиент работает **непрерывным диалогом**: ждёт начало речи, останавливает запись
+после секунды тишины, сразу отправляет аудио и сразу проигрывает озвученный ответ.
+Нажимать ничего не нужно — выход по Ctrl+C.
+
+```bash
+python client.py --mode voice                 # авто-режим (по умолчанию)
+python client.py --mode voice --tts model     # озвучить встроенным голосом Qwen
+python client.py --mode voice --push-to-talk  # старый режим: Enter — запись
+python client.py --mode text                  # текстовый чат
+```
+
 ## � Установка на другом устройстве (воспроизводимо)
 
 Все версии зафиксированы в файлах, поэтому на втором Jetson всё встанет один в один:
@@ -130,7 +141,6 @@ python client.py --mode voice
 | `apt-deps.txt` | системные пакеты (ffmpeg, portaudio, antiword, catdoc, libopenblas…) |
 | `requirements-jetson6.txt` | **точные** версии всех Python-пакетов (снято через `pip freeze`) |
 | `patch_torch_jetson.py` | патчи совместимости Jetson-сборки PyTorch |
-| `patch_compressed_tensors.py` | ускорение загрузки AWQ-модели (иначе «зависает») |
 | `build_torchvision.sh` | сборка `torchvision` из исходников (15–40 минут, один раз) |
 | `setup_external_storage.sh` | внешний диск, автоподключение, перенос модели и кэшей |
 | `freeze_env.sh` | переснять lock-файл после установки новых пакетов |
@@ -150,7 +160,6 @@ grep -vE '^\s*#|^\s*$' apt-deps.txt | xargs sudo apt-get install -y
 conda create -n qwen-valera python=3.10 -y && conda activate qwen-valera
 pip install -r requirements-jetson6.txt
 python patch_torch_jetson.py               # ← обязательно
-python patch_compressed_tensors.py         # ← обязательно (иначе модель «висит»)
 bash build_torchvision.sh                  # ← обязательно, 15-40 минут
 python -c "import torch, transformers; print(torch.cuda.is_available(), transformers.is_torch_available())"
 # ожидаемый вывод: True True
@@ -296,7 +305,6 @@ QWEN-VALERA/
 ├── apt-deps.txt         # Системные пакеты (apt) — список
 ├── requirements-jetson6.txt   # Точные версии Python-пакетов (lock-файл)
 ├── patch_torch_jetson.py      # Патчи совместимости Jetson-сборки PyTorch
-├── patch_compressed_tensors.py # Ускорение загрузки AWQ-модели
 ├── build_torchvision.sh       # Сборка torchvision из исходников
 ├── freeze_env.sh        # Переснять lock-файл с текущего окружения
 ├── run.sh               # Быстрый запуск
@@ -324,15 +332,28 @@ Qwen-Omni — это **end-to-end мультимодальная модель** 
 ```
 Микрофон → [Qwen-Omni Thinker] → текст-ответ
               ↓                        ↓
-       [Qwen-Omni Talker]       интернет-поиск
+       синтез речи (на выбор)    интернет-поиск
               ↓                   и база знаний
-        Голос (WAV)                    ↓
-              ↓                     (локально)
+        Голос (WAV)
+              ↓
           Динамики
 ```
 
 - **Thinker** — понимает речь, думает, формирует ответ (как ASR + LLM в одном)
-- **Talker** — превращает текст-ответ в естественную речь (как TTS в одном)
+- **Синтез речи** — два взаимозаменяемых бэкенда (`VALERA_TTS_BACKEND`):
+
+| Бэкенд | Кто озвучивает | Где считается | Скорость на Jetson | Голоса |
+|--------|---------------|---------------|--------------------|--------|
+| `russian_tts` **(по умолчанию)** | Silero v3.1_ru | **CPU** (GPU свободен) | ~2 с на 1 с речи | xenia, eugene, aidar, baya, kseniya |
+| `model` | встроенный Talker Qwen2.5-Omni | GPU | ~13 с на 1 с речи | Ethan, Chelsie |
+
+Измерено на реальном запросе (ответ 68 символов):
+
+```
+russian_tts → 15.4 с всего, 3.7 с речи, 177 КБ WAV
+model       → 93.1 с всего, 8.0 с речи, 383 КБ WAV
+```
+
 - Qwen2.5-Omni поддерживает десятки языков текста и речи (включая русский)
 
 > 💡 **Персона ассистента.** Qwen2.5-Omni синтезирует голос только если первым
@@ -362,6 +383,15 @@ VALERA_TEMPERATURE=0.6
 # Голосовой режим (каждая секунда озвучки ~13 с генерации на Jetson)
 VALERA_VOICE_MAX_NEW_TOKENS=80      # длина ответа голосом (токенов)
 VALERA_TALKER_MAX_NEW_TOKENS=400    # потолок озвучки (кадров, ~32 с)
+
+# ---- Чем озвучивать ответ ----
+# russian_tts (ПО УМОЛЧАНИЮ) — Silero v3.1_ru: русский голос, CPU, ~2 с на
+#                             секунду речи, GPU остаётся свободным
+# model                    — встроенный Talker Qwen2.5-Omni: GPU, ~13 с на
+#                             секунду речи
+VALERA_TTS_BACKEND=russian_tts
+VALERA_SILERO_SPEAKER=eugene        # xenia (жен.) / eugene / aidar / baya
+VALERA_SILERO_MODEL_PATH=           # пусто = russian_text_to_speech/model.pt
 
 # Поиск
 VALERA_SEARCH_ENABLED=true

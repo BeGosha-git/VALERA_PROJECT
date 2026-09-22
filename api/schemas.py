@@ -109,6 +109,7 @@ class HealthResponse(BaseModel):
     gpu_available: bool
     gpu_memory_used_gb: Optional[float] = None
     gpu_memory_total_gb: Optional[float] = None
+    tts_backend: Optional[str] = None
 
 
 class DeviceInfo(BaseModel):

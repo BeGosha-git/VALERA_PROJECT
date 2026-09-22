@@ -13,7 +13,6 @@
 #                               compressed-tensors 0.15.0, nvidia-cusparselt-cu12,
 #                               numpy 1.x
 #   patch_torch_jetson.py     — патчи совместимости Jetson-сборки torch
-#   patch_compressed_tensors.py — ускорение загрузки AWQ-модели
 #   build_torchvision.sh      — сборка torchvision из исходников
 #
 # Шаги:
@@ -176,9 +175,6 @@ echo "  Applying Jetson compatibility patches (patch_torch_jetson.py)..."
 # Ускорение загрузки AWQ-модели: у Qwen3-Omni ~11 500 записей в
 # quantization_config.ignore, и compressed-tensors перебирал их для каждого
 # модуля модели — загрузка «зависала» на часы. Без этого патча модель не грузится.
-echo "  Applying compressed-tensors patch (patch_compressed_tensors.py)..."
-"$CONDA_CMD" run -n "$ENV_NAME" python "$SCRIPT_DIR/patch_compressed_tensors.py" 2>&1 | tail -6
-
 echo "  ✓ Python packages installed"
 echo ""
 

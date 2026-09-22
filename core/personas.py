@@ -33,7 +33,6 @@ DEFAULT_GUIDE_PROMPT = (
     "воспитывай, не извиняйся, не предлагай помощь в конце и не задавай "
     "встречных вопросов. "
     "Ответ — только речь: без описаний действий, эмоций и разметки. "
-    "Отвечай по-русски. Если вопрос задан по-английски — отвечай по-английски."
 )
 
 #: Режим с матом — тот же характер, но с крепким словцом.
@@ -53,7 +52,6 @@ DEFAULT_MAT_PROMPT = (
     "не предлагай помощь в конце и не задавай встречных вопросов. "
     "Собеседника не оскорбляй — мат для эмоции, а не против него. "
     "Ответ — только речь: без описаний действий, эмоций и разметки. "
-    "Отвечай по-русски. Если вопрос задан по-английски — отвечай по-английски."
 )
 
 #: Канонический промпт Qwen для озвучки (русский вариант)
@@ -70,6 +68,24 @@ DEFAULT_QWEN_PROMPT_EN = (
     "text and speech."
 )
 
+#: «Тег запрета английского» — требование отвечать только по-русски
+RUSSIAN_ONLY_LINE = (
+    "Отвечай ТОЛЬКО по-русски — ни одного английского слова и ни одной "
+    "латинской фразы, даже если вопрос задан на английском: переводи смысл "
+    "и отвечай по-русски."
+)
+
+#: Двуязычный режим (VALERA_RUSSIAN_ONLY=false)
+BILINGUAL_LINE = (
+    "Отвечай по-русски. Если вопрос задан по-английски — отвечай по-английски."
+)
+
+
+def language_line() -> str:
+    """Инструкция про язык ответа (запрет английского включается тегом)."""
+    return RUSSIAN_ONLY_LINE if settings.russian_only else BILINGUAL_LINE
+
+
 #: Допустимые режимы
 PERSONA_MODES = ("guide", "mat", "default")
 
@@ -85,13 +101,19 @@ def normalize_mode(mode: str | None) -> str:
 
 
 def get_system_prompt(mode: str | None = None) -> str:
-    """Персона для выбранного режима (из .env или встроенная)."""
+    """Персона для выбранного режима (из .env или встроенная).
+
+    В конец всегда добавляется языковая строка: при ``VALERA_RUSSIAN_ONLY=true``
+    она запрещает английский, иначе разрешает двуязычный ответ.
+    """
     resolved = normalize_mode(mode)
     if resolved == "mat":
-        return settings.system_prompt_mat.strip() or DEFAULT_MAT_PROMPT
-    if resolved == "default":
-        return settings.system_prompt.strip() or DEFAULT_GUIDE_PROMPT
-    return settings.system_prompt.strip() or DEFAULT_GUIDE_PROMPT
+        base = settings.system_prompt_mat.strip() or DEFAULT_MAT_PROMPT
+    else:
+        base = settings.system_prompt.strip() or DEFAULT_GUIDE_PROMPT
+
+    line = language_line()
+    return base if line in base else f"{base} {line}"
 
 
 def get_qwen_canonical_prompt() -> str:

@@ -22,7 +22,7 @@ from loguru import logger
 
 from config import settings
 from core.personas import get_qwen_canonical_prompt
-from core.text_filters import normalize_mirea, strip_courtesy
+from core.text_filters import looks_english, normalize_mirea, strip_courtesy
 from core.tts import synthesize, tts_uses_model
 
 # префикс в architectures → (класс модели, класс процессора)
@@ -66,7 +66,27 @@ def _prepare_conversation(conversation: list[dict], family: str) -> list[dict]:
     ]
     if persona:
         prepared.append({"role": "system", "content": [{"type": "text", "text": persona}]})
-    return prepared + messages
+
+    prepared = prepared + messages
+
+    # ТЕГ ЗАПРЕТА АНГЛИЙСКОГО. Одной персоны модели мало — напоминание прямо
+    # перед репликой пользователя действует заметно сильнее (и работает даже
+    # в стриминге, где повтор невозможен: текст уже озвучен).
+    if settings.russian_only:
+        reminder = "Отвечай только по-русски."
+        for i in range(len(prepared) - 1, -1, -1):
+            if prepared[i].get("role") == "user":
+                content = prepared[i].get("content") or []
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        if reminder not in part.get("text", ""):
+                            part["text"] = f"{part.get('text', '')}\n\n{reminder}"
+                        break
+                else:
+                    content.append({"type": "text", "text": reminder})
+                break
+
+    return prepared
 
 
 def _normalize(name: str) -> str:
@@ -324,31 +344,50 @@ class QwenOmniModel:
         gen_kwargs["repetition_penalty"] = settings.repetition_penalty
 
         t_generate = time.time()
-        with torch.no_grad():
-            result = self.model.generate(**inputs, **gen_kwargs)
+
+        # ТЕГ ЗАПРЕТА АНГЛИЙСКОГО (VALERA_RUSSIAN_ONLY, по умолчанию включён).
+        # Персоны недостаточно: на английский вопрос 3B-модель всё равно
+        # отвечала по-английски (проверено). Поэтому если ответ вышел
+        # английским — генерируем ещё раз с усиленным требованием.
+        text_response = ""
+        audio_tensor = None
+        gen_tokens = 0
+        for attempt in (1, 2):
+            with torch.no_grad():
+                result = self.model.generate(**inputs, **gen_kwargs)
+
+            # Семейства возвращают по-разному:
+            #   Qwen3-Omni   → (GenerateOutput(.sequences), audio)
+            #   Qwen2.5-Omni → (Tensor, audio)
+            if isinstance(result, (tuple, list)):
+                text_ids = result[0]
+                audio_tensor = result[1] if len(result) > 1 else None
+            else:
+                text_ids, audio_tensor = result, None
+            sequences = getattr(text_ids, "sequences", text_ids)
+
+            decoded = self.processor.batch_decode(
+                sequences[:, inputs["input_ids"].shape[1]:],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+            text_response = decoded[0] if isinstance(decoded, list) else decoded
+
+            # Сколько токенов реально сгенерировано (до обрезки хвостов)
+            gen_tokens = int(sequences.shape[1] - inputs["input_ids"].shape[1])
+
+            if not settings.russian_only or not looks_english(text_response):
+                break
+            if attempt == 1:
+                logger.warning(
+                    "Ответ пришёл на английском, а VALERA_RUSSIAN_ONLY=true — "
+                    "повторяю с усиленным требованием"
+                )
+                inputs = self._reinput_with_russian_reminder(
+                    conversation, audios, images, videos, inputs
+                )
+
         t_generated = time.time()
-
-        # Семейства возвращают по-разному:
-        #   Qwen3-Omni   → (GenerateOutput(.sequences), audio)
-        #   Qwen2.5-Omni → (Tensor, audio)
-        if isinstance(result, (tuple, list)):
-            text_ids = result[0]
-            audio_tensor = result[1] if len(result) > 1 else None
-        else:
-            text_ids, audio_tensor = result, None
-        sequences = getattr(text_ids, "sequences", text_ids)
-
-        # Decode text
-        decoded = self.processor.batch_decode(
-            sequences[:, inputs["input_ids"].shape[1]:],
-            skip_special_tokens=True,
-            clean_up_tokenization_spaces=False,
-        )
-        text_response = decoded[0] if isinstance(decoded, list) else decoded
-
-        # Сколько токенов реально сгенерировано (до обрезки хвостов) — по этой
-        # цифре видно, тратится ли время на служебные фразы.
-        gen_tokens = int(sequences.shape[1] - inputs["input_ids"].shape[1])
 
         # Убираем служебные «хвосты» («если у вас есть ещё вопросы, задавайте»):
         # это экономит и генерацию, и синтез речи. Заодно приводим написание
@@ -395,6 +434,50 @@ class QwenOmniModel:
         )
 
         return text_response, audio_waveform
+
+    def _reinput_with_russian_reminder(
+        self, conversation, audios, images, videos, prev_inputs
+    ):
+        """Пересобирает вход с явным напоминанием отвечать по-русски.
+
+        Используется при повторе в режиме ``VALERA_RUSSIAN_ONLY``: к последнему
+        сообщению пользователя добавляется требование, и промпт токенизируется
+        заново. Если пересобрать не удалось — возвращаются прежние входы.
+        """
+        reminder = (
+            "\n\n(Обязательно отвечай ТОЛЬКО по-русски. Ни одного английского "
+            "слова.)"
+        )
+        try:
+            messages = list(conversation)
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i].get("role") == "user":
+                    content = messages[i].get("content") or []
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            part["text"] = f"{part.get('text', '')}{reminder}"
+                            break
+                    break
+
+            text = self.processor.apply_chat_template(
+                messages, add_generation_prompt=True, tokenize=False
+            )
+            new_inputs = self.processor(
+                text=text,
+                audio=audios,
+                images=images,
+                videos=videos,
+                return_tensors="pt",
+                padding=True,
+                use_audio_in_video=True,
+            )
+            new_inputs = new_inputs.to(self.model.device)
+            if self.model.dtype != torch.int8:
+                new_inputs = new_inputs.to(self.model.dtype)
+            return new_inputs
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Не удалось пересобрать промпт для повтора: {exc}")
+            return prev_inputs
 
     def generate_response_stream(
         self,

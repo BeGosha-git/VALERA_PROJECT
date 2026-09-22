@@ -146,6 +146,22 @@ def is_courtesy_sentence(sentence: str) -> bool:
     return bool(sentence) and _COURTESY_SENTENCE.match(sentence.strip()) is not None
 
 
+_LATIN_WORD = re.compile(r"[A-Za-z]{3,}")
+_CYRILLIC = re.compile(r"[А-Яа-яЁё]")
+
+
+def looks_english(text: str) -> bool:
+    """True, если текст похож на английский: есть латинские слова и нет кириллицы.
+
+    Используется как страховка к персоне при VALERA_RUSSIAN_ONLY=true:
+    промпт просят отвечать по-русски, но модель иногда всё равно уезжает
+    в английский (особенно 3B).
+    """
+    if not text or not text.strip():
+        return False
+    return bool(_LATIN_WORD.search(text)) and not _CYRILLIC.search(text)
+
+
 def strip_courtesy(text: str, min_keep: int = MIN_KEEP_CHARS) -> str:
     """Убирает служебные «хвосты» вроде «если у вас есть ещё вопросы, задавайте».
 

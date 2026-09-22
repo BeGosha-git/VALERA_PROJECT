@@ -21,6 +21,8 @@ from api.schemas import (
     KnowledgeEntry,
     KnowledgeSearchRequest,
     KnowledgeSearchResponse,
+    LLMRequest,
+    LLMResponse,
     TextOnlyResponse,
     TextRequest,
 )
@@ -355,6 +357,47 @@ async def chat_voice_raw(
             "X-Audio-Path": str(audio_dir / audio_filename),
             "X-Audio-Url": f"/api/v1/audio/{audio_filename}",
         },
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Raw LLM endpoint (для внешних приложений, напр. WebRAgent)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/llm/generate", response_model=LLMResponse)
+async def llm_generate(req: LLMRequest):
+    """Сырая генерация текста: без персоны, RAG и истории диалога.
+
+    Используется внешними приложениями (WebRAgent и др.) как LLM-бэкенд —
+    контекст (RAG, документы) формирует само приложение.
+    """
+    if not model.is_loaded:
+        raise HTTPException(status_code=503, detail="Model not loaded yet.")
+
+    conversation = [
+        {
+            "role": m.role if m.role in ("system", "user", "assistant") else "user",
+            "content": [{"type": "text", "text": m.content}],
+        }
+        for m in req.messages
+    ]
+
+    t0 = time.time()
+    try:
+        response_text, _ = model.generate_response(
+            conversation,
+            max_new_tokens=req.max_new_tokens,
+            temperature=req.temperature,
+            with_audio=False,
+        )
+    except Exception as e:
+        logger.exception(f"LLM inference error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return LLMResponse(
+        text=response_text,
+        inference_time_ms=(time.time() - t0) * 1000,
+        model=settings.model_name_or_path,
     )
 
 

@@ -32,6 +32,33 @@ class TextOnlyResponse(BaseModel):
     search_used: bool = False
 
 
+# ---- Raw LLM (для внешних приложений, напр. WebRAgent) ----
+
+class LLMMessage(BaseModel):
+    """Одно сообщение в стиле OpenAI Chat Completions."""
+    role: str = Field(..., description="system | user | assistant")
+    content: str = Field(..., description="Текст сообщения")
+
+
+class LLMRequest(BaseModel):
+    """Запрос сырой генерации.
+
+    Отличается от /chat/text тем, что НЕ добавляет персону «Валера», не
+    подмешивает RAG и не ведёт историю — модель используется как обычный
+    LLM-бэкенд, а контекст формирует вызывающее приложение.
+    """
+    messages: list[LLMMessage] = Field(..., min_length=1)
+    max_new_tokens: int = Field(512, ge=1, le=8192)
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+
+
+class LLMResponse(BaseModel):
+    """Ответ сырой генерации."""
+    text: str
+    inference_time_ms: float
+    model: str
+
+
 # ---- Knowledge Base ----
 
 class KnowledgeCreate(BaseModel):

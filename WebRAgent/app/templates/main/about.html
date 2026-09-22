@@ -1,0 +1,122 @@
+{% extends 'base.html' %}
+
+{% block title %}About WebRAgent{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row">
+        <div class="col-lg-8 mx-auto">
+            <div class="card shadow-sm">
+                <div class="card-header-custom">
+                    <h1 class="h3 mb-0 fw-bold"><i class="bi bi-info-circle me-2"></i>About WebRAgent</h1>
+                </div>
+                <div class="card-body">
+                    <div class="mb-4">
+                        <h2 class="h4 fw-bold text-primary"><i class="bi bi-diagram-3 me-2"></i>What is WebRAgent?</h2>
+                        <p>WebRAgent is a powerful Retrieval-Augmented Generation (RAG) web application built by Dennis Kruyt. This advanced system combines the capabilities of Large Language Models (LLMs) with a vector database (Qdrant) to provide context-enhanced responses to your queries.</p>
+                        
+                        <p>Unlike traditional search engines or chatbots, WebRAgent can search and analyze specific document collections or the web, using sophisticated AI techniques to provide comprehensive, relevant, and accurate answers.</p>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <h2 class="h4 fw-bold text-primary"><i class="bi bi-stars me-2"></i>Key Features</h2>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <ul class="list-group mb-3">
+                                    <li class="list-group-item border-0 ps-0">
+                                        <i class="bi bi-search text-primary me-2"></i>
+                                        <strong>Collection Search:</strong> Query your document collections
+                                    </li>
+                                    <li class="list-group-item border-0 ps-0">
+                                        <i class="bi bi-globe text-primary me-2"></i>
+                                        <strong>Web Search:</strong> Find information across the internet
+                                    </li>
+                                    <li class="list-group-item border-0 ps-0">
+                                        <i class="bi bi-robot text-primary me-2"></i>
+                                        <strong>Agent Search:</strong> Break down complex questions
+                                    </li>
+                                    <li class="list-group-item border-0 ps-0">
+                                        <i class="bi bi-diagram-3 text-primary me-2"></i>
+                                        <strong>Mind Maps:</strong> Visualize concepts and relationships
+                                    </li>
+                                </ul>
+                            </div>
+                            <div class="col-md-6">
+                                <ul class="list-group">
+                                    <li class="list-group-item border-0 ps-0">
+                                        <i class="bi bi-search-heart text-primary me-2"></i>
+                                        <strong>Deep Web Search:</strong> Analyze full web page content
+                                    </li>
+                                    <li class="list-group-item border-0 ps-0">
+                                        <i class="bi bi-lightning-charge text-primary me-2"></i>
+                                        <strong>Multiple LLM Support:</strong> OpenAI, Claude, Ollama
+                                    </li>
+                                    <li class="list-group-item border-0 ps-0">
+                                        <i class="bi bi-file-earmark-text text-primary me-2"></i>
+                                        <strong>Document Processing:</strong> Automatic chunking & embedding
+                                    </li>
+                                    <li class="list-group-item border-0 ps-0">
+                                        <i class="bi bi-gear text-primary me-2"></i>
+                                        <strong>Admin Interface:</strong> Manage collections and documents
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <h2 class="h4 fw-bold text-primary"><i class="bi bi-gear-wide-connected me-2"></i>Technology Stack</h2>
+                        <p>WebRAgent is built using modern technologies and open-source frameworks:</p>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <ul class="list-group mb-3">
+                                    <li class="list-group-item border-0 ps-0">
+                                        <i class="bi bi-code-slash text-secondary me-2"></i>
+                                        <strong>Python & Flask:</strong> Web application framework
+                                    </li>
+                                    <li class="list-group-item border-0 ps-0">
+                                        <i class="bi bi-database text-secondary me-2"></i>
+                                        <strong>Qdrant:</strong> Vector database for embeddings
+                                    </li>
+                                    <li class="list-group-item border-0 ps-0">
+                                        <i class="bi bi-search text-secondary me-2"></i>
+                                        <strong>SearXNG:</strong> Privacy-respecting metasearch engine
+                                    </li>
+                                </ul>
+                            </div>
+                            <div class="col-md-6">
+                                <ul class="list-group">
+                                    <li class="list-group-item border-0 ps-0">
+                                        <i class="bi bi-cpu text-secondary me-2"></i>
+                                        <strong>Large Language Models:</strong> OpenAI, Claude, Ollama
+                                    </li>
+                                    <li class="list-group-item border-0 ps-0">
+                                        <i class="bi bi-boxes text-secondary me-2"></i>
+                                        <strong>SentenceTransformers:</strong> For embeddings generation
+                                    </li>
+                                    <li class="list-group-item border-0 ps-0">
+                                        <i class="bi bi-layout-text-window text-secondary me-2"></i>
+                                        <strong>Bootstrap:</strong> For responsive UI
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <h2 class="h4 fw-bold text-primary"><i class="bi bi-person me-2"></i>About the Creator</h2>
+                        <p>WebRAgent was created by Dennis Kruyt, a software engineer and AI enthusiast passionate about developing practical applications that leverage the power of modern AI technologies.</p>
+                        <p>This project represents a comprehensive implementation of Retrieval-Augmented Generation technology in a user-friendly web interface, designed to make advanced AI capabilities accessible and useful.</p>
+                    </div>
+                    
+                    <div>
+                        <h2 class="h4 fw-bold text-primary"><i class="bi bi-clipboard-check me-2"></i>License & Copyright</h2>
+                        <p>WebRAgent is licensed under the MIT License.</p>
+                        <p class="mb-0">© 2024 Dennis Kruyt. All rights reserved.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

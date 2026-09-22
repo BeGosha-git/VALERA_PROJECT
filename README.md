@@ -171,6 +171,7 @@ bash freeze_env.sh
 | Метод | Endpoint | Описание |
 |-------|----------|----------|
 | `POST` | `/api/v1/chat/text` | Текстовый чат |
+| `POST` | `/api/v1/llm/generate` | Чистая генерация текста (для внешних приложений, напр. WebRAgent) |
 | `POST` | `/api/v1/chat/voice` | Голосовой чат (audio → text + audio) |
 | `POST` | `/api/v1/chat/voice/raw` | Голосовой чат (возвращает WAV напрямую) |
 | `GET` | `/api/v1/audio/{filename}` | Скачать сгенерированный аудиофайл |
@@ -256,6 +257,30 @@ requests.post("http://localhost:8765/api/v1/knowledge", json={
 })
 ```
 
+## 🌐 WebRAgent — веб-интерфейс RAG на локальной модели
+
+В ветке **`MAIN_VALERA`** добавлен веб-проект **WebRAgent** (Flask + Qdrant) из
+ветки `PC` — **с заменой Ollama на нашу Qwen2.5-Omni-7B**:
+
+```
+WebRAgent (Flask :5000) ──HTTP──▶ наш API (:8765) ──▶ Qwen2.5-Omni-7B на GPU
+   RAG: Qdrant + эмбеддинги          /api/v1/llm/generate
+```
+
+Модель загружается **один раз** (второй копии в памяти нет), эмбеддинги
+считаются на CPU, веб-поиск и авторизация работают без Docker/MongoDB.
+
+Запуск:
+
+```bash
+/mnt/valera/conda-envs/qwen-valera/bin/pip install -r WebRAgent/requirements-jetson.txt
+bash run_all.sh
+```
+
+Открыть http://127.0.0.1:5000 (вход `admin` / `admin`).
+
+Подробности — в **[WebRAgent/README_JETSON.md](WebRAgent/README_JETSON.md)**.
+
 ## 📁 Структура проекта
 
 ```
@@ -331,8 +356,12 @@ VALERA_API_HOST=0.0.0.0
 VALERA_API_PORT=8765
 
 # Генерация
-VALERA_MAX_NEW_TOKENS=2048
+VALERA_MAX_NEW_TOKENS=256
 VALERA_TEMPERATURE=0.6
+
+# Голосовой режим (каждая секунда озвучки ~13 с генерации на Jetson)
+VALERA_VOICE_MAX_NEW_TOKENS=80      # длина ответа голосом (токенов)
+VALERA_TALKER_MAX_NEW_TOKENS=400    # потолок озвучки (кадров, ~32 с)
 
 # Поиск
 VALERA_SEARCH_ENABLED=true

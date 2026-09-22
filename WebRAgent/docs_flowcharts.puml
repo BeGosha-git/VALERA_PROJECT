@@ -1,0 +1,532 @@
+@startuml Document Upload and Processing Workflow
+actor Admin
+participant "Admin UI" as UI
+participant "Document\nService" as DocService
+participant "Collection" as Collection
+participant "QdrantService" as Qdrant
+database "MongoDB" as MongoDB
+database "FileSystem" as FS
+database "Qdrant\nVector DB" as QdrantDB
+
+title Document Upload and Processing Workflow
+
+Admin -> UI: Create collection
+activate UI
+UI -> Collection: save() collection with embedding configuration
+activate Collection
+Collection -> MongoDB: Store collection metadata
+Collection -> UI: Return collection ID
+deactivate Collection
+
+Admin -> UI: Upload document(s) to collection
+UI -> DocService: process_document()
+activate DocService
+
+' File saving
+DocService -> FS: Save file to disk
+DocService -> DocService: extract_text()\n(Docling or fallback methods)
+
+' Text processing
+DocService -> DocService: chunk_text() based on strategy\n(sentence, paragraph, fixed)
+DocService -> DocService: extract metadata
+
+' Document storage
+DocService -> MongoDB: Store document metadata
+
+' Vector processing
+DocService -> Qdrant: Create collection if not exists
+activate Qdrant
+Qdrant -> QdrantDB: Configure vector collection
+deactivate Qdrant
+
+loop For each text chunk
+    DocService -> Qdrant: insert_document()
+    activate Qdrant
+    Qdrant -> Qdrant: Embed text using collection's model
+    Qdrant -> QdrantDB: Store vector and metadata
+    Qdrant --> DocService: Confirm storage
+    deactivate Qdrant
+end
+
+DocService --> UI: Return document details
+deactivate DocService
+UI --> Admin: Display success message
+deactivate UI
+@enduml
+
+@startuml RAG Query Workflow
+actor User
+participant "UI" as UI
+participant "RAGService" as RAG
+participant "DocumentService" as DocService
+participant "QdrantService" as Qdrant
+participant "PromptTemplateService" as Template
+participant "LLMService" as LLM
+database "Qdrant\nVector DB" as QdrantDB
+
+title RAG (Retrieval-Augmented Generation) Query Workflow
+
+User -> UI: Submit query with collection
+activate UI
+UI -> RAG: process_query()
+activate RAG
+
+' Retrieve relevant context
+RAG -> DocService: search_documents()
+activate DocService
+DocService -> Qdrant: search()
+activate Qdrant
+Qdrant -> Qdrant: Embed query using collection's model
+Qdrant -> QdrantDB: Vector similarity search
+QdrantDB --> Qdrant: Return matching documents
+Qdrant --> DocService: Return search results with scores
+deactivate Qdrant
+DocService --> RAG: Return formatted search results
+deactivate DocService
+
+' Format context for prompt
+RAG -> Template: format_context()
+activate Template
+Template --> RAG: Return formatted context
+deactivate Template
+
+' Check for conversation context
+alt Has conversation context
+    RAG -> RAG: Add system message if needed
+    RAG -> LLM: generate_chat_response()
+else No conversation context
+    RAG -> LLM: generate_response()
+end
+activate LLM
+LLM --> RAG: Return LLM response
+deactivate LLM
+
+' Format final response
+RAG -> RAG: Format response with context & citations
+RAG --> UI: Return response with sources
+deactivate RAG
+
+UI --> User: Display response with citation links
+deactivate UI
+@enduml
+
+@startuml Agent Search Workflow
+actor User
+participant "UI" as UI
+participant "AgentSearchService" as Agent
+participant "DocumentService" as DocService
+participant "QdrantService" as Qdrant
+participant "LLMService" as LLM
+database "Qdrant\nVector DB" as QdrantDB
+
+title Agent Search Workflow
+
+User -> UI: Submit query with collection\n(Agent search enabled)
+activate UI
+UI -> Agent: process_query()
+activate Agent
+
+' Query decomposition
+Agent -> LLM: _decompose_query()
+activate LLM
+LLM --> Agent: Return list of subqueries
+deactivate LLM
+
+loop For each subquery
+    ' Process each subquery
+    Agent -> DocService: search_documents()
+    activate DocService
+    DocService -> Qdrant: search()
+    activate Qdrant
+    Qdrant -> QdrantDB: Vector similarity search
+    QdrantDB --> Qdrant: Return matching documents
+    Qdrant --> DocService: Return search results
+    deactivate Qdrant
+    DocService --> Agent: Return formatted results
+    deactivate DocService
+    
+    ' Store intermediate results
+    Agent -> Agent: Store intermediate results
+end
+
+' Synthesize final answer
+Agent -> LLM: _synthesize_answer()
+activate LLM
+LLM --> Agent: Return synthesized response
+deactivate LLM
+
+Agent --> UI: Return comprehensive response\nwith sources and reasoning
+deactivate Agent
+
+UI --> User: Display response with citation links
+deactivate UI
+@enduml
+
+@startuml Web Search Workflow
+actor User
+participant "UI" as UI
+participant "WebSearchAgentService" as WebAgent
+participant "SearXNGService" as SearXNG
+participant "LLMService" as LLM
+database "SearXNG\nMetasearch" as SearXNGServer
+
+title Web Search Workflow
+
+User -> UI: Submit query\n(Web search enabled)
+activate UI
+UI -> WebAgent: process_query()
+activate WebAgent
+
+alt Direct Strategy
+    ' Query decomposition
+    WebAgent -> LLM: _decompose_query()
+    activate LLM
+    LLM --> WebAgent: Return list of subqueries
+    deactivate LLM
+else Informed Strategy
+    ' Initial search to inform subqueries
+    WebAgent -> SearXNG: process_query()
+    activate SearXNG
+    SearXNG -> SearXNGServer: Search web for query
+    SearXNGServer --> SearXNG: Return search results
+    SearXNG -> LLM: Generate response from results
+    activate LLM
+    LLM --> SearXNG: Return initial response
+    deactivate LLM
+    SearXNG --> WebAgent: Return initial results
+    deactivate SearXNG
+    
+    ' Generate informed subqueries
+    WebAgent -> LLM: _decompose_query_informed()
+    activate LLM
+    LLM --> WebAgent: Return list of subqueries
+    deactivate LLM
+end
+
+' Process each subquery using web search
+loop For each subquery
+    WebAgent -> SearXNG: process_query()
+    activate SearXNG
+    SearXNG -> SearXNGServer: Search web for subquery
+    SearXNGServer --> SearXNG: Return search results
+    SearXNG -> LLM: Generate response from results
+    activate LLM
+    LLM --> SearXNG: Return response
+    deactivate LLM
+    SearXNG --> WebAgent: Return results with source links
+    deactivate SearXNG
+    
+    ' Store intermediate results
+    WebAgent -> WebAgent: Store intermediate results
+end
+
+' Synthesize final answer
+WebAgent -> LLM: _synthesize_answer()
+activate LLM
+LLM --> WebAgent: Return synthesized response
+deactivate LLM
+
+WebAgent --> UI: Return comprehensive response\nwith web sources
+deactivate WebAgent
+
+UI --> User: Display response with citation links
+deactivate UI
+@enduml
+
+@startuml Chat Workflow
+actor User
+participant "UI" as UI
+participant "ChatRoutes" as Routes
+participant "ChatService" as ChatService
+participant "ChatModel" as Chat
+participant "RAGService\nor WebSearchService" as Service
+participant "LLMService" as LLM
+database "MongoDB" as DB
+
+title Chat Workflow
+
+' Create new chat
+User -> UI: Create new chat
+activate UI
+UI -> Routes: new_chat()
+activate Routes
+Routes -> Chat: create()
+activate Chat
+Chat -> ChatService: create_chat()
+activate ChatService
+ChatService -> DB: Store new chat
+ChatService --> Chat: Return chat_id
+deactivate ChatService
+Chat --> Routes: Return chat
+deactivate Chat
+Routes --> UI: Return chat_id
+deactivate Routes
+UI --> User: Redirect to chat view
+deactivate UI
+
+' Submit query in chat
+User -> UI: Submit query in chat
+activate UI
+UI -> Routes: chat_query()
+activate Routes
+
+' Add user message to chat
+Routes -> Chat: add_message('user', query)
+activate Chat
+Chat -> ChatService: add_message()
+activate ChatService
+ChatService -> DB: Store user message
+ChatService --> Chat: Confirm
+deactivate ChatService
+Chat --> Routes: Confirm
+deactivate Chat
+
+' Get previous chat context
+Routes -> Chat: get_context()
+activate Chat
+Chat -> ChatService: get_chat_context()
+activate ChatService
+ChatService -> DB: Retrieve previous messages
+ChatService --> Chat: Return formatted context
+deactivate ChatService
+Chat --> Routes: Return context
+deactivate Chat
+
+' Process query based on selected options
+alt Web Search
+    Routes -> Service: process_query() with conversation context
+else Document Search
+    Routes -> Service: process_query() with conversation context
+end
+activate Service
+Service --> Routes: Stream response chunks
+deactivate Service
+
+' Stream response to UI
+loop For each chunk
+    Routes --> UI: Send SSE chunk
+    UI --> User: Display incremental response
+end
+
+' Store assistant response
+Routes -> Chat: add_message('assistant', response)
+activate Chat
+Chat -> ChatService: add_message()
+activate ChatService
+ChatService -> DB: Store assistant message
+ChatService --> Chat: Confirm
+deactivate ChatService
+deactivate Chat
+
+' Generate title for new chats
+alt First message in chat
+    Routes -> Chat: generate_title()
+    activate Chat
+    Chat -> ChatService: generate_chat_title()
+    activate ChatService
+    ChatService -> LLM: Generate title from first message
+    activate LLM
+    LLM --> ChatService: Return title
+    deactivate LLM
+    ChatService -> DB: Update chat title
+    ChatService --> Chat: Return title
+    deactivate ChatService
+    Chat --> Routes: Confirm
+    deactivate Chat
+end
+
+Routes --> UI: Send final response
+deactivate Routes
+UI --> User: Display complete response
+deactivate UI
+@enduml
+
+@startuml Text Extraction and Chunking Workflow
+participant "DocumentService" as DocService
+participant "Docling" as Docling
+participant "Fallback\nExtraction Tools" as Fallback
+
+title Text Extraction and Chunking Workflow
+
+-> DocService: extract_text(file_path, use_docling)
+activate DocService
+
+alt Using Docling
+    DocService -> Docling: converter.convert()
+    activate Docling
+    Docling --> DocService: Return processed document
+    deactivate Docling
+    
+    alt Successful extraction
+        DocService -> DocService: Extract text from docling result
+    else Extraction failed
+        DocService -> Fallback: Fallback to basic extraction
+        activate Fallback
+    end
+else Using Fallback Methods
+    DocService -> Fallback: Use format-specific extraction
+    activate Fallback
+end
+
+alt PDF Files
+    Fallback -> Fallback: Extract with PdfReader
+else Word Documents
+    Fallback -> Fallback: Extract with python-docx
+else PowerPoint
+    Fallback -> Fallback: Extract with python-pptx
+else Excel
+    Fallback -> Fallback: Extract with pandas
+else HTML
+    Fallback -> Fallback: Extract with BeautifulSoup
+else Markdown
+    Fallback -> Fallback: Convert to HTML and extract with BeautifulSoup
+else Plain Text
+    Fallback -> Fallback: Read directly
+end
+
+Fallback --> DocService: Return extracted text
+deactivate Fallback
+
+DocService -> DocService: chunk_text(text, chunk_size, overlap, strategy)
+
+alt Sentence Strategy
+    DocService -> DocService: _chunk_by_sentence()
+    note right: Split by sentence boundaries\nPreserve semantic units
+else Paragraph Strategy
+    DocService -> DocService: _chunk_by_paragraph()
+    note right: Split by paragraph boundaries\nPreserve document structure
+else Fixed Strategy
+    DocService -> DocService: _chunk_fixed_size()
+    note right: Split by character count\nSimplest approach
+end
+
+DocService -> DocService: Apply overlap between chunks
+
+<- DocService: Return chunked text
+deactivate DocService
+@enduml
+
+@startuml Vector Embedding and Storage Workflow
+participant "DocumentService" as DocService
+participant "QdrantService" as Qdrant
+participant "Embedding\nProvider API" as EmbeddingAPI
+database "Qdrant\nVector DB" as QdrantDB
+
+title Vector Embedding and Storage Workflow
+
+-> DocService: process_document()
+activate DocService
+
+DocService -> Qdrant: Check collection exists
+activate Qdrant
+alt Collection doesn't exist
+    Qdrant -> Qdrant: get_vector_size()
+    Qdrant -> EmbeddingAPI: Test embedding dimensions
+    EmbeddingAPI --> Qdrant: Return vector dimensions
+    Qdrant -> QdrantDB: Create collection
+end
+Qdrant --> DocService: Confirm collection exists
+deactivate Qdrant
+
+loop For each text chunk
+    DocService -> Qdrant: insert_document()
+    activate Qdrant
+    
+    Qdrant -> Qdrant: Generate point_id\nCreate metadata
+    
+    Qdrant -> EmbeddingAPI: Generate embedding vector
+    activate EmbeddingAPI
+    note right: Uses collection's configured\nembedding model
+    EmbeddingAPI --> Qdrant: Return vector
+    deactivate EmbeddingAPI
+    
+    Qdrant -> QdrantDB: Store point with vector and metadata
+    QdrantDB --> Qdrant: Confirm storage
+    
+    Qdrant --> DocService: Confirm insertion
+    deactivate Qdrant
+end
+
+<- DocService: Return processed document
+deactivate DocService
+@enduml
+
+@startuml WebRAgent System Overview
+actor User
+actor Admin
+database "MongoDB" as MongoDB
+database "FileSystem" as FS
+database "Qdrant\nVector DB" as QdrantDB
+database "SearXNG\nMetasearch" as SearXNG
+
+package "WebRAgent Application" {
+    package "Document Management" {
+        [DocumentService]
+        [Collection Model]
+        [Document Model]
+    }
+    
+    package "Search Services" {
+        [RAGService]
+        [AgentSearchService]
+        [WebSearchAgentService]
+        [SearXNGService]
+        [QdrantService]
+    }
+    
+    package "Chat System" {
+        [ChatService]
+        [Chat Model]
+    }
+    
+    package "LLM Integration" {
+        [LLMService]
+        [LLMFactory]
+        [PromptTemplateService]
+    }
+    
+    package "Routes" {
+        [AdminRoutes]
+        [ChatRoutes]
+        [MainRoutes]
+        [AuthRoutes]
+    }
+}
+
+' User interactions
+User --> [MainRoutes]: Query documents
+User --> [ChatRoutes]: Chat with system
+Admin --> [AdminRoutes]: Manage collections & documents
+
+' Document workflows
+[AdminRoutes] --> [DocumentService]: Process uploads
+[DocumentService] --> FS: Store files
+[DocumentService] --> [Document Model]: Store metadata
+[Document Model] --> MongoDB: Persist
+[DocumentService] --> [QdrantService]: Vector embeddings
+[QdrantService] --> QdrantDB: Store vectors
+
+' Query workflows
+[MainRoutes] --> [RAGService]: Standard RAG query
+[MainRoutes] --> [AgentSearchService]: Advanced document search
+[MainRoutes] --> [WebSearchAgentService]: Web search
+[RAGService] --> [DocumentService]: Retrieve context
+[RAGService] --> [LLMService]: Generate responses
+[AgentSearchService] --> [DocumentService]: Retrieve context
+[AgentSearchService] --> [LLMService]: Decompose & synthesize
+[WebSearchAgentService] --> [SearXNGService]: Web search
+[SearXNGService] --> SearXNG: Meta-search
+[WebSearchAgentService] --> [LLMService]: Decompose & synthesize
+
+' Chat workflows
+[ChatRoutes] --> [Chat Model]: Manage conversations
+[Chat Model] --> [ChatService]: Persist messages
+[ChatService] --> MongoDB: Store chats & messages
+[ChatRoutes] --> [RAGService]: Process queries w/context
+[ChatRoutes] --> [WebSearchAgentService]: Process web queries w/context
+
+' LLM integration
+[LLMService] <-- [LLMFactory]: Create provider-specific service
+[PromptTemplateService] <-- [RAGService]: Format prompts
+[PromptTemplateService] <-- [AgentSearchService]: Format prompts
+@enduml

@@ -5,9 +5,14 @@ Can also work in text-only mode.
 """
 
 import argparse
+import base64
 import io
+import json
+import queue
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote
@@ -58,16 +63,26 @@ def record_until_silence(
     sample_rate: int = 24000,
     device: int = None,
     max_duration: float = 15.0,
-    start_timeout: float = 20.0,
-    silence_seconds: float = 1.0,
+    start_timeout: float = 25.0,
+    silence_seconds: float = 1.2,
     threshold: float = None,
     block: float = 0.1,
     verbose: bool = True,
+    min_speech: float = 0.45,
+    pre_roll: float = 0.35,
 ) -> Optional[np.ndarray]:
     """Слушает микрофон и возвращает фразу, как только наступит тишина.
 
-    Работает как в ветке PC: не нужно ничего нажимать — клиент сам ждёт начало
-    речи, а затем останавливает запись после ``silence_seconds`` тишины.
+    Отличия от простого «порог + тишина» (иначе были ложные срабатывания на
+    шум, и в модель уходило 0.6 с мусора):
+
+    * **старт только по устойчивой речи** — нужно ``min_speech`` секунд подряд
+      выше порога, одиночный всплеск шума фразу не запускает;
+    * **пре-ролл** — последние ``pre_roll`` секунд до старта добавляются к
+      записи, поэтому начало слова не теряется;
+    * **минимальная длина** — если речи набралось меньше ``min_speech``,
+      возвращается None (фраза переслушивается), а не мусор в модель;
+    * хвостовая тишина обрезается.
 
     Args:
         sample_rate: частота дискретизации.
@@ -77,19 +92,19 @@ def record_until_silence(
         silence_seconds: сколько тишины считать концом фразы.
         threshold: порог RMS. None → измерить шум комнаты и взять его x3.
         block: размер блока чтения (сек).
-        verbose: печатать измеренный уровень шума и порог.
+        verbose: печатать измеренный шум и порог.
+        min_speech: минимум секунд устойчивой речи для старта/приёма.
+        pre_roll: сколько секунд до старта речи сохранить.
 
     Returns:
-        numpy-массив с речью или None, если речь так и не началась.
+        numpy-массив с речью или None, если речи не было.
     """
     block_size = int(block * sample_rate)
     silence_blocks = max(1, int(silence_seconds / block))
     max_blocks = int(max_duration / block)
     start_blocks = int(start_timeout / block)
-
-    chunks: list[np.ndarray] = []
-    silent_run = 0
-    started = False
+    speech_blocks_needed = max(1, int(min_speech / block))
+    pre_roll_blocks = max(0, int(pre_roll / block))
 
     def rms(x: np.ndarray) -> float:
         return float(np.sqrt(np.mean(x ** 2))) if x.size else 0.0
@@ -101,8 +116,7 @@ def record_until_silence(
         device=device,
         blocksize=block_size,
     ) as stream:
-        # Калибровка под конкретный микрофон: порог не должен зависеть от
-        # того, что в комнате шумно или включён автоматический усилитель.
+        # Калибровка под конкретный микрофон
         if threshold is None:
             calibration = [rms(stream.read(block_size)[0].flatten()) for _ in range(5)]
             noise = float(np.median(calibration)) if calibration else 0.0
@@ -114,30 +128,61 @@ def record_until_silence(
                     flush=True,
                 )
 
+        history: list[np.ndarray] = []   # пре-ролл
+        chunks: list[np.ndarray] = []
+        speech_run = 0
+        silent_run = 0
+        started = False
+        voiced_blocks = 0
+
         for i in range(start_blocks + max_blocks):
             data, _ = stream.read(block_size)
             mono = data.flatten()
             level = rms(mono)
 
             if not started:
+                history.append(mono)
+                if len(history) > pre_roll_blocks:
+                    history.pop(0)
+
                 if level >= threshold:
-                    started = True
-                    chunks.append(mono)
-                elif i >= start_blocks:
-                    return None  # речь не началась — выходим, вызывающий повторит
+                    speech_run += 1
+                    # Старт только после устойчивой речи, а не одиночного щелчка
+                    if speech_run >= speech_blocks_needed:
+                        started = True
+                        chunks = list(history)  # забираем пре-ролл
+                        history = []
+                        voiced_blocks = speech_run
+                        silent_run = 0
+                else:
+                    speech_run = 0
+                if not started and i >= start_blocks:
+                    return None  # речи так и не было
                 continue
 
             chunks.append(mono)
-            silent_run = silent_run + 1 if level < threshold else 0
+            if level >= threshold:
+                voiced_blocks += 1
+                silent_run = 0
+            else:
+                silent_run += 1
+
             if silent_run >= silence_blocks or len(chunks) >= max_blocks:
                 break
 
     if not started:
         return None
+
+    # Слишком мало реальной речи — считаем, что это шум, и слушаем снова
+    if voiced_blocks * block < min_speech:
+        if verbose:
+            print(f" (речи всего {voiced_blocks * block:.2f} с — пропускаю)", end="")
+        return None
+
     audio = np.concatenate(chunks)
-    # Обрезаем хвостовую тишину
-    keep = int(max(0.2, len(audio) / sample_rate - silence_seconds * 0.5) * sample_rate)
-    return audio[:keep] if keep < len(audio) else audio
+    # Обрезаем хвостовую тишину, но оставляем небольшой запас
+    tail_cut = int(max(0.0, silence_seconds - 0.4) * sample_rate)
+    return audio[:-tail_cut] if tail_cut and len(audio) > tail_cut else audio
 
 
 _audio_out_warmed = False
@@ -168,6 +213,126 @@ def _play_raw(audio: np.ndarray, sample_rate: int):
         # старые версии sounddevice не принимают latency
         sd.play(audio, samplerate=sample_rate, blocking=True)
     sd.wait()
+
+
+class StreamingPlayer:
+    """Проигрывает аудио-куски по мере поступления, без пауз между ними.
+
+    Куски приходят от сервера (по ~4 слова). Поток вывода один, поэтому
+    фрагменты звучат слитно: пока играет первый, сервер уже синтезирует второй.
+    """
+
+    def __init__(self, sample_rate: int = 24000):
+        self.sample_rate = sample_rate
+        self.queue: queue.Queue = queue.Queue()
+        self._stream = None
+        self._thread: Optional[threading.Thread] = None
+        self.played = 0
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            with sd.OutputStream(
+                samplerate=self.sample_rate,
+                channels=1,
+                dtype="float32",
+                latency="high",
+            ) as stream:
+                self._stream = stream
+                while True:
+                    item = self.queue.get()
+                    if item is None:  # конец
+                        break
+                    stream.write(item)
+        except Exception as exc:  # noqa: BLE001
+            print(f"⚠️  Ошибка воспроизведения: {exc}")
+
+    def add(self, audio: np.ndarray) -> None:
+        """Ставит кусок в очередь (с небольшим запасом тишины для слитности)."""
+        if audio is None or not len(audio):
+            return
+        audio = np.asarray(audio, dtype=np.float32).reshape(-1)
+        max_val = float(np.max(np.abs(audio)))
+        if max_val > 1.0:
+            audio = audio / max_val * 0.95
+        pad = np.zeros(int(0.06 * self.sample_rate), dtype=np.float32)
+        self.queue.put(np.concatenate([audio, pad]))
+        self.played += 1
+
+    def finish(self) -> None:
+        self.queue.put(None)
+        if self._thread:
+            self._thread.join()
+        sd.stop()
+
+
+def stream_voice(audio: np.ndarray, sample_rate: int, session_id: str = None,
+                 tts_backend: str = None, persona: str = None,
+                 chunk_words: int = 4) -> dict:
+    """Отправляет голос и играет ответ по мере поступления (не ждёт весь ответ)."""
+    buffer = io.BytesIO()
+    sf.write(buffer, audio, sample_rate, format="WAV")
+    buffer.seek(0)
+
+    data = {"session_id": session_id or "", "chunk_words": str(chunk_words)}
+    if tts_backend:
+        data["tts_backend"] = tts_backend
+    if persona:
+        data["persona"] = persona
+
+    player = StreamingPlayer(sample_rate)
+    player.start()
+
+    t_start = time.time()
+    first_audio = None
+    full_text = ""
+    session_out = session_id or ""
+    chunks = 0
+
+    with requests.post(
+        f"{API_BASE}/chat/voice/stream",
+        files={"audio": ("recording.wav", buffer, "audio/wav")},
+        data=data,
+        stream=True,
+        timeout=(10, 900),
+    ) as resp:
+        resp.raise_for_status()
+        print("⏳ Слушаю ответ…", end="", flush=True)
+        for raw in resp.iter_lines(decode_unicode=True):
+            if not raw or not raw.startswith("data: "):
+                continue
+            try:
+                evt = json.loads(raw[6:])
+            except json.JSONDecodeError:
+                continue
+
+            kind = evt.get("type")
+            if kind == "text":
+                full_text += evt.get("delta", "")
+                if first_audio is None:
+                    print("\r🤖 Валера: ", end="", flush=True)
+                print(evt.get("delta", ""), end="", flush=True)
+            elif kind == "audio":
+                if first_audio is None:
+                    first_audio = time.time() - t_start
+                wav_data, sr = sf.read(io.BytesIO(base64.b64decode(evt["wav"])))
+                player.add(wav_data)
+                chunks += 1
+            elif kind == "done":
+                full_text = evt.get("text", full_text)
+                session_out = session_id or session_out
+            elif kind == "error":
+                print(f"\n❌ Ошибка сервера: {evt.get('message')}")
+
+    player.finish()
+    print()
+    if first_audio is not None:
+        print(f"   🔊 первый звук через {first_audio:.2f} с "
+              f"({chunks} кусков по ~{chunk_words} слова)")
+    return {"text": full_text, "session_id": session_out}
 
 
 def play_audio(audio: np.ndarray, sample_rate: int = 24000):
@@ -283,6 +448,8 @@ def voice_mode(
     silence_seconds: float = 1.0,
     threshold: float = None,
     persona: str = None,
+    stream_mode: bool = True,
+    chunk_words: int = 4,
 ):
     """Непрерывный голосовой диалог: слушает → сразу отвечает голосом.
 
@@ -295,6 +462,10 @@ def voice_mode(
     print("\n🎧 Голосовой режим: говорите в микрофон, ассистент ответит голосом")
     print(f"   TTS: {tts_backend or 'по настройке сервера (.env)'}")
     print(f"   Персона: {'МАТ' if persona == 'mat' else (persona or 'по настройке сервера')}")
+    if stream_mode:
+        print(f"   Режим: стриминг — озвучка порциями по {chunk_words} слова")
+    else:
+        print("   Режим: ждать весь ответ (без стриминга)")
     if push_to_talk:
         print(f"   Режим: нажмите Enter, затем говорите {duration:.0f} с")
     else:
@@ -338,8 +509,20 @@ def voice_mode(
             continue
 
         # --- 2. Отправляем и отвечаем -------------------------------------
-        print("⏳ Думаю…")
         try:
+            if stream_mode:
+                # Стриминг: озвучка идёт порциями, пока модель думает дальше
+                stream_voice(
+                    audio,
+                    sample_rate,
+                    session_id,
+                    tts_backend=tts_backend,
+                    persona=persona,
+                    chunk_words=chunk_words,
+                )
+                continue
+
+            print("⏳ Думаю…")
             result = send_audio(
                 audio, sample_rate, session_id,
                 text_hint=None, tts_backend=tts_backend, persona=persona,
@@ -385,6 +568,10 @@ def main():
                         help="Сколько секунд тишины считать концом фразы (по умолч. 1.0)")
     parser.add_argument("--threshold", type=float, default=None,
                         help="Порог RMS для тишины. По умолчанию измеряется шум комнаты x3")
+    parser.add_argument("--no-stream", action="store_true",
+                        help="Не стримить: ждать весь ответ (по умолчанию — стриминг)")
+    parser.add_argument("--chunk-words", type=int, default=4,
+                        help="Сколько слов озвучивать за раз в стриминге (по умолч. 4)")
     parser.add_argument("--mat", action="store_true",
                         help="Режим с матом (персона guide_mat)")
     parser.add_argument("--persona", choices=["guide", "mat", "default"], default=None,
@@ -436,6 +623,8 @@ def main():
             silence_seconds=args.silence,
             threshold=args.threshold,
             persona=args.persona or ("mat" if args.mat else None),
+            stream_mode=not args.no_stream,
+            chunk_words=args.chunk_words,
         )
 
 

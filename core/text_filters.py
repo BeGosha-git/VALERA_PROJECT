@@ -107,6 +107,12 @@ _COURTESY_SENTENCE = re.compile(
         если \s+ у \s+ (?:вас|тебя)
       | если \s+ (?:нужна|понадобится|будет) \s+ помощь
       | если \s+ (?:хочешь|хотите|что-то|что-нибудь)
+      | if \s+ you \s+ have \s+ (?:any \s+ )?(?:other|more|additional)
+      | if \s+ you \s+ (?:have|need) \s+ (?:any \s+ )?questions?
+      | if \s+ you \s+ need \s+ (?:any \s+ )?(?:help|assistance)
+      | feel \s+ free \s+ to \s+ ask
+      | let \s+ me \s+ know
+      | (?: i \s+ )? hope \s+ (?: this | that ) \s+ helps?
       | задавайте
       | задавай
       | спрашивайте
@@ -133,6 +139,11 @@ _COURTESY_SENTENCE = re.compile(
 
 #: Минимальная длина «полезной» части — чтобы не обрезать ответ целиком
 MIN_KEEP_CHARS = 10
+
+
+def is_courtesy_sentence(sentence: str) -> bool:
+    """True, если предложение целиком служебное («спрашивай, если что»)."""
+    return bool(sentence) and _COURTESY_SENTENCE.match(sentence.strip()) is not None
 
 
 def strip_courtesy(text: str, min_keep: int = MIN_KEEP_CHARS) -> str:

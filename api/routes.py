@@ -1,6 +1,11 @@
 """FastAPI routes for the voice assistant."""
 
+import asyncio
+import base64
 import io
+import json
+import re
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -10,7 +15,7 @@ from urllib.parse import quote
 import numpy as np
 import soundfile as sf
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from loguru import logger
 
 from api.schemas import (
@@ -31,8 +36,13 @@ from core.audio_io import audio_to_wav_bytes, list_audio_devices, load_audio
 from core.conversation import Conversation, conversation, create_new_conversation
 from core.model import model
 from core.search import search_and_format
-from core.text_filters import is_mirea_related, normalize_mirea
-from core.tts import describe_backend
+from core.text_filters import (
+    is_courtesy_sentence,
+    is_mirea_related,
+    normalize_mirea,
+    strip_courtesy,
+)
+from core.tts import describe_backend, synthesize
 from core.tts import describe_backend
 from db.database import db
 from db.documents import search_documents_formatted
@@ -403,6 +413,227 @@ async def chat_voice_raw(
             "X-Audio-Path": str(audio_dir / audio_filename),
             "X-Audio-Url": f"/api/v1/audio/{audio_filename}",
         },
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Streaming: текст + озвучка порциями (клиент слышит первые слова через ~1 с)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+#: Предложение закончилось (по нему решаем, не служебное ли оно)
+_SENTENCE_END = re.compile(r"(?<=[.!?…])\s")
+#: Буфер заканчивается законченным предложением
+_SENTENCE_DONE = re.compile(r"[.!?…]\s*$")
+#: Слова вместе с разделителем — чтобы не озвучивать обрывок слова
+_COMPLETE_WORD = re.compile(r"\S+\s+")
+
+
+def _sse(payload: dict) -> str:
+    """Формат Server-Sent Events."""
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@router.post("/chat/voice/stream")
+async def chat_voice_stream(
+    audio: UploadFile = File(...),
+    session_id: Optional[str] = Form(None),
+    text_hint: Optional[str] = Form(None),
+    tts_backend: Optional[str] = Form(None),
+    persona: Optional[str] = Form(None),
+    chunk_words: int = Form(
+        4, description="Сколько слов озвучивать в первом куске (быстрый старт)"
+    ),
+    tail_words: int = Form(
+        10, description="Размер следующих кусков озвучки (плавнее интонация)"
+    ),
+):
+    """Голос → поток текста + озвучка порциями.
+
+    Отдаёт SSE-поток событий:
+
+    * ``{"type": "text", "delta": "..."}``  — фрагмент текста ответа
+    * ``{"type": "audio", "seq": N, "wav": "<base64>", "text": "..."}``
+      — озвученный кусок (~``chunk_words`` слов), готов к немедленному проигрыванию
+    * ``{"type": "done", "text": "..."}``   — полный текст ответа
+
+    Смысл: не ждать весь ответ (~2-6 с), а начинать говорить почти сразу —
+    пока модель генерирует дальше.
+    """
+    if not model.is_loaded:
+        raise HTTPException(status_code=503, detail="Model not loaded yet.")
+
+    session_id, conv = get_or_create_session(session_id, persona)
+
+    audio_bytes = await audio.read()
+    audio_dir = settings.data_dir / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = audio_dir / f"temp_{uuid.uuid4().hex[:8]}.wav"
+    with open(audio_path, "wb") as f:
+        f.write(audio_bytes)
+
+    if text_hint:
+        text_hint = normalize_mirea(text_hint)
+    conv.add_user_message(text=text_hint or "", audio_path=str(audio_path))
+    messages = conv.to_model_format()
+
+    chunk_words = max(1, min(int(chunk_words or 4), 50))
+    tail_words = max(chunk_words, min(int(tail_words or 10), 80))
+
+    async def event_stream():
+        t0 = time.time()
+        full_text = ""        # всё, что сказала модель (для истории)
+        speak_buffer = ""     # текст, накопленный для озвучки
+        sentence_buffer = ""  # текст для поиска конца предложения
+        seq = 0
+        first_audio_ms = None
+
+        # ВАЖНО: генерация — блокирующая, и если крутить её прямо в event loop,
+        # сервер не успевает отправлять события (клиент получает всё в конце).
+        # Поэтому генерация идёт в отдельном потоке, а сюда приходит через
+        # asyncio.Queue — тогда текст и звук уходят по мере готовности.
+        loop = asyncio.get_running_loop()
+        pipe: asyncio.Queue = asyncio.Queue()
+
+        def producer() -> None:
+            try:
+                for delta in model.generate_response_stream(messages):
+                    loop.call_soon_threadsafe(pipe.put_nowait, ("text", delta))
+            except Exception as exc:  # noqa: BLE001
+                loop.call_soon_threadsafe(pipe.put_nowait, ("error", str(exc)))
+            finally:
+                loop.call_soon_threadsafe(pipe.put_nowait, ("end", None))
+
+        threading.Thread(target=producer, daemon=True).start()
+
+        try:
+            while True:
+                kind, payload = await pipe.get()
+                if kind == "end":
+                    break
+                if kind == "error":
+                    logger.error(f"Ошибка генерации: {payload}")
+                    yield _sse({"type": "error", "message": payload})
+                    return
+
+                delta = payload
+                full_text += delta
+                yield _sse({"type": "text", "delta": delta})
+
+                sentence_buffer += delta
+
+                # Отрезаем по одному готовому предложению за раз
+                while True:
+                    parts = _SENTENCE_END.split(sentence_buffer, maxsplit=1)
+                    if len(parts) < 2:
+                        # Последнее предложение в ответе не имеет пробела после
+                        # точки, поэтому отдельно проверяем «буфер заканчивается
+                        # знаком конца»
+                        if _SENTENCE_DONE.search(sentence_buffer):
+                            sentence, sentence_buffer = sentence_buffer, ""
+                            sentence = sentence.strip()
+                            if sentence and not is_courtesy_sentence(sentence):
+                                speak_buffer = f"{speak_buffer} {sentence}".strip()
+                        break
+                    sentence, sentence_buffer = parts[0], parts[1]
+                    sentence = sentence.strip()
+                    # Служебные фразы («если есть вопросы, спрашивай») не озвучиваем
+                    if sentence and not is_courtesy_sentence(sentence):
+                        speak_buffer = f"{speak_buffer} {sentence}".strip()
+
+                # Длинное предложение начинает звучать, не дожидаясь точки:
+                # иначе ответ из одной фразы озвучивался бы только в самом конце.
+                # Последние chunk_words слов остаются в буфере, чтобы никогда
+                # не озвучить недописанное слово.
+                buf_words = _COMPLETE_WORD.findall(sentence_buffer)
+                if len(buf_words) >= chunk_words * 2:
+                    head = "".join(buf_words[: len(buf_words) - chunk_words])
+                    sentence_buffer = sentence_buffer[len(head):].lstrip()
+                    speak_buffer = f"{speak_buffer} {head.strip()}".strip()
+
+                # Озвучиваем порциями. Первый кусок — маленький (чтобы звук
+                # пошёл почти сразу), дальше крупнее: Silero синтезирует каждый
+                # кусок заново, и на 4 словах интонация рвётся.
+                # Законченное предложение озвучиваем сразу, не дожидаясь
+                # накопления tail_words — так интонация естественнее.
+                while True:
+                    need = chunk_words if seq == 0 else tail_words
+                    words = _COMPLETE_WORD.findall(speak_buffer)
+                    sentence_done = bool(_SENTENCE_DONE.search(speak_buffer))
+                    if len(words) < chunk_words:
+                        break
+                    if len(words) < need and not sentence_done:
+                        break
+                    # Первый кусок — строго chunk_words слов: Silero синтезирует
+                    # ~2 с на каждую секунду речи, и чем короче первый кусок,
+                    # тем раньше звучит ответ.
+                    if seq == 0:
+                        take = min(len(words), chunk_words)
+                    else:
+                        take = len(words) if sentence_done else need
+                    taken = "".join(words[:take])
+                    chunk = taken.strip()
+                    speak_buffer = speak_buffer[len(taken):].lstrip()
+                    if not chunk:
+                        continue
+                    try:
+                        # Silero — CPU-задача, уводим её из event loop
+                        wav = await asyncio.to_thread(synthesize, chunk)
+                        if first_audio_ms is None:
+                            first_audio_ms = (time.time() - t0) * 1000
+                            logger.info(
+                                f"Стриминг: первый звук через {first_audio_ms / 1000:.2f} с"
+                            )
+                        yield _sse({
+                            "type": "audio",
+                            "seq": seq,
+                            "text": chunk,
+                            "wav": base64.b64encode(audio_to_wav_bytes(wav)).decode("ascii"),
+                        })
+                        seq += 1
+                    except Exception as exc:  # озвучка не должна рвать поток
+                        logger.error(f"Ошибка озвучки фрагмента: {exc}")
+
+            # Хвост: сначала остаток озвучки, потом незакрытое предложение
+            # (порядок важен — иначе слова в озвучке перепутаются)
+            tail = f"{speak_buffer} {sentence_buffer}".strip()
+            tail_parts = [p.strip() for p in _SENTENCE_END.split(tail) if p.strip()]
+            tail = " ".join(p for p in tail_parts if not is_courtesy_sentence(p))
+            if tail:
+                try:
+                    wav = await asyncio.to_thread(synthesize, tail)
+                    if first_audio_ms is None:
+                        first_audio_ms = (time.time() - t0) * 1000
+                    yield _sse({
+                        "type": "audio",
+                        "seq": seq,
+                        "text": tail,
+                        "wav": base64.b64encode(audio_to_wav_bytes(wav)).decode("ascii"),
+                    })
+                except Exception as exc:
+                    logger.error(f"Ошибка озвучки хвоста: {exc}")
+
+            final_text = strip_courtesy(normalize_mirea(full_text))
+            conv.add_assistant_message(text=final_text)
+            elapsed = time.time() - t0
+            logger.info(
+                f"Стриминг завершён: {elapsed:.2f} с, кусков озвучки {seq}, "
+                f"первый звук на {first_audio_ms / 1000 if first_audio_ms else 0:.2f} с"
+            )
+            yield _sse({
+                "type": "done",
+                "text": final_text,
+                "inference_time_ms": elapsed * 1000,
+                "first_audio_ms": first_audio_ms,
+                "chunks": seq,
+            })
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(f"Ошибка стриминга: {exc}")
+            yield _sse({"type": "error", "message": str(exc)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

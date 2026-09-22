@@ -396,6 +396,76 @@ class QwenOmniModel:
 
         return text_response, audio_waveform
 
+    def generate_response_stream(
+        self,
+        conversation: list[dict],
+        max_new_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ):
+        """Отдаёт текст ответа по мере генерации (только текст, без Talker'а).
+
+        Используется для стриминга: клиент получает первые слова через ~0.6 с
+        и может начать озвучку, пока модель дописывает остальное.
+
+        Yields:
+            str: очередной фрагмент текста.
+        """
+        if not self.is_loaded:
+            raise RuntimeError("Model not loaded. Call load() first.")
+
+        import threading
+
+        from qwen_omni_utils import process_mm_info
+        from transformers import TextIteratorStreamer
+
+        conversation = _prepare_conversation(conversation, self.family)
+        text = self.processor.apply_chat_template(
+            conversation, add_generation_prompt=True, tokenize=False
+        )
+        audios, images, videos = process_mm_info(conversation, use_audio_in_video=True)
+        inputs = self.processor(
+            text=text,
+            audio=audios,
+            images=images,
+            videos=videos,
+            return_tensors="pt",
+            padding=True,
+            use_audio_in_video=True,
+        )
+        inputs = inputs.to(self.model.device)
+        if self.model.dtype != torch.int8:
+            inputs = inputs.to(self.model.dtype)
+
+        limit = max_new_tokens or settings.max_new_tokens
+        gen_kwargs: dict = {"return_audio": False}
+        if self.family.startswith("qwen3"):
+            gen_kwargs["thinker_return_dict_in_generate"] = True
+            gen_kwargs["max_new_tokens"] = limit
+        else:
+            gen_kwargs["thinker_max_new_tokens"] = limit
+        if temperature is not None:
+            gen_kwargs["temperature"] = temperature
+        gen_kwargs["repetition_penalty"] = settings.repetition_penalty
+
+        streamer = TextIteratorStreamer(
+            self.processor.tokenizer,
+            skip_prompt=True,
+            skip_special_tokens=True,
+        )
+
+        def _run() -> None:
+            with torch.no_grad():
+                self.model.generate(**inputs, streamer=streamer, **gen_kwargs)
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        try:
+            for delta in streamer:
+                if delta:
+                    yield delta
+        finally:
+            thread.join()
+
     def unload(self) -> None:
         """Free GPU memory."""
         if self.model is not None:

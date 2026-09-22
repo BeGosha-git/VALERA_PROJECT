@@ -140,9 +140,15 @@ python client.py --mode voice
 ```bash
 python client.py --mode voice                 # авто-режим (по умолчанию)
 python client.py --mode voice --tts model     # озвучить встроенным голосом Qwen
+python client.py --mode voice --silence 1.5   # сколько тишины = конец фразы (сек)
+python client.py --mode voice --threshold 0.03 # свой порог RMS (по умолч. шум x3)
 python client.py --mode voice --push-to-talk  # старый режим: Enter — запись
 python client.py --mode text                  # текстовый чат
 ```
+
+При старте клиент **сам измеряет шум комнаты** и подбирает порог — видно в строке
+`🎙️ Слушаю… (шум 0.002, порог 0.015)`. Если фраза обрывается слишком рано,
+увеличьте `--silence`; если запись не останавливается — увеличьте `--threshold`.
 
 ## � Установка на другом устройстве (воспроизводимо)
 

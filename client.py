@@ -60,8 +60,9 @@ def record_until_silence(
     max_duration: float = 15.0,
     start_timeout: float = 20.0,
     silence_seconds: float = 1.0,
-    threshold: float = 0.02,
+    threshold: float = None,
     block: float = 0.1,
+    verbose: bool = True,
 ) -> Optional[np.ndarray]:
     """Слушает микрофон и возвращает фразу, как только наступит тишина.
 
@@ -74,8 +75,9 @@ def record_until_silence(
         max_duration: максимум секунд на одну фразу.
         start_timeout: сколько ждать начало речи (сек).
         silence_seconds: сколько тишины считать концом фразы.
-        threshold: порог RMS, ниже которого блок считается тишиной.
+        threshold: порог RMS. None → измерить шум комнаты и взять его x3.
         block: размер блока чтения (сек).
+        verbose: печатать измеренный уровень шума и порог.
 
     Returns:
         numpy-массив с речью или None, если речь так и не началась.
@@ -89,6 +91,9 @@ def record_until_silence(
     silent_run = 0
     started = False
 
+    def rms(x: np.ndarray) -> float:
+        return float(np.sqrt(np.mean(x ** 2))) if x.size else 0.0
+
     with sd.InputStream(
         samplerate=sample_rate,
         channels=1,
@@ -96,10 +101,23 @@ def record_until_silence(
         device=device,
         blocksize=block_size,
     ) as stream:
+        # Калибровка под конкретный микрофон: порог не должен зависеть от
+        # того, что в комнате шумно или включён автоматический усилитель.
+        if threshold is None:
+            calibration = [rms(stream.read(block_size)[0].flatten()) for _ in range(5)]
+            noise = float(np.median(calibration)) if calibration else 0.0
+            threshold = max(0.015, noise * 3.0)
+            if verbose:
+                print(
+                    f" (шум {noise:.3f}, порог {threshold:.3f})",
+                    end="",
+                    flush=True,
+                )
+
         for i in range(start_blocks + max_blocks):
             data, _ = stream.read(block_size)
             mono = data.flatten()
-            level = float(np.sqrt(np.mean(mono ** 2))) if mono.size else 0.0
+            level = rms(mono)
 
             if not started:
                 if level >= threshold:
@@ -218,6 +236,8 @@ def voice_mode(
     device: int = None,
     tts_backend: str = None,
     push_to_talk: bool = False,
+    silence_seconds: float = 1.0,
+    threshold: float = None,
 ):
     """Непрерывный голосовой диалог: слушает → сразу отвечает голосом.
 
@@ -229,6 +249,13 @@ def voice_mode(
     """
     print("\n🎧 Голосовой режим: говорите в микрофон, ассистент ответит голосом")
     print(f"   TTS: {tts_backend or 'по настройке сервера (.env)'}")
+    if push_to_talk:
+        print(f"   Режим: нажмите Enter, затем говорите {duration:.0f} с")
+    else:
+        print(
+            f"   Режим: авто (тишина {silence_seconds} с = конец фразы, "
+            f"до {duration:.0f} с на фразу)"
+        )
     print("   Выход — Ctrl+C")
     print("-" * 60)
 
@@ -246,6 +273,8 @@ def voice_mode(
                     sample_rate=sample_rate,
                     device=device,
                     max_duration=duration,
+                    silence_seconds=silence_seconds,
+                    threshold=threshold,
                 )
                 if audio is None:
                     print(" (речи не услышал)")
@@ -266,7 +295,7 @@ def voice_mode(
         print("⏳ Думаю…")
         try:
             result = send_audio(
-                audio, sample_rate, session_id, hint=None, tts_backend=tts_backend
+                audio, sample_rate, session_id, text_hint=None, tts_backend=tts_backend
             )
         except requests.exceptions.ConnectionError:
             print("❌ Нет связи с сервером. Запущен ли python main.py?")
@@ -305,6 +334,10 @@ def main():
                              "или model (встроенный голос Qwen)")
     parser.add_argument("--push-to-talk", action="store_true",
                         help="Старый режим: Enter — запись, вместо авто-определения тишины")
+    parser.add_argument("--silence", type=float, default=1.0,
+                        help="Сколько секунд тишины считать концом фразы (по умолч. 1.0)")
+    parser.add_argument("--threshold", type=float, default=None,
+                        help="Порог RMS для тишины. По умолчанию измеряется шум комнаты x3")
     parser.add_argument("--server", type=str, default="http://localhost:8765",
                         help="API server URL")
 
@@ -349,6 +382,8 @@ def main():
             args.device,
             tts_backend=args.tts,
             push_to_talk=args.push_to_talk,
+            silence_seconds=args.silence,
+            threshold=args.threshold,
         )
 
 

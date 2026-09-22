@@ -51,8 +51,7 @@ class Settings(BaseSettings):
     # Страховка от «монологов»: 400 кадров ≈ 32 с максимум.
     talker_max_new_tokens: int = 400
 
-    # ---- Синтез речи (TTS) ----
-    # Чем озвучивать ответ:
+    # ---- Синтез речи (TTS) ----    # Чем озвучивать ответ:
     #   "russian_tts" (по умолчанию) — Silero v3.1_ru, русский голос, CPU,
     #                  ~2 с на секунду речи и GPU свободен
     #   "model"      — встроенный Talker Qwen2.5-Omni, GPU, ~13 с на секунду речи
@@ -64,6 +63,11 @@ class Settings(BaseSettings):
     temperature: float = 0.6
     top_p: float = 0.95
     top_k: int = 20
+
+    # ---- Нормализация речи (фильтр из ветки PC) ----
+    # ASR часто слышит «МИРЭА» как «мир», «мире», «мирэ». При true заменяем и
+    # обычные падежи слова «мир» — фраза «во всём мире» станет «во всём МИРЭА».
+    mirea_aggressive: bool = False
 
     # ---- Search ----
     search_enabled: bool = True

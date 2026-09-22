@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
@@ -78,6 +79,11 @@ class SileroTTS:
             import torch
 
             t0 = time.time()
+            # Замерено на Jetson AGX Orin: 4 потока — оптимум для Silero
+            # (2 → 4.0 с, 4 → 3.45 с, 8 → 3.75 с на 3.6 с речи).
+            # На GPU этот Silero медленнее (4.5 с): маленькая модель, много
+            # мелких операций, доминирует накладные расходы ядер.
+            torch.set_num_threads(int(os.getenv("VALERA_SILERO_THREADS", "4")))
             importer = torch.package.PackageImporter(str(self.model_path))
             self._model = importer.load_pickle("tts_models", "model")
             self._model.to("cpu")  # CPU освобождает GPU для языковой модели
@@ -171,6 +177,13 @@ class SileroTTS:
         waveform = chunks[0]
         for chunk in chunks[1:]:
             waveform = np.concatenate([waveform, silence, chunk])
+
+        # Пауза В НАЧАЛЕ и в конце: звуковые устройства «съедают» первые
+        # десятки миллисекунд при старте потока, из-за чего речь начиналась
+        # не с первого звука. Свинцовые тишины это лечат.
+        lead_in = np.zeros(int(0.25 * self.native_sr), dtype=np.float32)
+        lead_out = np.zeros(int(0.20 * self.native_sr), dtype=np.float32)
+        waveform = np.concatenate([lead_in, waveform, lead_out])
 
         return _resample(waveform, self.native_sr, settings.sample_rate)
 

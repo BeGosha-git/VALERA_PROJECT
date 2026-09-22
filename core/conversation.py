@@ -29,7 +29,15 @@ class Conversation:
         "or overly structured language. "
         "Your output must consist only of the spoken content you want the "
         "user to hear. Do not include any descriptions of actions, emotions, "
-        "sounds, or voice changes."
+        "sounds, or voice changes. "
+        # Важно для скорости: каждая лишняя фраза — это лишние секунды
+        # генерации и озвучки (на Jetson это дорого).
+        "Answer only what was asked and stop immediately. "
+        "Never end with offers of further help or follow-up questions — "
+        "no phrases like 'если у вас есть ещё вопросы', 'задавайте', "
+        "'обращайтесь', 'чем ещё могу помочь'. "
+        "Do not ask the user questions back. "
+        "Do not add greetings, apologies, or closing remarks."
     )
     history: list[ConversationTurn] = field(default_factory=list)
     max_history: int = 20  # max number of turns to keep

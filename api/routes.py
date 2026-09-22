@@ -31,6 +31,7 @@ from core.audio_io import audio_to_wav_bytes, list_audio_devices, load_audio
 from core.conversation import Conversation, conversation, create_new_conversation
 from core.model import model
 from core.search import search_and_format
+from core.text_filters import is_mirea_related, normalize_mirea
 from core.tts import describe_backend
 from core.tts import describe_backend
 from db.database import db
@@ -217,6 +218,13 @@ async def chat_voice(
     with open(audio_path, "wb") as f:
         f.write(audio_bytes)
 
+    # Нормализация «МИРЭА»: ASR слышит «мир», «мире» и т.п. (фильтр из ветки PC)
+    if text_hint:
+        normalized_hint = normalize_mirea(text_hint)
+        if normalized_hint != text_hint:
+            logger.info(f"МИРЭА-нормализация: {text_hint!r} → {normalized_hint!r}")
+            text_hint = normalized_hint
+
     # Build user message
     user_text = text_hint or ""
 
@@ -340,6 +348,13 @@ async def chat_voice_raw(
         f.write(audio_bytes)
 
     conv.add_user_message(text=text_hint or "", audio_path=str(audio_path))
+
+    # Нормализация «МИРЭА» (фильтр из ветки PC)
+    if text_hint:
+        normalized_hint = normalize_mirea(text_hint)
+        if normalized_hint != text_hint:
+            logger.info(f"МИРЭА-нормализация: {text_hint!r} → {normalized_hint!r}")
+            conv.history[-1].text = normalized_hint
 
     response_text, audio_waveform = model.generate_response(
         conv.to_model_format(), tts_backend=tts_backend

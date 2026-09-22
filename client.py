@@ -140,16 +140,55 @@ def record_until_silence(
     return audio[:keep] if keep < len(audio) else audio
 
 
+_audio_out_warmed = False
+
+
+def warm_up_output(sample_rate: int = 24000):
+    """Прогревает аудиовыход короткой тишиной.
+
+    Первый `sd.play()` открывает поток, и первые десятки миллисекунд звука
+    теряются («звук идёт не с первого звука»). Один холостой прогон решает это.
+    """
+    global _audio_out_warmed
+    if _audio_out_warmed:
+        return
+    try:
+        silence = np.zeros(int(0.2 * sample_rate), dtype=np.float32)
+        _play_raw(silence, sample_rate)
+        _audio_out_warmed = True
+    except Exception as e:
+        print(f"⚠️  Не удалось прогреть аудиовыход: {e}")
+
+
+def _play_raw(audio: np.ndarray, sample_rate: int):
+    """Запускает воспроизведение с большим буфером (меньше потерь в начале)."""
+    try:
+        sd.play(audio, samplerate=sample_rate, blocking=True, latency="high")
+    except TypeError:
+        # старые версии sounddevice не принимают latency
+        sd.play(audio, samplerate=sample_rate, blocking=True)
+    sd.wait()
+
+
 def play_audio(audio: np.ndarray, sample_rate: int = 24000):
     """Play audio through speakers."""
-    if audio.ndim == 1:
-        audio = audio.reshape(-1, 1)
-    max_val = np.max(np.abs(audio))
+    if audio.ndim != 1:
+        audio = audio.reshape(-1)
+    audio = np.asarray(audio, dtype=np.float32)
+
+    max_val = np.max(np.abs(audio)) if audio.size else 0.0
     if max_val > 1.0:
         audio = audio / max_val * 0.95
+
+    # Пауза спереди и сзади: устройство не «съест» начало речи
+    lead_in = np.zeros(int(0.25 * sample_rate), dtype=np.float32)
+    lead_out = np.zeros(int(0.15 * sample_rate), dtype=np.float32)
+    audio = np.concatenate([lead_in, audio, lead_out])
+
+    warm_up_output(sample_rate)
     print("🔊 Playing response...")
-    sd.play(audio, samplerate=sample_rate)
-    sd.wait()
+    _play_raw(audio, sample_rate)
+    sd.stop()
 
 
 def send_text(text: str, session_id: str = None) -> dict:

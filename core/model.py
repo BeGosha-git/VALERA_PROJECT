@@ -21,6 +21,7 @@ import torch
 from loguru import logger
 
 from config import settings
+from core.text_filters import strip_courtesy
 from core.tts import synthesize, tts_uses_model
 
 # префикс в architectures → (класс модели, класс процессора)
@@ -321,8 +322,10 @@ class QwenOmniModel:
         if temperature is not None:
             gen_kwargs["temperature"] = temperature
 
+        t_generate = time.time()
         with torch.no_grad():
             result = self.model.generate(**inputs, **gen_kwargs)
+        t_generated = time.time()
 
         # Семейства возвращают по-разному:
         #   Qwen3-Omni   → (GenerateOutput(.sequences), audio)
@@ -341,6 +344,10 @@ class QwenOmniModel:
             clean_up_tokenization_spaces=False,
         )
         text_response = decoded[0] if isinstance(decoded, list) else decoded
+
+        # Убираем служебные «хвосты» («если у вас есть ещё вопросы, задавайте»):
+        # это экономит и генерацию, и синтез речи.
+        text_response = strip_courtesy(text_response)
 
         # Convert audio tensor to numpy
         audio_waveform = None
@@ -373,7 +380,10 @@ class QwenOmniModel:
         logger.info(
             f"Inference: {elapsed:.2f}s | "
             f"text_len={len(text_response)} | "
-            f"audio_dur={audio_dur:.1f}s"
+            f"audio_dur={audio_dur:.1f}s | "
+            f"фазы: подготовка={t_generate - t0:.2f}s "
+            f"генерация={t_generated - t_generate:.2f}s "
+            f"хвост={time.time() - t_generated:.2f}s"
         )
 
         return text_response, audio_waveform

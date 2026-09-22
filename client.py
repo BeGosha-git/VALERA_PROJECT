@@ -271,13 +271,13 @@ class StreamingPlayer:
 
 def stream_voice(audio: np.ndarray, sample_rate: int, session_id: str = None,
                  tts_backend: str = None, persona: str = None,
-                 chunk_words: int = 4) -> dict:
+                 min_words: int = 3) -> dict:
     """Отправляет голос и играет ответ по мере поступления (не ждёт весь ответ)."""
     buffer = io.BytesIO()
     sf.write(buffer, audio, sample_rate, format="WAV")
     buffer.seek(0)
 
-    data = {"session_id": session_id or "", "chunk_words": str(chunk_words)}
+    data = {"session_id": session_id or "", "chunk_words": str(min_words)}
     if tts_backend:
         data["tts_backend"] = tts_backend
     if persona:
@@ -331,7 +331,7 @@ def stream_voice(audio: np.ndarray, sample_rate: int, session_id: str = None,
     print()
     if first_audio is not None:
         print(f"   🔊 первый звук через {first_audio:.2f} с "
-              f"({chunks} кусков по ~{chunk_words} слова)")
+              f"({chunks} кусков — рез по запятым и точкам)")
     return {"text": full_text, "session_id": session_out}
 
 
@@ -449,7 +449,7 @@ def voice_mode(
     threshold: float = None,
     persona: str = None,
     stream_mode: bool = True,
-    chunk_words: int = 4,
+    min_words: int = 3,
 ):
     """Непрерывный голосовой диалог: слушает → сразу отвечает голосом.
 
@@ -463,7 +463,8 @@ def voice_mode(
     print(f"   TTS: {tts_backend or 'по настройке сервера (.env)'}")
     print(f"   Персона: {'МАТ' if persona == 'mat' else (persona or 'по настройке сервера')}")
     if stream_mode:
-        print(f"   Режим: стриминг — озвучка порциями по {chunk_words} слова")
+        print("   Режим: стриминг — озвучка кусков до ближайшей запятой или точки")
+        print(f"   Минимум слов в куске: {min_words}")
     else:
         print("   Режим: ждать весь ответ (без стриминга)")
     if push_to_talk:
@@ -518,7 +519,7 @@ def voice_mode(
                     session_id,
                     tts_backend=tts_backend,
                     persona=persona,
-                    chunk_words=chunk_words,
+                    min_words=min_words,
                 )
                 continue
 
@@ -570,8 +571,9 @@ def main():
                         help="Порог RMS для тишины. По умолчанию измеряется шум комнаты x3")
     parser.add_argument("--no-stream", action="store_true",
                         help="Не стримить: ждать весь ответ (по умолчанию — стриминг)")
-    parser.add_argument("--chunk-words", type=int, default=4,
-                        help="Сколько слов озвучивать за раз в стриминге (по умолч. 4)")
+    parser.add_argument("--chunk-words", type=int, default=3,
+                        help="Минимум слов в куске озвучки; короче — ждать "
+                             "следующей запятой (по умолч. 3)")
     parser.add_argument("--mat", action="store_true",
                         help="Режим с матом (персона guide_mat)")
     parser.add_argument("--persona", choices=["guide", "mat", "default"], default=None,
@@ -624,7 +626,7 @@ def main():
             threshold=args.threshold,
             persona=args.persona or ("mat" if args.mat else None),
             stream_mode=not args.no_stream,
-            chunk_words=args.chunk_words,
+            min_words=args.chunk_words,
         )
 
 

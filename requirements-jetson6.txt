@@ -98,6 +98,7 @@ multidict==6.9.0
 networkx==3.4.2
 ninja==1.13.2
 numba==0.67.0
+num2words==0.5.14
 numpy==1.26.4
 nvidia-cusparselt-cu12==0.8.1
 oauthlib==3.3.1

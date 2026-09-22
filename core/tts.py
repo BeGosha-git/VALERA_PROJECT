@@ -94,22 +94,109 @@ class SileroTTS:
 
     # --- подготовка текста ------------------------------------------------
     @staticmethod
+    def _ordinal_year(n: int, case: str) -> str:
+        """Порядковое числительное для года в нужном падеже.
+
+        Silero НЕ читает многозначные числа — «в 1958 году» и «в году» звучат
+        одинаково (год просто пропадает). Поэтому числа обязательно пишем
+        словами, причём год — порядковым: «в тысяча девятьсот пятьдесят
+        восьмом году».
+        """
+        from num2words import num2words
+
+        word = num2words(n, to="ordinal", lang="ru")
+        if case == "nom":
+            return word
+        # «восьмой» → «восьмом» (предложный) / «восьмого» (родительный)
+        for end, (gen, prep) in (
+            ("ой", ("ого", "ом")),
+            ("ый", ("ого", "ом")),
+            ("ий", ("его", "ем")),
+        ):
+            if word.endswith(end):
+                return word[: -len(end)] + (prep if case == "prep" else gen)
+        return word
+
+    @staticmethod
     def _normalize_text(text: str) -> str:
-        """Цифры → слова, латиница → кириллица (если установлены пакеты)."""
+        """Числа → слова, латиница → кириллица.
+
+        Нужно для Silero: многозначные цифры он молча пропускает.
+        """
         text = (text or "").strip()
         if not text:
             return ""
 
-        try:  # опционально: num2words
+        try:
             from num2words import num2words
+        except ImportError:
+            num2words = None
 
+        if num2words is not None and not settings.speak_numbers_as_words:
+            num2words = None  # числа словами отключены в настройках
+
+        if num2words is not None:
+            # 0) десятилетия: «в 1990-х годах» → «в тысяча девятьсот девяностых годах»
+            def _decade(m: re.Match) -> str:
+                n = int(m.group(1))
+                word = num2words(n, to="ordinal", lang="ru")  # …девяностый
+                for end, plural in (("ой", "ых"), ("ый", "ых"), ("ий", "их")):
+                    if word.endswith(end):
+                        word = word[: -len(end)] + plural
+                        break
+                return f"{word} {m.group(2)}"
+
+            text = re.sub(
+                r"\b(\d{3,4})\s*-?\s*(?:х|е|ые|ых)\s+(годах|годы|годов|годам)\b",
+                _decade,
+                text,
+                flags=re.IGNORECASE,
+            )
+
+            # 1) годы: «в 1958 году» → «в тысяча девятьсот пятьдесят восьмом году»
+            def _year(m: re.Match) -> str:
+                n, tail = int(m.group(1)), (m.group(2) or "").lower()
+                if tail in ("годы", "годах", "годам", "годов"):
+                    # «в 1990-х годах» — десятилетия, порядковое во мн. ч. сложно,
+                    # берём количественное: главное — чтобы год прозвучал
+                    return f"{num2words(n, lang='ru')} {tail}"
+                if tail in ("году",):
+                    case = "prep"
+                elif tail in ("года", "г.", "гг."):
+                    case = "gen"
+                else:
+                    case = "nom"
+                return f"{SileroTTS._ordinal_year(n, case)} {tail}".strip()
+
+            text = re.sub(
+                r"\b(\d{3,4})\s*-?\s*(году|годы|годов|годах|годам|года|год|гг\.|г\.)",
+                _year,
+                text,
+                flags=re.IGNORECASE,
+            )
+
+            # 2) проценты: «15 %» → «пятнадцать процентов»
+            def _percent(m: re.Match) -> str:
+                n = int(m.group(1))
+                n %= 100
+                if 11 <= n <= 14:
+                    form = "процентов"
+                elif n % 10 == 1:
+                    form = "процент"
+                elif n % 10 in (2, 3, 4):
+                    form = "процента"
+                else:
+                    form = "процентов"
+                return f"{num2words(n, lang='ru')} {form}"
+
+            text = re.sub(r"(\d+)\s*%", _percent, text)
+
+            # 3) остальные числа — количественные
             text = re.sub(
                 r"-?[0-9][0-9,._]*",
                 lambda m: num2words(m.group().replace(",", "."), lang="ru"),
                 text,
             )
-        except ImportError:
-            pass
 
         try:  # опционально: transliterate (Silero не читает латиницу)
             from transliterate import translit

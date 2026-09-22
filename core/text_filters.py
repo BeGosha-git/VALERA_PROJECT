@@ -146,6 +146,110 @@ def is_courtesy_sentence(sentence: str) -> bool:
     return bool(sentence) and _COURTESY_SENTENCE.match(sentence.strip()) is not None
 
 
+# ---------------------------------------------------------------------------
+# Нарезка текста на куски для озвучки
+# ---------------------------------------------------------------------------
+#: Граница куска: запятая/тире/двоеточие/точка с запятой (с пробелом) или
+#: конец предложения (с пробелом либо в самом конце строки).
+_SPEECH_BOUNDARY = re.compile(r"[,\u2014;:]\s+|[.!?\u2026](?=\s|$)")
+#: Знак конца предложения
+_SENTENCE_TERMINATOR = re.compile(r"[.!?\u2026]\s*$")
+#: Слова вместе с разделителем — чтобы не резать слово пополам
+_COMPLETE_WORD = re.compile(r"\S+\s+")
+#: Деление текста на предложения (с сохранением знака в конце)
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?\u2026])\s+")
+
+
+def split_speech_chunks(
+    text: str,
+    min_words: int = 3,
+    max_words: int = 25,
+    keep_words: int = 2,
+) -> tuple[list[str], str]:
+    """Режет текст на куски для озвучки **по ближайшей запятой или точке**.
+
+    Args:
+        text: накопленный текст ответа.
+        min_words: не отдавать кусок короче — ждать следующей запятой
+            (одно-двухсловные куски звучат рвано).
+        max_words: предохранитель — если пунктуации долго нет, резать принудительно.
+        keep_words: сколько слов оставить в остатке при принудительном резе.
+
+    Returns:
+        ``(chunks, rest)`` — готовые куски и остаток буфера.
+    """
+    chunks: list[str] = []
+    buf = text
+
+    while True:
+        match = _SPEECH_BOUNDARY.search(buf)
+        if not match:
+            break
+
+        candidate = buf[: match.end()].strip()
+        rest = buf[match.end():]
+
+        if not candidate:
+            buf = rest
+            continue
+
+        # Служебные фразы («если есть вопросы, спрашивай») не озвучиваем:
+        # пока предложение не закончилось — просто ждём, а законченное — выкидываем
+        if is_courtesy_sentence(candidate):
+            if _SENTENCE_TERMINATOR.search(candidate):
+                buf = rest
+                continue
+            break
+
+        # Кусок слишком короткий и это не конец предложения — берём до
+        # следующей границы (иначе на «Я Валера, гид…» буфер застрянет)
+        end_of_sentence = bool(_SENTENCE_TERMINATOR.search(candidate))
+        if not end_of_sentence and len(_COMPLETE_WORD.findall(candidate)) < min_words:
+            nxt = _SPEECH_BOUNDARY.search(buf, match.end())
+            if not nxt:
+                break  # ждём ещё текста
+            wider = buf[: nxt.end()].strip()
+            if is_courtesy_sentence(wider):
+                if _SENTENCE_TERMINATOR.search(wider):
+                    buf = buf[nxt.end():]
+                    continue
+                break
+            candidate, rest = wider, buf[nxt.end():]
+
+        chunks.append(candidate)
+        buf = rest
+
+    # Предохранитель: пунктуации нет слишком долго
+    words = _COMPLETE_WORD.findall(buf)
+    if len(words) > max_words:
+        take = len(words) - keep_words
+        head = "".join(words[:take])
+        chunks.append(head.strip())
+        buf = buf[len(head):].lstrip()
+
+    return chunks, buf
+
+
+def split_courtesy_tail(text: str) -> str:
+    """Хвост ответа для озвучки: без служебных предложений в начале.
+
+    В отличие от :func:`strip_courtesy` не бросает короткий остаток: если после
+    выкидывания служебной фразы ничего не осталось — вернёт пустую строку, а
+    иначе — только полезный текст.
+    """
+    text = (text or "").strip()
+    if not text:
+        return ""
+    parts = [p.strip() for p in _SENTENCE_SPLIT.split(text) if p.strip()]
+    if not parts:
+        return text
+    # Выкидываем служебные предложения, но только если останется что сказать
+    kept = [p for p in parts if not is_courtesy_sentence(p)]
+    if not kept:
+        return ""
+    return " ".join(kept).strip()
+
+
 _LATIN_WORD = re.compile(r"[A-Za-z]{3,}")
 _CYRILLIC = re.compile(r"[А-Яа-яЁё]")
 

@@ -69,17 +69,26 @@ def _prepare_conversation(conversation: list[dict], family: str) -> list[dict]:
 
     prepared = prepared + messages
 
-    # ТЕГ ЗАПРЕТА АНГЛИЙСКОГО. Одной персоны модели мало — напоминание прямо
-    # перед репликой пользователя действует заметно сильнее (и работает даже
-    # в стриминге, где повтор невозможен: текст уже озвучен).
+    # ТЕГ ЗАПРЕТА АНГЛИЙСКОГО + правила краткости/чисел. Одной персоны модели
+    # мало — напоминание прямо перед репликой пользователя действует заметно
+    # сильнее (и работает даже в стриминге, где повтор невозможен: текст уже
+    # озвучен).
     if settings.russian_only:
-        reminder = "Отвечай только по-русски."
+        reminder = (
+            "Отвечай только по-русски. "
+            "Числа пиши СЛОВАМИ, а не цифрами (не «1958», а «тысяча девятьсот "
+            "пятьдесят восемь»). "
+            "Кратко, по делу. "
+            "Не заканчивай ответ предложением о помощи и не задавай вопросов в "
+            "конце — никаких «если есть вопросы, обращайтесь», «я помогу вам», "
+            "«спрашивайте». Ответил — остановился."
+        )
         for i in range(len(prepared) - 1, -1, -1):
             if prepared[i].get("role") == "user":
                 content = prepared[i].get("content") or []
                 for part in content:
                     if isinstance(part, dict) and part.get("type") == "text":
-                        if reminder not in part.get("text", ""):
+                        if "Числа пиши СЛОВАМИ" not in part.get("text", ""):
                             part["text"] = f"{part.get('text', '')}\n\n{reminder}"
                         break
                 else:
@@ -392,7 +401,11 @@ class QwenOmniModel:
         # Убираем служебные «хвосты» («если у вас есть ещё вопросы, задавайте»):
         # это экономит и генерацию, и синтез речи. Заодно приводим написание
         # университета к «МИРЭА» — модель часто пишет «МИРЕА».
-        text_response = strip_courtesy(text_response)
+        # Нормализация написания (МИРЕА → МИРЭА).
+        # Обрезка концовок ВЫКЛЮЧЕНА по умолчанию: текст ИИ отдаётся целиком,
+        # краткость задаёт промпт (включается settings.strip_courtesy).
+        if settings.strip_courtesy:
+            text_response = strip_courtesy(text_response)
         text_response = normalize_mirea(text_response)
 
         # Convert audio tensor to numpy

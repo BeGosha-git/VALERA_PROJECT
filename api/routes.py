@@ -37,9 +37,10 @@ from core.conversation import Conversation, conversation, create_new_conversatio
 from core.model import model
 from core.search import search_and_format
 from core.text_filters import (
-    is_courtesy_sentence,
     is_mirea_related,
     normalize_mirea,
+    split_courtesy_tail,
+    split_speech_chunks,
     strip_courtesy,
 )
 from core.tts import describe_backend, synthesize
@@ -420,12 +421,8 @@ async def chat_voice_raw(
 # Streaming: текст + озвучка порциями (клиент слышит первые слова через ~1 с)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-#: Предложение закончилось (по нему решаем, не служебное ли оно)
-_SENTENCE_END = re.compile(r"(?<=[.!?…])\s")
-#: Буфер заканчивается законченным предложением
-_SENTENCE_DONE = re.compile(r"[.!?…]\s*$")
-#: Слова вместе с разделителем — чтобы не озвучивать обрывок слова
-_COMPLETE_WORD = re.compile(r"\S+\s+")
+#: Нарезка кусков живёт в core.text_filters (split_speech_chunks):
+#: рез идёт по ближайшей запятой/точке, а не по числу слов.
 
 
 def _sse(payload: dict) -> str:
@@ -441,10 +438,10 @@ async def chat_voice_stream(
     tts_backend: Optional[str] = Form(None),
     persona: Optional[str] = Form(None),
     chunk_words: int = Form(
-        4, description="Сколько слов озвучивать в первом куске (быстрый старт)"
+        3, description="Минимум слов в куске озвучки (короче — ждём следующей запятой)"
     ),
     tail_words: int = Form(
-        10, description="Размер следующих кусков озвучки (плавнее интонация)"
+        25, description="Предохранитель: если запятых долго нет, резать по стольким словам"
     ),
 ):
     """Голос → поток текста + озвучка порциями.
@@ -453,7 +450,7 @@ async def chat_voice_stream(
 
     * ``{"type": "text", "delta": "..."}``  — фрагмент текста ответа
     * ``{"type": "audio", "seq": N, "wav": "<base64>", "text": "..."}``
-      — озвученный кусок (~``chunk_words`` слов), готов к немедленному проигрыванию
+      — озвученный кусок (до ближайшей запятой или точки), готов к проигрыванию
     * ``{"type": "done", "text": "..."}``   — полный текст ответа
 
     Смысл: не ждать весь ответ (~2-6 с), а начинать говорить почти сразу —
@@ -476,14 +473,13 @@ async def chat_voice_stream(
     conv.add_user_message(text=text_hint or "", audio_path=str(audio_path))
     messages = conv.to_model_format()
 
-    chunk_words = max(1, min(int(chunk_words or 4), 50))
-    tail_words = max(chunk_words, min(int(tail_words or 10), 80))
+    min_words = max(1, min(int(chunk_words or 3), 50))
+    tail_words = max(min_words, min(int(tail_words or 25), 100))
 
     async def event_stream():
         t0 = time.time()
         full_text = ""        # всё, что сказала модель (для истории)
         speak_buffer = ""     # текст, накопленный для озвучки
-        sentence_buffer = ""  # текст для поиска конца предложения
         seq = 0
         first_audio_ms = None
 
@@ -519,62 +515,15 @@ async def chat_voice_stream(
                 full_text += delta
                 yield _sse({"type": "text", "delta": delta})
 
-                sentence_buffer += delta
+                speak_buffer += delta
 
-                # Отрезаем по одному готовому предложению за раз
-                while True:
-                    parts = _SENTENCE_END.split(sentence_buffer, maxsplit=1)
-                    if len(parts) < 2:
-                        # Последнее предложение в ответе не имеет пробела после
-                        # точки, поэтому отдельно проверяем «буфер заканчивается
-                        # знаком конца»
-                        if _SENTENCE_DONE.search(sentence_buffer):
-                            sentence, sentence_buffer = sentence_buffer, ""
-                            sentence = sentence.strip()
-                            if sentence and not is_courtesy_sentence(sentence):
-                                speak_buffer = f"{speak_buffer} {sentence}".strip()
-                        break
-                    sentence, sentence_buffer = parts[0], parts[1]
-                    sentence = sentence.strip()
-                    # Служебные фразы («если есть вопросы, спрашивай») не озвучиваем
-                    if sentence and not is_courtesy_sentence(sentence):
-                        speak_buffer = f"{speak_buffer} {sentence}".strip()
-
-                # Длинное предложение начинает звучать, не дожидаясь точки:
-                # иначе ответ из одной фразы озвучивался бы только в самом конце.
-                # Последние chunk_words слов остаются в буфере, чтобы никогда
-                # не озвучить недописанное слово.
-                buf_words = _COMPLETE_WORD.findall(sentence_buffer)
-                if len(buf_words) >= chunk_words * 2:
-                    head = "".join(buf_words[: len(buf_words) - chunk_words])
-                    sentence_buffer = sentence_buffer[len(head):].lstrip()
-                    speak_buffer = f"{speak_buffer} {head.strip()}".strip()
-
-                # Озвучиваем порциями. Первый кусок — маленький (чтобы звук
-                # пошёл почти сразу), дальше крупнее: Silero синтезирует каждый
-                # кусок заново, и на 4 словах интонация рвётся.
-                # Законченное предложение озвучиваем сразу, не дожидаясь
-                # накопления tail_words — так интонация естественнее.
-                while True:
-                    need = chunk_words if seq == 0 else tail_words
-                    words = _COMPLETE_WORD.findall(speak_buffer)
-                    sentence_done = bool(_SENTENCE_DONE.search(speak_buffer))
-                    if len(words) < chunk_words:
-                        break
-                    if len(words) < need and not sentence_done:
-                        break
-                    # Первый кусок — строго chunk_words слов: Silero синтезирует
-                    # ~2 с на каждую секунду речи, и чем короче первый кусок,
-                    # тем раньше звучит ответ.
-                    if seq == 0:
-                        take = min(len(words), chunk_words)
-                    else:
-                        take = len(words) if sentence_done else need
-                    taken = "".join(words[:take])
-                    chunk = taken.strip()
-                    speak_buffer = speak_buffer[len(taken):].lstrip()
-                    if not chunk:
-                        continue
+                # Режем на куски по БЛИЖАЙШЕЙ запятой или точке (а не по числу
+                # слов): так интонация Silero звучит естественнее, а запятые
+                # приходят достаточно часто, чтобы речь не задерживалась.
+                ready, speak_buffer = split_speech_chunks(
+                    speak_buffer, min_words=min_words, max_words=tail_words
+                )
+                for chunk in ready:
                     try:
                         # Silero — CPU-задача, уводим её из event loop
                         wav = await asyncio.to_thread(synthesize, chunk)
@@ -593,11 +542,13 @@ async def chat_voice_stream(
                     except Exception as exc:  # озвучка не должна рвать поток
                         logger.error(f"Ошибка озвучки фрагмента: {exc}")
 
-            # Хвост: сначала остаток озвучки, потом незакрытое предложение
-            # (порядок важен — иначе слова в озвучке перепутаются)
-            tail = f"{speak_buffer} {sentence_buffer}".strip()
-            tail_parts = [p.strip() for p in _SENTENCE_END.split(tail) if p.strip()]
-            tail = " ".join(p for p in tail_parts if not is_courtesy_sentence(p))
+            # Хвост: по умолчанию озвучиваем целиком (текст НЕ режется,
+            # краткость задаёт промпт); при settings.strip_courtesy — без концовок
+            tail = (
+                split_courtesy_tail(speak_buffer)
+                if settings.strip_courtesy
+                else speak_buffer.strip()
+            )
             if tail:
                 try:
                     wav = await asyncio.to_thread(synthesize, tail)
@@ -612,7 +563,9 @@ async def chat_voice_stream(
                 except Exception as exc:
                     logger.error(f"Ошибка озвучки хвоста: {exc}")
 
-            final_text = strip_courtesy(normalize_mirea(full_text))
+            final_text = normalize_mirea(full_text)
+            if settings.strip_courtesy:
+                final_text = strip_courtesy(final_text)
             conv.add_assistant_message(text=final_text)
             elapsed = time.time() - t0
             logger.info(

@@ -44,14 +44,24 @@ router = APIRouter()
 sessions: dict[str, Conversation] = {"default": conversation}
 
 
-def get_or_create_session(session_id: Optional[str]) -> tuple[str, Conversation]:
-    """Get existing session or create a new one."""
+def get_or_create_session(
+    session_id: Optional[str], persona: Optional[str] = None
+) -> tuple[str, Conversation]:
+    """Get existing session or create a new one.
+
+    ``persona`` переключает персону на лету ("mat" — режим с матом).
+    """
     if session_id and session_id in sessions:
-        return session_id, sessions[session_id]
+        conv = sessions[session_id]
+        if persona:
+            conv.apply_persona(persona)
+        return session_id, conv
 
     new_id = session_id or str(uuid.uuid4())[:8]
     if new_id not in sessions:
         sessions[new_id] = create_new_conversation()
+    if persona:
+        sessions[new_id].apply_persona(persona)
     return new_id, sessions[new_id]
 
 
@@ -110,21 +120,25 @@ async def chat_text(req: TextRequest):
     if not model.is_loaded:
         raise HTTPException(status_code=503, detail="Model not loaded yet.")
 
-    session_id, conv = get_or_create_session(req.session_id)
+    session_id, conv = get_or_create_session(req.session_id, req.persona)
 
     # 1. RAG: search uploaded documents
     doc_context = ""
     rag_used = False
     if settings.rag_enabled:
+        _t0 = time.time()
         doc_context = search_documents_formatted(req.text, settings.rag_top_k)
         rag_used = bool(doc_context)
+        logger.info(f"Поиск по БД: {time.time() - _t0:.2f}s (найдено: {rag_used})")
 
     # 2. Internet search if enabled and query looks like a search
     search_context = ""
     search_used = False
     if req.enable_search and _is_search_query(req.text):
+        _t0 = time.time()
         search_context = search_and_format(req.text)
         search_used = True
+        logger.info(f"Поиск в интернете: {time.time() - _t0:.2f}s")
 
     # Build user message with optional contexts
     user_text = req.text
@@ -198,6 +212,9 @@ async def chat_voice(
     tts_backend: Optional[str] = Form(
         None, description="russian_tts (Silero, по умолчанию) или model"
     ),
+    persona: Optional[str] = Form(
+        None, description="guide (по умолч.), mat — с матом, default"
+    ),
 ):
     """Send audio message, get text + audio response.
 
@@ -206,7 +223,7 @@ async def chat_voice(
     if not model.is_loaded:
         raise HTTPException(status_code=503, detail="Model not loaded yet.")
 
-    session_id, conv = get_or_create_session(session_id)
+    session_id, conv = get_or_create_session(session_id, persona)
 
     # Save uploaded audio
     audio_dir = settings.data_dir / "audio"
@@ -333,12 +350,15 @@ async def chat_voice_raw(
     tts_backend: Optional[str] = Form(
         None, description="russian_tts (Silero, по умолчанию) или model"
     ),
+    persona: Optional[str] = Form(
+        None, description="guide (по умолч.), mat — с матом, default"
+    ),
 ):
     """Send audio, get raw WAV audio bytes back. For programmatic use."""
     if not model.is_loaded:
         raise HTTPException(status_code=503, detail="Model not loaded yet.")
 
-    session_id, conv = get_or_create_session(session_id)
+    session_id, conv = get_or_create_session(session_id, persona)
 
     audio_bytes = await audio.read()
     audio_dir = settings.data_dir / "audio"

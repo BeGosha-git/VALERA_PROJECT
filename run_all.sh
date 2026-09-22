@@ -38,7 +38,9 @@ mkdir -p "$LOG_DIR" 2>/dev/null || LOG_MODEL=/tmp/server.log
 
 export VALERA_API_BASE="$API_BASE"
 export VALERA_TIMEOUT="${VALERA_TIMEOUT:-600}"
-export VALERA_MODEL_NAME_OR_PATH="${VALERA_MODEL_NAME_OR_PATH:-Qwen/Qwen2.5-Omni-7B}"
+# ВАЖНО: VALERA_MODEL_NAME_OR_PATH здесь НЕ задаём — экспорт переменной
+# перебивает значение из .env (pydantic-settings ставит env выше файла),
+# и смена модели в .env переставала работать.
 export QDRANT_LOCAL_PATH="${QDRANT_LOCAL_PATH:-$WEBRAGENT_DIR/data/qdrant_storage}"
 export EMBEDDING_DEVICE="${EMBEDDING_DEVICE:-cpu}"
 export FLASK_SECRET_KEY="${FLASK_SECRET_KEY:-valera-local-dev-key}"

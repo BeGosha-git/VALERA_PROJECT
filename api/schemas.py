@@ -13,6 +13,9 @@ class TextRequest(BaseModel):
     text: str = Field(..., description="User text message")
     session_id: Optional[str] = Field(None, description="Session ID for multi-turn")
     enable_search: bool = Field(True, description="Enable internet search")
+    persona: Optional[str] = Field(
+        None, description="Персона: guide (по умолч.), mat — с матом, default"
+    )
 
 
 class AudioResponse(BaseModel):

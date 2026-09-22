@@ -21,7 +21,8 @@ import torch
 from loguru import logger
 
 from config import settings
-from core.text_filters import strip_courtesy
+from core.personas import get_qwen_canonical_prompt
+from core.text_filters import normalize_mirea, strip_courtesy
 from core.tts import synthesize, tts_uses_model
 
 # префикс в architectures → (класс модели, класс процессора)
@@ -34,14 +35,12 @@ MODEL_FAMILIES: dict[str, tuple[str, str]] = {
 # Qwen2.5-Omni синтезирует голос ТОЛЬКО если первым сообщением идёт ИМЕННО этот
 # системный промпт (проверка: transformers/models/qwen2_5_omni/
 # processing_qwen2_5_omni.py:330). Персона ассистента добавляется ВТОРЫМ
-# system-сообщением — шаблон это допускает и предупреждения не выдаёт.
-QWEN25_OMNI_SYSTEM_PROMPT = (
-    "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, "
-    "capable of perceiving auditory and visual inputs, as well as generating "
-    "text and speech."
-)
-
-
+# system-сообщением — шаблон это допускает.
+#
+# ВАЖНО: язык речи Talker'а задаётся языком этого промпта. Для русского
+# ответа нужен русский вариант (см. core/personas.py,
+# VALERA_QWEN_SPEECH_RUSSIAN). Процессор при этом печатает предупреждение
+# «System prompt modified» — это только предупреждение, озвучка работает.
 def _prepare_conversation(conversation: list[dict], family: str) -> list[dict]:
     """Подгоняет сообщения под требования семейства модели.
 
@@ -62,7 +61,7 @@ def _prepare_conversation(conversation: list[dict], family: str) -> list[dict]:
     prepared = [
         {
             "role": "system",
-            "content": [{"type": "text", "text": QWEN25_OMNI_SYSTEM_PROMPT}],
+            "content": [{"type": "text", "text": get_qwen_canonical_prompt()}],
         }
     ]
     if persona:
@@ -321,6 +320,8 @@ class QwenOmniModel:
             gen_kwargs["talker_max_new_tokens"] = settings.talker_max_new_tokens
         if temperature is not None:
             gen_kwargs["temperature"] = temperature
+        # Защита от зацикливания — модель без штрафа повторяет одну фразу
+        gen_kwargs["repetition_penalty"] = settings.repetition_penalty
 
         t_generate = time.time()
         with torch.no_grad():
@@ -345,9 +346,15 @@ class QwenOmniModel:
         )
         text_response = decoded[0] if isinstance(decoded, list) else decoded
 
+        # Сколько токенов реально сгенерировано (до обрезки хвостов) — по этой
+        # цифре видно, тратится ли время на служебные фразы.
+        gen_tokens = int(sequences.shape[1] - inputs["input_ids"].shape[1])
+
         # Убираем служебные «хвосты» («если у вас есть ещё вопросы, задавайте»):
-        # это экономит и генерацию, и синтез речи.
+        # это экономит и генерацию, и синтез речи. Заодно приводим написание
+        # университета к «МИРЭА» — модель часто пишет «МИРЕА».
         text_response = strip_courtesy(text_response)
+        text_response = normalize_mirea(text_response)
 
         # Convert audio tensor to numpy
         audio_waveform = None
@@ -381,6 +388,7 @@ class QwenOmniModel:
             f"Inference: {elapsed:.2f}s | "
             f"text_len={len(text_response)} | "
             f"audio_dur={audio_dur:.1f}s | "
+            f"токенов={gen_tokens} ({gen_tokens / max(elapsed, 1e-6):.1f} ток/с) | "
             f"фазы: подготовка={t_generate - t0:.2f}s "
             f"генерация={t_generated - t_generate:.2f}s "
             f"хвост={time.time() - t_generated:.2f}s"

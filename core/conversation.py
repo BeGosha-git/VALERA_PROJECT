@@ -5,6 +5,8 @@ from typing import Optional
 
 import numpy as np
 
+from core.personas import get_system_prompt
+
 
 @dataclass
 class ConversationTurn:
@@ -19,28 +21,19 @@ class ConversationTurn:
 class Conversation:
     """Manages conversation history in Qwen3-Omni chat format."""
 
-    system_prompt: str = (
-        "You are Valera, a smart voice assistant created for personal use. "
-        "You are a helpful, friendly, and concise voice assistant. "
-        "You communicate with the user in Russian. "
-        "Interact with users using short (no more than 50 words), brief, "
-        "straightforward language, maintaining a natural conversational tone. "
-        "Never use formal phrasing, mechanical expressions, bullet points, "
-        "or overly structured language. "
-        "Your output must consist only of the spoken content you want the "
-        "user to hear. Do not include any descriptions of actions, emotions, "
-        "sounds, or voice changes. "
-        # Важно для скорости: каждая лишняя фраза — это лишние секунды
-        # генерации и озвучки (на Jetson это дорого).
-        "Answer only what was asked and stop immediately. "
-        "Never end with offers of further help or follow-up questions — "
-        "no phrases like 'если у вас есть ещё вопросы', 'задавайте', "
-        "'обращайтесь', 'чем ещё могу помочь'. "
-        "Do not ask the user questions back. "
-        "Do not add greetings, apologies, or closing remarks."
-    )
+    # Персона берётся из .env (см. core/personas.py):
+    # VALERA_PERSONA_MODE=guide|mat|default
+    system_prompt: str = field(default_factory=get_system_prompt)
+    persona_mode: str = ""
     history: list[ConversationTurn] = field(default_factory=list)
     max_history: int = 20  # max number of turns to keep
+
+    def apply_persona(self, mode: str | None) -> None:
+        """Меняет персону на лету (например, переключение режима с матом)."""
+        if not mode:
+            return
+        self.persona_mode = mode
+        self.system_prompt = get_system_prompt(mode)
 
     def add_user_message(
         self, text: Optional[str] = None, audio_path: Optional[str] = None

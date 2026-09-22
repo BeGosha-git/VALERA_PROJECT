@@ -269,6 +269,32 @@ async def lifespan(app: FastAPI):
         logger.warning("Server will start but model is not loaded.")
         logger.warning("Call POST /admin/reload to retry.")
 
+    # Прогрев: первый запрос не должен платить за загрузку моделей.
+    # Без прогрева первый поиск по базе занимал ~6 с (загрузка эмбеддингов),
+    # а первый синтез — ~1 с (загрузка Silero).
+    import time as _time
+
+    try:
+        from db.documents import search_documents_formatted
+
+        _t0 = _time.time()
+        search_documents_formatted("прогрев", top_k=1)
+        logger.info(f"✓ Эмбеддинги прогреты за {_time.time() - _t0:.1f} с")
+    except Exception as e:  # прогрев не должен мешать запуску
+        logger.warning(f"Не удалось прогреть поиск: {e}")
+
+    try:
+        from core.tts import tts_uses_model
+
+        if not tts_uses_model():
+            from core.tts import get_silero
+
+            _t0 = _time.time()
+            get_silero()._ensure_loaded()
+            logger.info(f"✓ Silero TTS прогрет за {_time.time() - _t0:.1f} с")
+    except Exception as e:
+        logger.warning(f"Не удалось прогреть TTS: {e}")
+
     yield
 
     # Shutdown

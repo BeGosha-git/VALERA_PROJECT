@@ -191,19 +191,20 @@ def play_audio(audio: np.ndarray, sample_rate: int = 24000):
     sd.stop()
 
 
-def send_text(text: str, session_id: str = None) -> dict:
+def send_text(text: str, session_id: str = None, persona: str = None) -> dict:
     """Send text to API."""
-    resp = requests.post(
-        f"{API_BASE}/chat/text",
-        json={"text": text, "session_id": session_id, "enable_search": True},
-    )
+    payload = {"text": text, "session_id": session_id, "enable_search": True}
+    if persona:
+        payload["persona"] = persona
+    resp = requests.post(f"{API_BASE}/chat/text", json=payload)
     resp.raise_for_status()
     return resp.json()
 
 
 def send_audio(audio: np.ndarray, sample_rate: int, session_id: str = None,
                text_hint: str = None,
-               tts_backend: str = None) -> dict:
+               tts_backend: str = None,
+               persona: str = None) -> dict:
     """Send audio to API and get response."""
     # Save to temporary WAV
     buffer = io.BytesIO()
@@ -217,6 +218,9 @@ def send_audio(audio: np.ndarray, sample_rate: int, session_id: str = None,
     if tts_backend:
         # "russian_tts" (Silero, по умолчанию на сервере) или "model" (Talker Qwen)
         data["tts_backend"] = tts_backend
+    if persona:
+        # "guide" (по умолчанию) или "mat" — с матом
+        data["persona"] = persona
 
     resp = requests.post(
         f"{API_BASE}/chat/voice/raw",
@@ -238,9 +242,10 @@ def send_audio(audio: np.ndarray, sample_rate: int, session_id: str = None,
     }
 
 
-def text_mode(session_id: str = None):
+def text_mode(session_id: str = None, persona: str = None):
     """Interactive text chat mode."""
     print("\n💬 Text Chat Mode (type 'quit' to exit, 'new' for new session)")
+    print(f"   Персона: {persona or 'по настройке сервера (.env)'}")
     print("-" * 50)
 
     while True:
@@ -260,7 +265,7 @@ def text_mode(session_id: str = None):
             print("🆕 New session started.")
             continue
 
-        result = send_text(text, session_id)
+        result = send_text(text, session_id, persona=persona)
         session_id = result["session_id"]
         print(f"\n🤖 Valera: {result['text']}")
         print(f"   ⏱️  {result['inference_time_ms']:.0f}ms", end="")
@@ -277,6 +282,7 @@ def voice_mode(
     push_to_talk: bool = False,
     silence_seconds: float = 1.0,
     threshold: float = None,
+    persona: str = None,
 ):
     """Непрерывный голосовой диалог: слушает → сразу отвечает голосом.
 
@@ -288,6 +294,7 @@ def voice_mode(
     """
     print("\n🎧 Голосовой режим: говорите в микрофон, ассистент ответит голосом")
     print(f"   TTS: {tts_backend or 'по настройке сервера (.env)'}")
+    print(f"   Персона: {'МАТ' if persona == 'mat' else (persona or 'по настройке сервера')}")
     if push_to_talk:
         print(f"   Режим: нажмите Enter, затем говорите {duration:.0f} с")
     else:
@@ -334,7 +341,8 @@ def voice_mode(
         print("⏳ Думаю…")
         try:
             result = send_audio(
-                audio, sample_rate, session_id, text_hint=None, tts_backend=tts_backend
+                audio, sample_rate, session_id,
+                text_hint=None, tts_backend=tts_backend, persona=persona,
             )
         except requests.exceptions.ConnectionError:
             print("❌ Нет связи с сервером. Запущен ли python main.py?")
@@ -377,6 +385,10 @@ def main():
                         help="Сколько секунд тишины считать концом фразы (по умолч. 1.0)")
     parser.add_argument("--threshold", type=float, default=None,
                         help="Порог RMS для тишины. По умолчанию измеряется шум комнаты x3")
+    parser.add_argument("--mat", action="store_true",
+                        help="Режим с матом (персона guide_mat)")
+    parser.add_argument("--persona", choices=["guide", "mat", "default"], default=None,
+                        help="Персона: guide (по умолч.), mat — с матом, default")
     parser.add_argument("--server", type=str, default="http://localhost:8765",
                         help="API server URL")
 
@@ -412,7 +424,7 @@ def main():
         sys.exit(1)
 
     if args.mode == "text":
-        text_mode()
+        text_mode(persona=args.persona or ("mat" if args.mat else None))
     else:
         list_devices()
         voice_mode(
@@ -423,6 +435,7 @@ def main():
             push_to_talk=args.push_to_talk,
             silence_seconds=args.silence,
             threshold=args.threshold,
+            persona=args.persona or ("mat" if args.mat else None),
         )
 
 

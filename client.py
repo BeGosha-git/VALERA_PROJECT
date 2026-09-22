@@ -228,10 +228,44 @@ class StreamingPlayer:
         self._stream = None
         self._thread: Optional[threading.Thread] = None
         self.played = 0
+        self._eof = threading.Event()   # аудио кончилось (дошли до None)
+        self._current: Optional[np.ndarray] = None
+        self._pos = 0
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+
+    def _callback(self, outdata, frames, time_info, status) -> None:
+        """Отдаёт звук, а на простое — ЧИСТУЮ ТИШИНУ.
+
+        Раньше поток оставался без данных между кусками (сервер ещё
+        синтезировал следующий фрагмент), и ALSA писала
+        «pcm.c: underrun occurred» — буфер успевал опустеть. Callback всегда
+        заполняет буфер полностью, поэтому предупреждение исчезает, а пауза
+        превращается в ровную тишину вместо щелчка/обрыва.
+        """
+        out = outdata[:, 0]
+        written = 0
+        while written < frames:
+            if self._current is None:
+                try:
+                    self._current = self.queue.get_nowait()
+                except queue.Empty:
+                    break          # данных пока нет — добираем тишиной
+                if self._current is None:   # сигнал конца
+                    self._eof.set()
+                    break
+                self._pos = 0
+            chunk = self._current
+            take = min(frames - written, len(chunk) - self._pos)
+            out[written:written + take] = chunk[self._pos:self._pos + take]
+            self._pos += take
+            written += take
+            if self._pos >= len(chunk):
+                self._current = None
+        if written < frames:
+            out[written:] = 0.0
 
     def _run(self) -> None:
         try:
@@ -240,32 +274,32 @@ class StreamingPlayer:
                 channels=1,
                 dtype="float32",
                 latency="high",
+                callback=self._callback,
             ) as stream:
                 self._stream = stream
-                while True:
-                    item = self.queue.get()
-                    if item is None:  # конец
-                        break
-                    stream.write(item)
+                # ждём сигнал «всё отдано» и даём буферу устройства доиграть
+                self._eof.wait(timeout=180)
+                latency = float(getattr(stream, "latency", 0.2) or 0.2)
+                time.sleep(latency + 0.15)
         except Exception as exc:  # noqa: BLE001
             print(f"⚠️  Ошибка воспроизведения: {exc}")
 
     def add(self, audio: np.ndarray) -> None:
-        """Ставит кусок в очередь (с небольшим запасом тишины для слитности)."""
+        """Ставит кусок в очередь (с микропаузой, чтобы куски не щёлкали)."""
         if audio is None or not len(audio):
             return
         audio = np.asarray(audio, dtype=np.float32).reshape(-1)
         max_val = float(np.max(np.abs(audio)))
         if max_val > 1.0:
             audio = audio / max_val * 0.95
-        pad = np.zeros(int(0.06 * self.sample_rate), dtype=np.float32)
+        pad = np.zeros(int(0.03 * self.sample_rate), dtype=np.float32)
         self.queue.put(np.concatenate([audio, pad]))
         self.played += 1
 
     def finish(self) -> None:
         self.queue.put(None)
         if self._thread:
-            self._thread.join()
+            self._thread.join(timeout=200)
         sd.stop()
 
 

@@ -252,6 +252,15 @@ def split_courtesy_tail(text: str) -> str:
 
 _LATIN_WORD = re.compile(r"[A-Za-z]{3,}")
 _CYRILLIC = re.compile(r"[А-Яа-яЁё]")
+#: Иероглифы (китайский/японский/корейский) и полноширинные знаки. Qwen
+#: иногда роняет их в русский ответ — например «бытовые电器». Для диктора
+#: это нечитаемый мусор, поэтому такой ответ считается «не русским».
+_CJK = re.compile(
+    r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]"
+)
+
+#: Публичное имя того же шаблона — нужно core/model.py для запрета токенов
+CJK_PATTERN = _CJK
 
 
 def looks_english(text: str) -> bool:
@@ -264,6 +273,18 @@ def looks_english(text: str) -> bool:
     if not text or not text.strip():
         return False
     return bool(_LATIN_WORD.search(text)) and not _CYRILLIC.search(text)
+
+
+def looks_foreign(text: str) -> bool:
+    """True, если в ответе чужая письменность.
+
+    Два случая: (1) английский целиком — как looks_english; (2) ИЕРОГЛИФЫ
+    внутри русского ответа («бытовые 电器») — модель ломает слово на
+    середине. Такой ответ отдаём на перегенерацию.
+    """
+    if not text or not text.strip():
+        return False
+    return looks_english(text) or bool(_CJK.search(text))
 
 
 def strip_courtesy(text: str, min_keep: int = MIN_KEEP_CHARS) -> str:

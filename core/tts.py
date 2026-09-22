@@ -205,6 +205,17 @@ class SileroTTS:
         except ImportError:
             pass
 
+        # Иероглифы и эмодзи диктор не прочитает вслух (Qwen иногда роняет
+        # китайские знаки в русский ответ: «бытовые电器»). Убираем их только
+        # для РЕЧИ — сам текст ответа остаётся как есть.
+        text = re.sub(
+            r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
+            r"\uff00-\uffef\u2600-\u27bf\U0001F000-\U0001FAFF]",
+            "",
+            text,
+        )
+        text = re.sub(r"\s{2,}", " ", text).strip()
+
         return text
 
     @staticmethod

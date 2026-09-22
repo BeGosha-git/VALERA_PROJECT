@@ -12,6 +12,7 @@ and output BOTH text and speech audio. No separate ASR/TTS needed.
 """
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Optional, Generator
@@ -22,7 +23,12 @@ from loguru import logger
 
 from config import settings
 from core.personas import get_qwen_canonical_prompt
-from core.text_filters import looks_english, normalize_mirea, strip_courtesy
+from core.text_filters import (
+    CJK_PATTERN,
+    looks_foreign,
+    normalize_mirea,
+    strip_courtesy,
+)
 from core.tts import synthesize, tts_uses_model
 
 # префикс в architectures → (класс модели, класс процессора)
@@ -78,7 +84,9 @@ def _prepare_conversation(conversation: list[dict], family: str) -> list[dict]:
             "Отвечай только по-русски. "
             "Числа пиши СЛОВАМИ, а не цифрами (не «1958», а «тысяча девятьсот "
             "пятьдесят восемь»). "
-            "Кратко, по делу. "
+            "Кратко, по делу. Отвечай прямо на вопрос, как в живом разговоре: "
+            "без шаблонных зачинов вроде «сегодня мы поговорим о важной теме» "
+            "и без лекций. "
             "Не заканчивай ответ предложением о помощи и не задавай вопросов в "
             "конце — никаких «если есть вопросы, обращайтесь», «я помогу вам», "
             "«спрашивайте». Ответил — остановился."
@@ -183,6 +191,38 @@ def local_model_problem(local_dir: Path) -> Optional[str]:
     return None
 
 
+def _bytes_to_unicode_reverse() -> dict[str, int]:
+    """Обратная таблица bytes_to_unicode (GPT-2 / Qwen).
+
+    BPE-словарь Qwen хранит не символы, а байты UTF-8, закодированные в
+    «печатные» юникод-символы: «电器» → 'çĶµåĻ¨', « при» → 'ĠÐ¿ÑĢÐ¸'.
+    Таблица возвращает: символ словаря → исходный байт.
+    """
+    bs = (
+        list(range(ord("!"), ord("~") + 1))
+        + list(range(ord("¡"), ord("¬") + 1))
+        + list(range(ord("®"), ord("ÿ") + 1))
+    )
+    cs = bs[:]
+    n = 0
+    for b in range(256):
+        if b not in bs:
+            bs.append(b)
+            cs.append(256 + n)
+            n += 1
+    return {chr(c): b for b, c in zip(bs, cs)}
+
+
+def _decode_bpe_token(token: str, reverse: dict[str, int]) -> str:
+    """Ключ словаря BPE → нормальная строка ('çĶµåĻ¨' → '电器')."""
+    try:
+        return bytes(reverse[ch] for ch in token if ch in reverse).decode(
+            "utf-8", errors="ignore"
+        )
+    except Exception:  # noqa: BLE001
+        return token
+
+
 class QwenOmniModel:
     """Manages the Qwen-Omni model lifecycle and inference."""
 
@@ -191,6 +231,51 @@ class QwenOmniModel:
         self.processor = None
         self.family = ""
         self._loaded = False
+        self._banned: Optional[list[list[int]]] = None
+
+    def _banned_token_ids(self) -> list[list[int]]:
+        """Id токенов, которые запрещено генерировать (тег запрета англ.).
+
+        У 3B-модели в русский ответ иногда проскакивают китайские иероглифы
+        («бытовые 电器») и латинские слова («leading мировыми»). Повторная
+        генерация помогала не всегда, поэтому такие токены просто запрещаем на
+        уровне сэмплинга — они не могут быть выбраны.
+
+        ВАЖНО: словарь Qwen хранит БАЙТЫ UTF-8, а не символы — «电器» лежит
+        как 'çĶµåĻ¨'. Поэтому ключ сначала раскодируется обратной таблицей
+        bytes_to_unicode, и только потом ищутся иероглифы. Без этого фильтр
+        не находит НИ ОДНОГО токена (проверено).
+
+        Перебор всего словаря ~0.5 с, делается один раз и кэшируется.
+        """
+        if self._banned is not None:
+            return self._banned
+
+        banned: list[list[int]] = []
+        try:
+            vocab = self.processor.tokenizer.get_vocab()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Не удалось получить словарь токенов: {exc}")
+            self._banned = []
+            return self._banned
+
+        reverse = _bytes_to_unicode_reverse()
+        n_cjk = n_latin = 0
+        for token, idx in vocab.items():
+            decoded = _decode_bpe_token(token, reverse)
+            if CJK_PATTERN.search(decoded):
+                banned.append([idx])
+                n_cjk += 1
+            elif len(decoded.strip()) >= 2 and re.fullmatch(r"[A-Za-z]+", decoded.strip()):
+                banned.append([idx])
+                n_latin += 1
+
+        self._banned = banned
+        logger.info(
+            f"Тег запрета чужих алфавитов: запрещено токенов — {len(banned)} "
+            f"(иероглифы {n_cjk}, латинские слова {n_latin}) из {len(vocab)}"
+        )
+        return banned
 
     @property
     def is_loaded(self) -> bool:
@@ -294,7 +379,6 @@ class QwenOmniModel:
         from qwen_omni_utils import process_mm_info
 
         t0 = time.time()
-
         conversation = _prepare_conversation(conversation, self.family)
 
         # Build chat template
@@ -352,6 +436,16 @@ class QwenOmniModel:
         # Защита от зацикливания — модель без штрафа повторяет одну фразу
         gen_kwargs["repetition_penalty"] = settings.repetition_penalty
 
+        # ТЕГ ЗАПРЕТА ЧУЖИХ АЛФАВИТОВ — на уровне СЭМПЛИНГА.
+        # Промпта и повторной генерации не хватало: 3B-модель роняла в русский
+        # ответ китайские иероглифы («бытовые 电器») и латинские слова
+        # («leading мировыми»). Запрещённые токены просто не могут быть
+        # выбраны — это надёжнее любого повторного прохода.
+        if settings.russian_only:
+            banned = self._banned_token_ids()
+            if banned:
+                gen_kwargs["bad_words_ids"] = banned
+
         t_generate = time.time()
 
         # ТЕГ ЗАПРЕТА АНГЛИЙСКОГО (VALERA_RUSSIAN_ONLY, по умолчанию включён).
@@ -385,12 +479,12 @@ class QwenOmniModel:
             # Сколько токенов реально сгенерировано (до обрезки хвостов)
             gen_tokens = int(sequences.shape[1] - inputs["input_ids"].shape[1])
 
-            if not settings.russian_only or not looks_english(text_response):
+            if not settings.russian_only or not looks_foreign(text_response):
                 break
             if attempt == 1:
                 logger.warning(
-                    "Ответ пришёл на английском, а VALERA_RUSSIAN_ONLY=true — "
-                    "повторяю с усиленным требованием"
+                    "Ответ не по-русски (английский или иероглифы), а "
+                    "VALERA_RUSSIAN_ONLY=true — повторяю с усиленным требованием"
                 )
                 inputs = self._reinput_with_russian_reminder(
                     conversation, audios, images, videos, inputs
@@ -542,6 +636,15 @@ class QwenOmniModel:
         if temperature is not None:
             gen_kwargs["temperature"] = temperature
         gen_kwargs["repetition_penalty"] = settings.repetition_penalty
+
+        # ТЕГ ЗАПРЕТА ЧУЖИХ АЛФАВИТОВ и здесь: в стриминге ответ уходит в
+        # озвучку сразу, повторная генерация невозможна — иероглифы и латиница
+        # должны быть исключены на уровне сэмплинга (иначе «бытовые 电器e»
+        # попадут в речь).
+        if settings.russian_only:
+            banned = self._banned_token_ids()
+            if banned:
+                gen_kwargs["bad_words_ids"] = banned
 
         streamer = TextIteratorStreamer(
             self.processor.tokenizer,

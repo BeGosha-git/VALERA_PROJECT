@@ -53,6 +53,7 @@ RUN_WEB=1
 RUN_CLIENT=0
 ACTION="start"
 TTS_FLAG=""
+NEXT_TTS=0
 
 for arg in "$@"; do
     case "$arg" in
@@ -61,10 +62,16 @@ for arg in "$@"; do
         --no-web)         RUN_WEB=0 ;;
         --no-model)       RUN_MODEL=0 ;;
         --client)         RUN_CLIENT=1 ;;
-        --tts)            TTS_FLAG="russian_tts" ;;
         --tts=*)          TTS_FLAG="${arg#--tts=}" ;;
-        -h|--help)        sed -n '2,18p' "$0"; exit 0 ;;
-        *) echo "Неизвестный аргумент: $arg (см. --help)"; exit 2 ;;
+        --tts)            NEXT_TTS=1 ;;
+        -h|--help)        sed -n '2,15p' "$0"; exit 0 ;;
+        *)
+            if [ "${NEXT_TTS:-0}" = "1" ]; then
+                TTS_FLAG="$arg"; NEXT_TTS=0
+            else
+                echo "Неизвестный аргумент: $arg (см. --help)"; exit 2
+            fi
+            ;;
     esac
 done
 

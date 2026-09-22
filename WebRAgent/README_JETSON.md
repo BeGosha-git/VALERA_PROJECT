@@ -52,9 +52,15 @@ cd VALERA_PROJECT
 
 ```bash
 bash run_all.sh            # модель + WebRAgent
+bash run_all.sh --client   # + голосовой клиент (слушай → отвечай)
+bash run_all.sh --status   # что сейчас работает
+bash run_all.sh --down     # остановить всё (или Ctrl+C в работающем скрипте)
 bash run_all.sh --no-web   # только модель (API на :8765)
 bash run_all.sh --no-model # только WebRAgent (если модель уже запущена)
 ```
+
+`run_all.sh` сам гасит процессы от предыдущего запуска, чтобы не ловить
+`Address already in use`, и по Ctrl+C останавливает всё, что поднял.
 
 Открыть: **http://127.0.0.1:5000**, вход `admin` / `admin`
 (меняется через `ADMIN_USERNAME` / `ADMIN_PASSWORD`).

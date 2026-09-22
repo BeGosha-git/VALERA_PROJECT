@@ -106,11 +106,23 @@ bash setup_jetson6.sh
 ### Шаг 4: Запуск сервера
 
 ```bash
+bash run_all.sh            # модель + WebRAgent
+bash run_all.sh --client   # + голосовой клиент (слушай → отвечай)
+bash run_all.sh --status   # что сейчас работает
+bash run_all.sh --down     # остановить всё
+```
+
+Скрипт сам убивает процессы от прошлого запуска, ждёт загрузки модели
+(~30 с–4 мин) и **по Ctrl+C гасит всё**, что поднял.
+
+Запуск только API (без веб-интерфейса):
+
+```bash
 conda activate qwen-valera
 python main.py
 ```
 
-Сервер запустится на `http://localhost:8765`. Модель загрузится автоматически (1-2 минуты).
+Сервер запустится на `http://localhost:8765`.
 
 ### Шаг 5: Голосовой клиент
 
@@ -283,7 +295,7 @@ WebRAgent (Flask :5000) ──HTTP──▶ наш API (:8765) ──▶ Qwen2.5
 
 ```bash
 /mnt/valera/conda-envs/qwen-valera/bin/pip install -r WebRAgent/requirements-jetson.txt
-bash run_all.sh
+bash run_all.sh            # модель + WebRAgent + клиент по желанию
 ```
 
 Открыть http://127.0.0.1:5000 (вход `admin` / `admin`).

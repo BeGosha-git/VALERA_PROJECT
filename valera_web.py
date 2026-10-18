@@ -1,0 +1,1617 @@
+#!/usr/bin/env python3
+"""
+valera_web.py
+=============
+Веб-пульт робота-экскурсовода «Валера» (замена настольного GUI).
+
+Что это
+-------
+Тот же функционал, что и ``valera_gui.py`` (тумблеры функций, визуализация
+звука, триггеры «слово → curl», настройка чувствительности, управление чатами),
+но в браузере. Работает на «невзрачном» порту (по умолчанию **8137**), поэтому
+случайный человек в интернете его не найдёт, а вы открываете его с другого
+устройства — например, с планшета или телефона рядом с роботом.
+
+Запуск
+------
+    python valera_web.py                  # http://localhost:8137
+    python valera_web.py --port 8137
+    python valera_web.py --host 0.0.0.0   # доступ с других устройств сети
+    python valera_web.py --stt kairos      # модель распознавания речи
+
+Настольный GUI по-прежнему доступен: ``python valera_gui.py`` (или
+``./run_all.sh gui``).
+
+Архитектура
+-----------
+* Flask-приложение с JSON-API (``/api/...``) и одной HTML-страницей.
+* Состояние (тумблеры, пороги, триггеры) читается/пишется через
+  ``valera_runtime`` — тот же самый файл ``valera_config.json``, что и у GUI.
+* Сам ассистент запускается в фоновом потоке через ``voice_assistant.build_assistant``
+  — ровно тот же код, что и в CLI/GUI, никакой второй реализации.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import sys
+import threading
+import time
+from typing import Any, Dict, Optional
+
+log = logging.getLogger("valera_web")
+
+# Flask импортируется лениво (в main), чтобы модуль можно было тестировать
+# функции без установленного Flask.
+from valera_runtime import (
+    get_runtime,
+    list_audio_inputs,
+    list_audio_outputs,
+    list_network_interfaces,
+)
+
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_PORT = 8137  # «невзрачный» порт по умолчанию
+
+# Предел размера ответа для этого окружения: на loopback ответы больше ~16 КБ
+# обрезаются (VPN перехватывает соединение), из-за чего страница «зависает».
+# Всё, что отдаём браузеру, должно после gzip укладываться в этот лимит.
+VPN_SAFE_LIMIT = 16 * 1024
+
+
+# ===========================================================================
+# Фоновый запуск ассистента (тот же код, что в CLI и GUI)
+# ===========================================================================
+class AssistantRunner:
+    """
+    Держит ``VoiceAssistant`` в отдельном потоке, чтобы веб-интерфейс мог
+    запускать/останавливать робота и показывать его состояние.
+
+    Ничего не дублирует: вызывает ``voice_assistant.build_assistant`` — общий
+    конструктор для CLI, GUI и веба.
+    """
+
+    def __init__(self, runtime):
+        self.runtime = runtime
+        self.assistant = None
+        self.thread: Optional[threading.Thread] = None
+        self.error: Optional[str] = None
+        self._lock = threading.Lock()
+        self.started_at: Optional[float] = None
+
+    @property
+    def running(self) -> bool:
+        return self.thread is not None and self.thread.is_alive()
+
+    def status(self) -> Dict[str, Any]:
+        return {
+            "running": self.running,
+            "error": self.error,
+            "uptime_sec": (time.time() - self.started_at) if self.started_at and self.running else 0,
+            "chat": self.runtime.get_current_chat(),
+        }
+
+    def start(self, stt: str = "kairos", new_chat: bool = False,
+              no_clean: bool = False) -> bool:
+        """Запускает ассистента. False, если уже запущен."""
+        with self._lock:
+            if self.running:
+                return False
+            self.error = None
+
+        def _run():
+            try:
+                from voice_assistant import build_assistant
+
+                self.runtime.set_status("Загрузка моделей…")
+                self.assistant = build_assistant(
+                    stt=stt, new_chat=new_chat, no_clean=no_clean,
+                    runtime=self.runtime,
+                )
+                self.started_at = time.time()
+                self.assistant.start()
+                while self.assistant.is_recording:
+                    time.sleep(0.25)
+            except Exception as exc:  # noqa: BLE001
+                self.error = str(exc)
+                self.runtime.log_event("error", f"Ассистент упал: {exc}")
+                self.runtime.set_status("Ошибка")
+            finally:
+                self.started_at = None
+                if not self.error:
+                    self.runtime.set_status("Остановлен")
+
+        self.thread = threading.Thread(target=_run, daemon=True)
+        self.thread.start()
+        return True
+
+    def stop(self) -> bool:
+        """Останавливает ассистента. False, если он не запущен."""
+        if not self.running:
+            return False
+        if self.assistant is not None:
+            try:
+                self.assistant.stop()
+            except Exception as exc:  # noqa: BLE001
+                self.runtime.log_event("error", f"Ошибка остановки: {exc}")
+        self.thread = None
+        return True
+
+
+# ===========================================================================
+# Приложение Flask
+# ===========================================================================
+def create_app(runtime=None, runner=None):
+    """
+    Собирает Flask-приложение. Вынесено отдельно, чтобы можно было поднять
+    сервер и в тестах, и в бою.
+    """
+    from flask import Flask, jsonify, render_template_string, request
+
+    rt = runtime if runtime is not None else get_runtime()
+    asst_runner = runner if runner is not None else AssistantRunner(rt)
+
+    app = Flask(__name__)
+    app.config["JSON_AS_ASCII"] = False
+
+    # ------------------------------------------------------------------
+    # Сжатие всех ответов gzip
+    # ------------------------------------------------------------------
+    # Причина: в этом окружении несжатые ответы больше ~16 КБ «зависают» на
+    # loopback (заголовки приходят, тело — нет). Это ломало и главную
+    # страницу, и крупные JSON (список устройств, история уровней для
+    # графиков). gzip уменьшает объём в 2-4 раза и снимает проблему.
+    import gzip as _gzip
+
+    @app.after_request
+    def _compress(response):
+        try:
+            # Anti-cache: страница и API — «живые», браузер не должен
+            # показывать устаревший интерфейс после наших правок.
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+
+            accept = request.headers.get("Accept-Encoding", "").lower()
+            if "gzip" not in accept:
+                return response
+            if response.direct_passthrough or response.status_code >= 300:
+                return response
+            if response.headers.get("Content-Encoding"):
+                return response
+            body = response.get_data()
+            if len(body) < 1024:      # мелочь сжимать смысла нет
+                return response
+            compressed = _gzip.compress(body, 6)
+            if len(compressed) >= len(body):
+                return response
+            response.set_data(compressed)
+            response.headers["Content-Encoding"] = "gzip"
+            response.headers["Content-Length"] = str(len(compressed))
+            response.headers["Vary"] = "Accept-Encoding"
+            # Страховка: в этом окружении ответы >16 КБ на loopback обрезаются
+            # (заголовки приходят, тело — нет) → страница «зависает». Если
+            # сжатый ответ всё ещё больше лимита — громко предупреждаем, чтобы
+            # это не превратилось в неуловимый баг снова.
+            if len(compressed) > VPN_SAFE_LIMIT:
+                log.warning(
+                    "Ответ %s сжат до %d байт — больше лимита %d. На loopback "
+                    "такой ответ может обрезаться (VPN). Уменьшите payload.",
+                    request.path, len(compressed), VPN_SAFE_LIMIT,
+                )
+        except Exception:  # noqa: BLE001
+            # Сжатие — оптимизация; если что-то пошло не так, отдаём как есть
+            pass
+        return response
+
+    # ------------------------------------------------------------------
+    # Страница (одностраничное приложение на чистом JS)
+    # ------------------------------------------------------------------
+    @app.get("/")
+    def index():
+        # Отдаём страницу как обычный HTML (не через Jinja): в CSS/JS есть
+        # фигурные скобки, которые шаблонизатор принял бы за свои директивы.
+        return _html_response(INDEX_HTML)
+
+    # ------------------------------------------------------------------
+    # Состояние: настройки, метрики, события
+    # ------------------------------------------------------------------
+    @app.get("/api/state")
+    def api_state():
+        """Один запрос — всё, что нужно странице для отрисовки."""
+        metrics = rt.get_metrics()
+        return jsonify({
+            "config": rt.snapshot(),
+            "features": rt.snapshot()["features"],
+            "status": rt.get_status(),
+            "metrics": metrics,
+            "current_chat": rt.get_current_chat(),
+            "assistant": asst_runner.status(),
+            "transcript": rt.last_transcript,
+            "answer": rt.last_answer,
+            "phrase": rt.get_phrase(),
+            "levels": _downsample_levels(rt.get_levels()),
+            "waves": _downsample_waves(rt.get_waves()),
+            "events": _recent_events(rt.get_events()),
+        })
+
+    @app.get("/api/models")
+    def api_models():
+        """
+        Список установленных моделей Ollama + текущая выбранная.
+
+        Отдаём именно то, что реально есть в Ollama (а не выдуманный список),
+        чтобы на сайте не было «настроек-пустышек».
+        """
+        import requests as _rq
+
+        current = rt.get("llm", "model", default="true_valera_fast:latest")
+        models = []
+        try:
+            base = rt.get("llm", "ollama_url", default="http://localhost:11434")
+            resp = _rq.get(f"{base}/api/tags", timeout=5)
+            for m in resp.json().get("models", []):
+                models.append({
+                    "name": m.get("name"),
+                    "size_gb": round((m.get("size") or 0) / 1e9, 1),
+                })
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Не удалось получить список моделей Ollama: %s", exc)
+        return jsonify({"models": models, "current": current})
+
+    @app.post("/api/models/warm")
+    def api_models_warm():
+        """Прогревает текущую модель в память, чтобы первый ответ был быстрым."""
+        import requests as _rq
+
+        model = rt.get("llm", "model", default="true_valera_fast:latest")
+        base = rt.get("llm", "ollama_url", default="http://localhost:11434")
+        try:
+            _rq.post(f"{base}/api/generate", json={
+                "model": model, "prompt": "привет", "stream": False,
+                "keep_alive": "30m", "options": {"num_predict": 3},
+            }, timeout=180)
+            return jsonify({"ok": True, "model": model})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+    @app.get("/api/devices")
+    def api_devices():
+        """Списки доступных микрофонов, колонок и сетевых интерфейсов."""
+        return jsonify({
+            "inputs": list_audio_inputs(),
+            "outputs": list_audio_outputs(),
+            "interfaces": list_network_interfaces(),
+            "selected": {
+                "input_device": rt.get("audio", "input_device", default="default"),
+                "output_device": rt.get("audio", "output_device", default="default"),
+                "interface": rt.get("network", "interface", default="auto"),
+            },
+        })
+
+    @app.post("/api/settings")
+    def api_settings():
+        """Записывает настройки (тот же valera_config.json, что и у GUI)."""
+        payload = request.get_json(silent=True) or {}
+        for path, value in payload.items():
+            keys = path.split(".")
+            if not keys:
+                continue
+            rt.set(*keys, value=value)
+        return jsonify({"ok": True, "config": rt.snapshot()})
+
+    @app.post("/api/feature")
+    def api_feature():
+        """Быстрое переключение флага из секции features."""
+        payload = request.get_json(silent=True) or {}
+        name = payload.get("name")
+        if not name:
+            return jsonify({"ok": False, "error": "не указано имя флага"}), 400
+        rt.set_feature(name, bool(payload.get("value")))
+        return jsonify({"ok": True, "features": rt.snapshot()["features"]})
+
+    # ------------------------------------------------------------------
+    # Управление ассистентом
+    # ------------------------------------------------------------------
+    @app.post("/api/assistant/start")
+    def api_assistant_start():
+        payload = request.get_json(silent=True) or {}
+        started = asst_runner.start(
+            stt=payload.get("stt", "kairos"),
+            new_chat=bool(payload.get("new_chat")),
+            no_clean=bool(payload.get("no_clean")),
+        )
+        return jsonify({"ok": True, "started": started, "assistant": asst_runner.status()})
+
+    @app.post("/api/assistant/stop")
+    def api_assistant_stop():
+        stopped = asst_runner.stop()
+        return jsonify({"ok": True, "stopped": stopped, "assistant": asst_runner.status()})
+
+    # ------------------------------------------------------------------
+    # Триггеры «слово → сетевая команда»
+    # ------------------------------------------------------------------
+    @app.get("/api/triggers")
+    def api_triggers_list():
+        return jsonify({"triggers": rt.triggers()})
+
+    @app.post("/api/triggers")
+    def api_triggers_add():
+        payload = request.get_json(silent=True) or {}
+        phrase = (payload.get("phrase") or "").strip()
+        command = (payload.get("command") or "").strip()
+        if not phrase or not command:
+            return jsonify({"ok": False, "error": "нужны «слово» и «команда»"}), 400
+        trig = rt.add_trigger(
+            phrase=phrase,
+            command=command,
+            match=payload.get("match", "contains"),
+            enabled=bool(payload.get("enabled", True)),
+            cooldown_sec=float(payload.get("cooldown_sec") or 5.0),
+            comment=payload.get("comment", ""),
+        )
+        return jsonify({"ok": True, "trigger": trig, "triggers": rt.triggers()})
+
+    @app.put("/api/triggers/<trigger_id>")
+    def api_triggers_update(trigger_id: str):
+        payload = request.get_json(silent=True) or {}
+        fields: Dict[str, Any] = {}
+        for key in ("phrase", "command", "match", "comment"):
+            if key in payload:
+                fields[key] = payload[key]
+        if "enabled" in payload:
+            fields["enabled"] = bool(payload["enabled"])
+        if "cooldown_sec" in payload:
+            try:
+                fields["cooldown_sec"] = float(payload["cooldown_sec"] or 0)
+            except (TypeError, ValueError):
+                pass
+        ok = rt.update_trigger(trigger_id, **fields)
+        return jsonify({"ok": ok, "triggers": rt.triggers()})
+
+    @app.delete("/api/triggers/<trigger_id>")
+    def api_triggers_delete(trigger_id: str):
+        ok = rt.remove_trigger(trigger_id)
+        return jsonify({"ok": ok, "triggers": rt.triggers()})
+
+    @app.post("/api/triggers/<trigger_id>/test")
+    def api_triggers_test(trigger_id: str):
+        """Прогоняет команду правила без ожидания микрофона."""
+        trig = next((t for t in rt.triggers() if t["id"] == trigger_id), None)
+        if not trig:
+            return jsonify({"ok": False, "error": "правило не найдено"}), 404
+        result = rt.run_trigger(trig, text=trig.get("phrase", ""),
+                                respect_cooldown=False)
+        return jsonify({"ok": True, "result": result})
+
+    # ------------------------------------------------------------------
+    # Чаты (контекст диалога)
+    # ------------------------------------------------------------------
+    @app.get("/api/chats")
+    def api_chats_list():
+        from valera_chats import ChatStore
+
+        days = float(request.args.get("older_than_days", 1) or 1)
+        store = ChatStore()
+        try:
+            return jsonify({
+                "chats": store.list(limit=int(request.args.get("limit", 200) or 200)),
+                "stats": store.stats(older_than_days=days),
+                "current_chat_id": rt.get_current_chat().get("chat_id"),
+            })
+        finally:
+            store.close()
+
+    @app.post("/api/chats/delete")
+    def api_chats_delete():
+        """Удаляет выбранные чаты либо все «старые» (кнопка на странице)."""
+        from valera_chats import ChatStore
+
+        payload = request.get_json(silent=True) or {}
+        store = ChatStore()
+        try:
+            keep = rt.get_current_chat().get("chat_id")
+            if payload.get("older_than_days") is not None:
+                deleted = store.delete_older_than(
+                    float(payload["older_than_days"]), keep_chat_id=keep
+                )
+            elif payload.get("all"):
+                deleted = store.delete_all(keep_chat_id=keep)
+            else:
+                deleted = store.delete(payload.get("chat_ids") or [])
+            return jsonify({"ok": True, "deleted": deleted, "stats": store.stats()})
+        finally:
+            store.close()
+
+    # ------------------------------------------------------------------
+    # Новый чат вручную
+    # ------------------------------------------------------------------
+    @app.post("/api/chat/new")
+    def api_chat_new():
+        """Просит ассистента начать новый чат (сброс контекста)."""
+        if asst_runner.assistant is not None:
+            try:
+                asst_runner.assistant._clear_chat_id_file()
+                asst_runner.assistant._chat_id = asst_runner.assistant.rag.create_chat()
+                new_id = asst_runner.assistant._chat_id
+                if new_id:
+                    asst_runner.assistant._save_chat_id(new_id)
+                    rt.set_current_chat(new_id, "")
+                rt.mark_new_chat_started()
+                rt.log_event("info", "Новый чат создан вручную")
+                return jsonify({"ok": True, "chat_id": new_id})
+            except Exception as exc:  # noqa: BLE001
+                return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": "ассистент не запущен"}), 409
+
+    return app
+
+
+# ---------------------------------------------------------------------------
+# Вспомогательные: прореживание данных для графиков
+# ---------------------------------------------------------------------------
+def _downsample_levels(levels, max_points: int = 240):
+    """Прореживает историю уровней, чтобы JSON не был огромным."""
+    if not levels:
+        return []
+    step = max(1, len(levels) // max_points)
+    out = []
+    for ts, mic, gated, out_rms in levels[::step]:
+        out.append([round(mic, 5), round(gated, 5), round(out_rms, 5)])
+    return out
+
+
+def _downsample_waves(waves, max_points: int = 260):
+    """
+    Прореживает буферы живой волны (осциллограф).
+
+    Ограничение small (260 точек): ответ ``/api/state`` должен влезать в
+    лимит ~16 КБ окружения (VPN на loopback обрезает крупные ответы).
+    900 точек × 2 буфера × 6 знаков давали ~15 КБ одного только JSON —
+    вместе со «склейкой» фразы ответ переваливал за лимит и сайт зависал.
+    """
+    raw, gated = waves
+    def _thin(seq):
+        if not seq:
+            return []
+        step = max(1, len(seq) // max_points)
+        return [round(float(v), 3) for v in seq[::step]]
+    return {"raw": _thin(raw), "gated": _thin(gated)}
+
+
+def _recent_events(events, limit: int = 60):
+    out = []
+    for ts, level, text in events[-limit:]:
+        out.append({
+            "time": time.strftime("%H:%M:%S", time.localtime(ts)),
+            "level": level,
+            "text": text,
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Отдача HTML
+# ---------------------------------------------------------------------------
+def _html_response(html: str):
+    """
+    Возвращает HTML-ответ.
+
+    Сжатие gzip делает общий ``after_request``-хук (см. ``create_app``), поэтому
+    здесь достаточно отдать тело с правильным Content-Type. Отдаём именно
+    ``Response`` с bytes, чтобы Flask не пытался прогнать страницу через Jinja2:
+    в её CSS/JS есть фигурные скобки, которые шаблонизатор принял бы за свои
+    директивы и сломал бы страницу.
+    """
+    from flask import Response
+
+    return Response(html.encode("utf-8"), mimetype="text/html")
+
+
+# ===========================================================================
+# Одностраничный интерфейс
+# ===========================================================================
+INDEX_HTML = r"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Валера — пульт робота-экскурсовода</title>
+<!-- Шрифты берём ЛОКАЛЬНЫЕ (Lato/Open Sans/Ubuntu есть в системе): робот на
+     выставке может быть без интернета, а внешний Google Fonts ещё и тормозит
+     первую загрузку. Стек с fallback-цепочкой на случай другой машины. -->
+<style>
+/* ==========================================================================
+   ВАЛЕРА — дизайн-система пульта
+   Принципы: 1) ясная иерархия (герой-статус → панели → детали)
+             2) единая шкала отступов (4/8/12/16/24)
+             3) один акцентный цвет, остальное — нейтральные поверхности
+             4) каждый интерактивный элемент имеет hover/active/focus
+   ========================================================================== */
+:root{
+  /* поверхности — от глубокого фона к приподнятым слоям */
+  --bg:#0a0f16;
+  --surface-1:#111925;
+  --surface-2:#16202e;
+  --surface-3:#1d2937;
+  --surface-4:#243244;
+  /* границы */
+  --line:#26374a;
+  --line-strong:#35495f;
+  /* текст */
+  --fg:#f4f7fb;
+  --fg-2:#a9bacd;
+  --fg-3:#6f8098;
+  /* акценты */
+  --accent:#2dd4bf;
+  --accent-strong:#14b8a6;
+  --accent-soft:rgba(45,212,191,.14);
+  --violet:#8b7cf6;
+  --violet-soft:rgba(139,124,246,.14);
+  /* семантика */
+  --ok:#4ade80; --ok-soft:rgba(74,222,128,.14);
+  --warn:#fbbf24; --warn-soft:rgba(251,191,36,.14);
+  --err:#fb7185; --err-soft:rgba(251,113,133,.14);
+  /* дорожки звука */
+  --mic:#38bdf8; --gate:#fb7185; --out:#4ade80;
+  /* геометрия */
+  --r-lg:18px; --r-md:13px; --r-sm:9px;
+  --sp-1:6px; --sp-2:10px; --sp-3:14px; --sp-4:20px; --sp-5:28px;
+  /* тени и свечения */
+  --shadow:0 20px 45px -28px rgba(0,0,0,.95);
+  --shadow-lift:0 24px 55px -26px rgba(0,0,0,.95);
+  --glow-accent:0 0 0 1px rgba(45,212,191,.22), 0 14px 40px -18px rgba(45,212,191,.45);
+  /* типографика — локальные шрифты с надёжным fallback */
+  --sans:'Lato','Open Sans','Ubuntu','Noto Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --mono:'Ubuntu Mono','DejaVu Sans Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{
+  min-height:100vh;
+  background:
+    radial-gradient(900px 520px at 6% -14%, rgba(45,212,191,.10), transparent 60%),
+    radial-gradient(820px 480px at 104% -10%, rgba(139,124,246,.11), transparent 58%),
+    radial-gradient(700px 420px at 50% 118%, rgba(45,212,191,.05), transparent 62%),
+    var(--bg);
+  color:var(--fg);
+  font-family:var(--sans);
+  font-size:15px; line-height:1.55;
+  letter-spacing:-.011em;
+  -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+}
+::selection{background:rgba(45,212,191,.3);color:#04191b}
+.wrap{max-width:1620px;margin:0 auto;padding:var(--sp-4) var(--sp-4) 64px}
+
+/* ---------- типографика ---------- */
+h1{font-size:25px;font-weight:800;letter-spacing:-.8px;line-height:1.1}
+h2{
+  font-size:12px;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;
+  color:var(--fg-2);display:flex;align-items:center;gap:var(--sp-2);
+  margin-bottom:var(--sp-3);
+}
+h2::before{
+  content:'';width:4px;height:14px;border-radius:3px;flex:0 0 auto;
+  background:linear-gradient(180deg,var(--accent),var(--violet));
+}
+.tag{
+  margin-left:auto;font-size:10.5px;font-weight:700;letter-spacing:.2px;
+  text-transform:none;color:var(--fg-3);
+  background:var(--surface-1);border:1px solid var(--line);
+  padding:3px 10px;border-radius:100px;
+}
+.mono{font-family:var(--mono);font-size:12px;letter-spacing:0}
+code{
+  font-family:var(--mono);font-size:.9em;color:#7dd3fc;
+  background:rgba(125,211,252,.1);padding:2px 6px;border-radius:6px;
+}
+.muted{color:var(--fg-3);font-size:12.5px}
+small.muted{display:block;margin-top:var(--sp-1)}
+
+/* ---------- шапка ---------- */
+header{
+  display:flex;align-items:center;gap:var(--sp-3);flex-wrap:wrap;
+  padding-bottom:var(--sp-3);margin-bottom:var(--sp-4);
+  border-bottom:1px solid var(--line);
+}
+.brand{display:flex;align-items:center;gap:var(--sp-3);margin-right:auto}
+.logo{
+  width:56px;height:56px;border-radius:var(--r-md);flex:0 0 auto;
+  position:relative;display:grid;place-items:center;
+  font-size:23px;font-weight:800;color:#04191b;
+  background:linear-gradient(145deg,var(--accent),var(--violet));
+  box-shadow:var(--glow-accent);
+}
+.logo::after{
+  content:'';position:absolute;inset:0;border-radius:inherit;
+  background:linear-gradient(180deg,rgba(255,255,255,.3),transparent 52%);
+}
+.brand p{color:var(--fg-2);font-size:13px;font-weight:500}
+
+.pill{
+  display:inline-flex;align-items:center;gap:var(--sp-1);
+  padding:9px 15px;border-radius:100px;
+  background:var(--surface-2);border:1px solid var(--line);
+  font-size:13px;font-weight:600;color:var(--fg-2);
+  transition:border-color .2s,background .2s;
+}
+.pill:hover{border-color:var(--line-strong);background:var(--surface-3)}
+.dot{
+  width:9px;height:9px;border-radius:50%;background:var(--fg-3);
+  transition:all .25s;flex:0 0 auto;
+}
+.dot.on{background:var(--ok);box-shadow:0 0 0 4px var(--ok-soft);animation:breathe 2.2s ease-in-out infinite}
+.dot.err{background:var(--err);box-shadow:0 0 0 4px var(--err-soft)}
+@keyframes breathe{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.82)}}
+
+/* ---------- кнопки ---------- */
+button{
+  font-family:var(--sans);font-size:13.5px;font-weight:700;cursor:pointer;
+  color:var(--fg);background:var(--surface-3);
+  border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:10px 17px;letter-spacing:-.01em;white-space:nowrap;
+  transition:background .16s,border-color .16s,transform .12s,box-shadow .16s;
+}
+button:hover{background:var(--surface-4);border-color:var(--line-strong);transform:translateY(-1px)}
+button:active{transform:translateY(0) scale(.98)}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.pri{
+  background:linear-gradient(135deg,var(--accent),var(--accent-strong));
+  color:#04191b;border-color:transparent;
+  box-shadow:0 10px 26px -14px var(--accent);
+}
+button.pri:hover{filter:brightness(1.09);box-shadow:0 14px 32px -14px var(--accent)}
+button.dgr{background:var(--err-soft);border-color:rgba(251,113,133,.35);color:#ffd0d8}
+button.dgr:hover{background:rgba(251,113,133,.24);border-color:rgba(251,113,133,.62)}
+button.sm{padding:6px 12px;font-size:12.5px;border-radius:8px}
+button:disabled{opacity:.4;cursor:not-allowed;transform:none!important;filter:none!important}
+
+/* ---------- сетки ---------- */
+.grid{display:grid;gap:var(--sp-3)}
+.cols{grid-template-columns:minmax(330px,390px) minmax(0,1fr)}
+.cols-3{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.stack{display:grid;gap:var(--sp-3)}
+@media(max-width:1120px){.cols{grid-template-columns:1fr}}
+
+/* ---------- карточки ---------- */
+.card{
+  background:linear-gradient(170deg,var(--surface-2),var(--surface-1));
+  border:1px solid var(--line);border-radius:var(--r-lg);
+  padding:var(--sp-4);box-shadow:var(--shadow);
+  transition:border-color .2s,transform .2s,box-shadow .2s;
+}
+.card:hover{border-color:var(--line-strong);box-shadow:var(--shadow-lift)}
+
+/* ---------- тумблеры ---------- */
+.sw{
+  display:flex;align-items:center;gap:var(--sp-2);padding:9px 0;
+  cursor:pointer;border-bottom:1px solid rgba(38,55,74,.5);
+  transition:padding .16s,background .16s;
+}
+.sw:last-child{border-bottom:none}
+.sw:hover{padding-left:5px}
+.sw input{position:absolute;opacity:0;width:0;height:0}
+.track{
+  width:44px;height:24px;border-radius:100px;flex:0 0 auto;position:relative;
+  background:var(--surface-4);border:1px solid var(--line);
+  transition:background .22s cubic-bezier(.4,0,.2,1),border-color .22s,box-shadow .22s;
+}
+.track::after{
+  content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;
+  border-radius:50%;background:#8496ad;
+  transition:left .22s cubic-bezier(.4,0,.2,1),background .22s;
+}
+.sw input:checked + .track{
+  background:linear-gradient(135deg,var(--accent),var(--accent-strong));
+  border-color:transparent;box-shadow:0 0 18px -5px var(--accent);
+}
+.sw input:checked + .track::after{left:22px;background:#04191b}
+.sw input:focus-visible + .track{outline:2px solid var(--accent);outline-offset:2px}
+.sw > span{font-size:13.5px;font-weight:600}
+.sw .hint{display:block;font-size:11.5px;font-weight:500;color:var(--fg-3);margin-top:1px}
+
+/* ---------- поля ---------- */
+label.f{
+  display:block;font-size:11.5px;font-weight:700;letter-spacing:.3px;
+  color:var(--fg-2);margin:var(--sp-3) 0 var(--sp-1);
+}
+input[type=text],input[type=number],select,textarea{
+  width:100%;color:var(--fg);background:var(--surface-1);
+  border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:11px 13px;font-family:var(--sans);font-size:13.5px;
+  transition:border-color .16s,box-shadow .16s,background .16s;
+}
+input:hover,select:hover,textarea:hover{border-color:var(--line-strong)}
+input:focus,select:focus,textarea:focus{
+  outline:none;border-color:var(--accent);background:var(--surface-2);
+  box-shadow:0 0 0 3px var(--accent-soft);
+}
+textarea{font-family:var(--mono);font-size:12.5px;line-height:1.65;min-height:68px;resize:vertical}
+select{cursor:pointer;appearance:none;
+  background-image:linear-gradient(45deg,transparent 50%,var(--fg-3) 50%),
+                   linear-gradient(135deg,var(--fg-3) 50%,transparent 50%);
+  background-position:calc(100% - 19px) 50%,calc(100% - 13px) 50%;
+  background-size:6px 6px,6px 6px;background-repeat:no-repeat;padding-right:38px}
+input[type=range]{
+  width:100%;height:24px;background:transparent;cursor:pointer;
+  -webkit-appearance:none;appearance:none;
+}
+input[type=range]::-webkit-slider-runnable-track{
+  height:6px;border-radius:100px;background:var(--surface-4);
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:18px;height:18px;margin-top:-6px;border-radius:50%;
+  background:linear-gradient(135deg,var(--accent),var(--violet));
+  box-shadow:0 0 0 3px var(--accent-soft),0 3px 10px -2px rgba(0,0,0,.6);
+  transition:transform .14s;
+}
+input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.16)}
+input[type=range]::-moz-range-track{height:6px;border-radius:100px;background:var(--surface-4)}
+input[type=range]::-moz-range-thumb{
+  width:18px;height:18px;border:none;border-radius:50%;
+  background:linear-gradient(135deg,var(--accent),var(--violet));
+}
+.row{display:flex;gap:var(--sp-2);align-items:center;flex-wrap:wrap}
+.row > *{flex:1;min-width:0}
+.row > button,.row > .val,.row > .muted{flex:0 0 auto;min-width:auto}
+.val{
+  font-family:var(--mono);font-size:13px;font-weight:600;color:var(--accent);
+  min-width:56px;text-align:right;
+}
+
+/* ---------- метрики ---------- */
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--sp-2)}
+.metric{
+  background:var(--surface-1);border:1px solid var(--line);
+  border-radius:var(--r-md);padding:var(--sp-3);
+  transition:border-color .18s,transform .18s,background .18s;
+}
+.metric:hover{border-color:var(--line-strong);transform:translateY(-2px);background:var(--surface-2)}
+.metric .k{
+  font-size:10px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;
+  color:var(--fg-3);
+}
+.metric .v{
+  font-family:var(--mono);font-size:19px;font-weight:700;
+  color:var(--accent);margin-top:5px;letter-spacing:-.5px;
+}
+
+/* ---------- графики ---------- */
+canvas{
+  width:100%;display:block;border-radius:var(--r-md);
+  background:linear-gradient(180deg,#070b11,#0b1119);
+  border:1px solid var(--line);
+}
+.legend{
+  display:flex;gap:var(--sp-3);flex-wrap:wrap;
+  margin-top:var(--sp-2);font-size:12px;color:var(--fg-2);font-weight:600;
+}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.legend i{width:14px;height:4px;border-radius:3px;flex:0 0 auto}
+
+/* ---------- таблицы ---------- */
+.scroll{
+  border:1px solid var(--line);border-radius:var(--r-md);
+  overflow:auto;max-height:340px;background:var(--surface-1);
+  scrollbar-width:thin;scrollbar-color:var(--surface-4) transparent;
+}
+.scroll::-webkit-scrollbar{width:11px;height:11px}
+.scroll::-webkit-scrollbar-track{background:transparent}
+.scroll::-webkit-scrollbar-thumb{
+  background:var(--surface-4);border-radius:100px;border:3px solid var(--surface-1);
+}
+.scroll::-webkit-scrollbar-thumb:hover{background:var(--line-strong)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{
+  position:sticky;top:0;z-index:1;text-align:left;
+  font-size:10px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;
+  color:var(--fg-3);background:var(--surface-2);
+  padding:11px 13px;border-bottom:1px solid var(--line);
+}
+td{padding:11px 13px;border-bottom:1px solid rgba(38,55,74,.5);vertical-align:middle}
+tbody tr{transition:background .14s}
+tbody tr:hover td{background:rgba(45,212,191,.05)}
+tbody tr:last-child td{border-bottom:none}
+
+/* ---------- вкладки ---------- */
+.tabs{
+  display:flex;gap:4px;flex-wrap:wrap;margin-bottom:var(--sp-4);
+  padding:5px;border-radius:var(--r-md);
+  background:var(--surface-1);border:1px solid var(--line);
+  width:fit-content;max-width:100%;
+}
+.tab{
+  padding:10px 17px;border-radius:9px;font-size:13px;font-weight:700;
+  background:transparent;border:1px solid transparent;color:var(--fg-3);
+}
+.tab:hover{background:var(--surface-2);border-color:var(--line);color:var(--fg-2);transform:none}
+.tab.active{
+  color:#04191b;border-color:transparent;
+  background:linear-gradient(135deg,var(--accent),var(--accent-strong));
+  box-shadow:0 8px 22px -14px var(--accent);
+}
+.pane{display:none}
+.pane.active{display:block;animation:rise .3s cubic-bezier(.16,1,.3,1)}
+@keyframes rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+
+/* ---------- бейджи, транскрипт, журнал ---------- */
+.badge{
+  display:inline-block;font-size:11px;font-weight:800;letter-spacing:.2px;
+  padding:3px 10px;border-radius:100px;border:1px solid transparent;
+}
+.b-ok{background:var(--ok-soft);color:var(--ok);border-color:rgba(74,222,128,.32)}
+.b-warn{background:var(--warn-soft);color:var(--warn);border-color:rgba(251,191,36,.32)}
+.b-err{background:var(--err-soft);color:var(--err);border-color:rgba(251,113,133,.32)}
+
+.transcript{
+  background:var(--surface-1);border:1px solid var(--line);
+  border-left:3px solid var(--line-strong);
+  border-radius:var(--r-md);padding:var(--sp-3) var(--sp-4);
+  margin-bottom:var(--sp-2);
+  transition:border-color .18s,background .18s;
+}
+.transcript:hover{background:var(--surface-2)}
+.transcript.user{border-left-color:var(--mic)}
+.transcript.bot{border-left-color:var(--accent)}
+.transcript .lbl{
+  font-size:10px;font-weight:800;letter-spacing:.9px;text-transform:uppercase;
+  color:var(--fg-3);margin-bottom:5px;
+}
+.transcript .txt{font-size:15.5px;line-height:1.6;font-weight:500}
+
+.log{
+  font-family:var(--mono);font-size:12px;line-height:1.8;
+  max-height:400px;overflow:auto;padding:var(--sp-3) var(--sp-4);
+  border-radius:var(--r-md);border:1px solid var(--line);
+  background:linear-gradient(180deg,#070b11,#0b1119);
+  scrollbar-width:thin;scrollbar-color:var(--surface-4) transparent;
+}
+.log::-webkit-scrollbar{width:11px}
+.log::-webkit-scrollbar-thumb{background:var(--surface-4);border-radius:100px;
+  border:3px solid #0b1119}
+.log div{padding:2px 0;color:var(--fg-3);border-bottom:1px solid rgba(38,55,74,.28)}
+.log div:last-child{border-bottom:none}
+.log .ok{color:var(--ok)}
+.log .error{color:var(--err)}
+.log .info{color:var(--fg-2)}
+
+/* ---------- герой-статус (главный акцент главной вкладки) ---------- */
+.hero{
+  display:flex;align-items:center;gap:var(--sp-4);flex-wrap:wrap;
+  padding:var(--sp-4) var(--sp-5);margin-bottom:var(--sp-4);
+  border-radius:var(--r-lg);border:1px solid var(--line);
+  background:
+    linear-gradient(120deg,rgba(45,212,191,.10),rgba(139,124,246,.09)),
+    var(--surface-2);
+  box-shadow:var(--shadow);
+}
+.hero-ico{
+  width:58px;height:58px;flex:0 0 auto;border-radius:var(--r-md);
+  display:grid;place-items:center;font-size:26px;
+  background:var(--surface-1);border:1px solid var(--line);
+}
+.hero-txt{flex:1;min-width:220px}
+.hero-txt .k{
+  font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;
+  color:var(--fg-3);
+}
+.hero-txt .v{font-size:21px;font-weight:800;letter-spacing:-.4px;margin-top:2px}
+.hero-txt .s{font-size:12.5px;color:var(--fg-2);font-weight:500;margin-top:2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <div class="logo">V</div>
+      <div>
+        <h1>Валера</h1>
+        <p>робот-экскурсовод · РТУ МИРЭА · Unitree H1</p>
+      </div>
+    </div>
+    <span class="pill"><span class="dot" id="dot"></span><span id="stateTxt">остановлен</span></span>
+    <span class="pill" id="chatPill" title="Активный чат (контекст диалога)">
+      <span id="chatTxt">чат: —</span>
+    </span>
+    <button class="pri" id="btnStart">▶ Запустить</button>
+    <button class="dgr" id="btnStop" disabled>■ Остановить</button>
+  </header>
+
+  <div class="tabs">
+    <button class="tab active" data-pane="main">Звук и чувствительность</button>
+    <button class="tab" data-pane="devices">Устройства и сеть</button>
+    <button class="tab" data-pane="triggers">Триггеры «слово → команда»</button>
+    <button class="tab" data-pane="chats">Чаты и контекст</button>
+    <button class="tab" data-pane="log">Журнал</button>
+  </div>
+
+  <!-- ============ ГЛАВНАЯ ============ -->
+  <div class="pane active" id="pane-main">
+    <!-- Герой-статус: главное, что нужно видеть с первого взгляда -->
+    <div class="hero">
+      <div class="hero-ico" id="heroIco">⏹</div>
+      <div class="hero-txt">
+        <div class="k">Состояние робота</div>
+        <div class="v" id="heroState">Ассистент остановлен</div>
+        <div class="s" id="heroSub">Нажмите «Запустить», чтобы Валера начал слушать</div>
+      </div>
+      <div style="display:flex;gap:var(--sp-2);flex-wrap:wrap">
+        <div class="metric" style="min-width:120px">
+          <div class="k">Время работы</div><div class="v" id="heroUptime">—</div>
+        </div>
+        <div class="metric" style="min-width:150px">
+          <div class="k">Уровень микрофона</div><div class="v" id="heroMic">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid cols">
+      <div class="stack">
+        <div class="card">
+          <h2>Функции <span class="tag">применяются на лету</span></h2>
+          <div id="features"></div>
+        </div>
+
+        <div class="card">
+          <h2>Чувствительность</h2>
+          <label class="f">Порог VAD (ниже = чувствительнее)</label>
+          <div class="row"><input type="range" id="sThr" min="0.05" max="0.9" step="0.01"><span class="val" id="vThr"></span></div>
+          <label class="f">Пауза тишины, сек</label>
+          <div class="row"><input type="range" id="sSil" min="0.3" max="3" step="0.05"><span class="val" id="vSil"></span></div>
+          <label class="f">Мин. длина фразы, сек</label>
+          <div class="row"><input type="range" id="sMin" min="0.2" max="3" step="0.05"><span class="val" id="vMin"></span></div>
+        </div>
+
+        <div class="card">
+          <h2>Модель ИИ <span class="tag" id="modelTag">Ollama</span></h2>
+          <label class="f">Языковая модель для ответов</label>
+          <div class="row">
+            <select id="selModel"></select>
+            <button class="pri" id="btnSaveModel">Применить</button>
+          </div>
+          <small class="muted">Быстрая <b>true_valera_fast</b> (3B) отвечает почти
+            мгновенно; <b>true_valera</b> (8B) — умнее, но медленнее. Смена
+            применится к следующему ответу, перезапуск не нужен.</small>
+          <div class="row" style="margin-top:var(--sp-2)">
+            <button class="sm" id="btnWarmModel">🔥 Прогреть модель</button>
+            <span class="muted" id="modelStatus"></span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Телеметрия</h2>
+          <div class="metrics" id="metrics"></div>
+        </div>
+      </div>
+
+      <div class="stack">
+        <div class="card">
+          <h2>Что слышит Валера <span class="tag">микрофон → шумодав → итог</span></h2>
+          <canvas id="cPhrase" height="155"></canvas>
+          <div class="legend">
+            <span><i style="background:var(--mic)"></i>с микрофона</span>
+            <span><i style="background:var(--gate)"></i>вырезано шумодавом</span>
+            <span><i style="background:var(--out)"></i>итог для Валеры</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Живой сигнал <span class="tag">2 секунды</span></h2>
+          <canvas id="cLive" height="84"></canvas>
+        </div>
+
+        <div class="card">
+          <h2>Уровень и порог гейта</h2>
+          <canvas id="cLevel" height="94"></canvas>
+          <div class="legend">
+            <span><i style="background:var(--mic)"></i>микрофон (RMS)</span>
+            <span><i style="background:var(--out)"></i>после шумодава</span>
+            <span><i style="background:var(--gate)"></i>порог гейта</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Последний диалог</h2>
+          <div class="transcript user"><div class="lbl">Услышано</div><div class="txt muted" id="tUser">—</div></div>
+          <div class="transcript bot"><div class="lbl">Ответ Валеры</div><div class="txt" id="tBot">—</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ УСТРОЙСТВА ============ -->
+  <div class="pane" id="pane-devices">
+    <div class="grid cols-3">
+      <div class="card">
+        <h2>Микрофон (ввод)</h2>
+        <label class="f">Устройство захвата</label>
+        <select id="selIn"></select>
+        <small class="muted">Список из <code>arecord -L</code>. Если микрофон не подключён —
+          выберите устройство после подключения и нажмите «Обновить».</small>
+      </div>
+      <div class="card">
+        <h2>Колонки (вывод)</h2>
+        <label class="f">Устройство воспроизведения</label>
+        <select id="selOut"></select>
+        <small class="muted">Список из <code>aplay -L</code>. Голос Валеры пойдёт
+          именно сюда (например, на DIN-выход к роботу).</small>
+      </div>
+      <div class="card">
+        <h2>Сетевой интерфейс</h2>
+        <label class="f">Интерфейс для связи с роботом</label>
+        <select id="selNic"></select>
+        <small class="muted">Через этот интерфейс уходят команды роботу
+          (Unitree H1). Виртуальные интерфейсы скрыты.</small>
+      </div>
+    </div>
+    <div class="card" style="margin-top:var(--sp-3)">
+      <div class="row">
+        <button class="pri" id="btnSaveDev">Сохранить устройства</button>
+        <button id="btnRefreshDev">Обновить списки</button>
+        <span class="muted" id="devStatus"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ ТРИГГЕРЫ ============ -->
+  <div class="pane" id="pane-triggers">
+    <div class="card">
+      <h2>Правила «слово → сетевая команда»</h2>
+      <small class="muted" style="margin-bottom:var(--sp-3)">
+        Когда в речи прозвучит ключевое слово — выполняется команда. Подстановки:
+        <code>{robot}</code> — адрес API робота, <code>{text}</code> — распознанный текст,
+        <code>{phrase}</code> — само слово.
+      </small>
+      <div class="scroll" style="margin-top:var(--sp-3)"><table>
+        <thead><tr><th>Вкл</th><th>Слово</th><th>Сравнение</th><th>Кулдаун</th><th>Команда</th><th></th></tr></thead>
+        <tbody id="trigBody"></tbody>
+      </table></div>
+    </div>
+
+    <div class="card" style="margin-top:var(--sp-3)">
+      <h2>Новое / редактирование правила</h2>
+      <div class="grid cols-3">
+        <div><label class="f">Ключевое слово</label><input type="text" id="tPhrase" placeholder="Привет"></div>
+        <div><label class="f">Сравнение</label>
+          <select id="tMatch">
+            <option value="contains">содержит (по умолчанию)</option>
+            <option value="word">целое слово</option>
+            <option value="equals">точное совпадение</option>
+            <option value="regex">регулярное выражение</option>
+          </select></div>
+        <div><label class="f">Кулдаун, сек</label><input type="number" id="tCool" value="5" min="0" step="0.5"></div>
+      </div>
+      <label class="f">Команда (curl)</label>
+      <textarea id="tCmd" placeholder="curl -s -X POST {robot}/api/action -d '{&quot;action&quot;:&quot;wave_hand&quot;}'"></textarea>
+      <div class="row" style="margin-top:var(--sp-3)">
+        <button class="pri" id="btnAddTrg">＋ Добавить</button>
+        <button id="btnUpdTrg">Обновить выбранное</button>
+        <button class="dgr" id="btnDelTrg">Удалить</button>
+        <button id="btnTestTrg">▶ Проверить команду</button>
+        <input type="hidden" id="tId">
+      </div>
+      <p class="muted" style="margin-top:var(--sp-2)" id="trgMsg"></p>
+    </div>
+  </div>
+
+  <!-- ============ ЧАТЫ ============ -->
+  <div class="pane" id="pane-chats">
+    <div class="grid cols-3" style="margin-bottom:var(--sp-3)">
+      <div class="card"><h2>Всего чатов</h2><div class="metric"><div class="k">в базе</div><div class="v" id="stChats">—</div></div></div>
+      <div class="card"><h2>Сообщений</h2><div class="metric"><div class="k">в истории</div><div class="v" id="stMsgs">—</div></div></div>
+      <div class="card"><h2>Старых</h2><div class="metric"><div class="k" id="stOldK">старше суток</div><div class="v" id="stOld">—</div></div></div>
+    </div>
+
+    <div class="card" style="margin-bottom:var(--sp-3)">
+      <h2>Авто-новый чат по тишине</h2>
+      <label class="sw">
+        <input type="checkbox" id="fAutoChat">
+        <span class="track"></span>
+        <span>Начинать новый чат после тишины<span class="hint">Сбрасывает контекст, когда гость давно ушёл</span></span>
+      </label>
+      <div class="grid cols-3" style="margin-top:var(--sp-3)">
+        <div>
+          <label class="f">Тишина до нового чата, сек</label>
+          <input type="number" id="autoChatSec" min="0" step="10" value="0">
+        </div>
+        <div>
+          <label class="f">Считать «старыми» старше, дней</label>
+          <input type="number" id="oldDays" min="0.1" step="0.5" value="1">
+        </div>
+        <div style="display:flex;align-items:flex-end">
+          <button class="pri" id="btnSaveChatCfg">Сохранить</button>
+        </div>
+      </div>
+      <small class="muted">0 секунд = авто-новый чат выключен.
+        Рекомендуется 60 секунд для экскурсий.</small>
+    </div>
+
+    <div class="card">
+      <h2>Чаты WebRAgent <span class="tag" id="mongoState"></span></h2>
+      <div class="row" style="margin-bottom:var(--sp-3)">
+        <button class="pri" id="btnNewChat">＋ Новый чат сейчас</button>
+        <button class="dgr" id="btnDelOld">Удалить старые</button>
+        <button class="dgr" id="btnDelAll">Удалить все</button>
+        <button id="btnDelSel">Удалить выбранные</button>
+        <button id="btnRefreshChats">Обновить</button>
+      </div>
+      <div class="scroll"><table>
+        <thead><tr><th style="width:44px"></th><th>Название</th><th>Сообщений</th><th>Возраст</th><th>Обновлён</th></tr></thead>
+        <tbody id="chatBody"></tbody>
+      </table></div>
+      <p class="muted" style="margin-top:var(--sp-2)" id="chatMsg"></p>
+    </div>
+  </div>
+
+  <!-- ============ ЖУРНАЛ ============ -->
+  <div class="pane" id="pane-log">
+    <div class="card">
+      <h2>Журнал событий <span class="tag" id="logTag">последние 60</span></h2>
+      <div class="log" id="logBox"></div>
+      <div class="row" style="margin-top:var(--sp-3)">
+        <button class="sm" id="btnClearLog">Очистить вид</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const api = async (url, opts) => {
+  // Таймаут на запрос: если сервер «затыкается», интерфейс не должен висеть
+  // вечно — отдаём управление и пробуем на следующем тике.
+  const ctrl = new AbortController();
+  const timer = setTimeout(()=>ctrl.abort(), 4000);
+  try{
+    const r = await fetch(url, Object.assign(
+      {headers:{'Content-Type':'application/json'}, signal: ctrl.signal}, opts));
+    return await r.json();
+  } finally { clearTimeout(timer); }
+};
+
+// ---------- тумблеры функций ----------
+const FEATURES = [
+  ['noise_reduction','Шумодав','Спектральное вычитание + энергетический гейт'],
+  ['auto_vad','Авто-чувствительность','Порог VAD подстраивается под шум'],
+  ['auto_new_chat','Авто-новый чат','Новый чат после длительной тишины'],
+  ['react_to_backchannel','Реакция на «угу»','Отвечать на поддакивания (по умолчанию — молчать)'],
+  ['web_search','Веб-поиск','Искать ответ в интернете'],
+  ['mirea_collection','База МИРЭА и Студсоюза','Искать в коллекции вуза (МИРЭА, Студсоюз, профком…)'],
+  ['confirm_before_answer','Подтверждение вопроса','Спрашивать перед отправкой в ИИ'],
+  ['barge_in','Barge-in','Прерывать озвучку, если заговорили'],
+  ['tts','Озвучка (TTS)','Произносить ответы голосом'],
+  ['rephrase_answers','Пересказ через LLM','Живой текст вместо ссылок'],
+  ['triggers_enabled','Триггеры','Выполнять «слово → команда»'],
+];
+let features = {}, charts = {};
+// Флаги, которые пользователь только что переключил вручную. Пока сервер не
+// подтвердит новое значение, мы не перетираем галочку из опроса /api/state —
+// иначе чекбокс «мигает» и кажется, что настройка не применяется.
+const pendingFeatures = {};
+
+function buildFeatureToggles(){
+  $('features').innerHTML = FEATURES.map(([k,t,h]) => `
+    <label class="sw"><input type="checkbox" data-f="${k}">
+      <span class="track"></span>
+      <span>${t}<span class="hint">${h}</span></span></label>`).join('');
+  document.querySelectorAll('[data-f]').forEach(cb => {
+    cb.onchange = async () => {
+      const want = cb.checked;
+      pendingFeatures[cb.dataset.f] = want;
+      try{
+        await api('/api/feature', {method:'POST',
+          body: JSON.stringify({name: cb.dataset.f, value: want})});
+      }catch(e){
+        cb.checked = !want;              // откат при ошибке сети
+        delete pendingFeatures[cb.dataset.f];
+      }
+    };
+  });
+}
+function syncFeatures(f){
+  features = f;
+  document.querySelectorAll('[data-f]').forEach(cb => {
+    const k = cb.dataset.f;
+    if(k in pendingFeatures){
+      // Ждём, пока сервер вернёт ровно то, что просили — тогда снимаем блок.
+      if(!!f[k] === pendingFeatures[k]) delete pendingFeatures[k];
+      else return;
+    }
+    cb.checked = !!f[k];
+  });
+  $('fAutoChat').checked = !!f.auto_new_chat;
+}
+
+// ---------- графики на canvas ----------
+function fitCanvas(cv){
+  const r = cv.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.max(1, r.width * dpr);
+  cv.height = Math.max(1, (cv.getAttribute('height')|0) * dpr);
+  const c = cv.getContext('2d');
+  c.setTransform(dpr,0,0,dpr,0,0);
+  return {c, w: r.width, h: cv.getAttribute('height')|0};
+}
+function grid(c, w, h, color){
+  c.strokeStyle = color || 'rgba(35,45,61,.75)'; c.lineWidth = 1;
+  c.beginPath();
+  for(let i=0;i<=4;i++){const y=~~(h*i/4)+.5; c.moveTo(0,y); c.lineTo(w,y);}
+  c.stroke();
+}
+function drawSeries(c, w, h, data, color, maxAbs){
+  if(!data || !data.length) return;
+  const m = maxAbs || Math.max(0.001, ...data.map(Math.abs));
+  c.strokeStyle = color; c.lineWidth = 1.2; c.beginPath();
+  data.forEach((v,i)=>{
+    const x = w * i / Math.max(1,data.length-1);
+    const y = h/2 - (v/m) * (h/2 - 3);
+    i ? c.lineTo(x,y) : c.moveTo(x,y);
+  });
+  c.stroke();
+}
+function drawPhrase(p){
+  const {c,w,h} = fitCanvas($('cPhrase'));
+  c.clearRect(0,0,w,h); grid(c,w,h);
+  if(!p){ c.fillStyle='#5d6b7f'; c.font='13px Manrope'; c.textAlign='center';
+    c.fillText('скажите что-нибудь — появится сравнение', w/2, h/2); return; }
+  const m = Math.max(0.001, ...p.raw.map(Math.abs), ...p.removed.map(Math.abs));
+  drawSeries(c,w,h,p.raw,'#38bdf8',m);
+  drawSeries(c,w,h,p.removed,'#fb7185',m);
+  drawSeries(c,w,h,p.clean,'#34d399',m);
+  c.fillStyle='#5d6b7f'; c.font='11px JetBrains Mono'; c.textAlign='left';
+  c.fillText(`${p.duration.toFixed(1)}с · микрофон ${p.raw_rms.toFixed(3)} → итог ${p.clean_rms.toFixed(3)}`, 7, 13);
+}
+function drawLive(wv){
+  const {c,w,h} = fitCanvas($('cLive'));
+  c.clearRect(0,0,w,h); grid(c,w,h);
+  if(wv && wv.raw && wv.raw.length){ drawSeries(c,w,h,wv.raw,'#38bdf8',0.25); }
+  else { c.fillStyle='#5d6b7f'; c.font='12px Manrope'; c.textAlign='center';
+    c.fillText('нет сигнала', w/2, h/2); }
+}
+function drawLevel(lv, m){
+  const {c,w,h} = fitCanvas($('cLevel'));
+  c.clearRect(0,0,w,h); grid(c,w,h);
+  if(!lv || !lv.length){ c.fillStyle='#5d6b7f'; c.font='12px Manrope'; c.textAlign='center';
+    c.fillText('уровни появятся при работе микрофона', w/2, h/2); return; }
+  const mic = lv.map(x=>x[0]), gat = lv.map(x=>x[1]);
+  const maxV = Math.max(0.02, ...mic, ...gat, (m.gate_threshold||0)*1.3);
+  const n = lv.length;
+  c.strokeStyle='#38bdf8'; c.lineWidth=1.3; c.beginPath();
+  mic.forEach((v,i)=>{const x=w*i/Math.max(1,n-1), y=h-(v/maxV)*(h-4)-2; i?c.lineTo(x,y):c.moveTo(x,y);}); c.stroke();
+  c.strokeStyle='#34d399'; c.lineWidth=1.1; c.beginPath();
+  gat.forEach((v,i)=>{const x=w*i/Math.max(1,n-1), y=h-(v/maxV)*(h-4)-2; i?c.lineTo(x,y):c.moveTo(x,y);}); c.stroke();
+  if(m.gate_threshold > 0){
+    const y = h-(m.gate_threshold/maxV)*(h-4)-2;
+    c.strokeStyle='#fb7185'; c.setLineDash([5,4]); c.lineWidth=1.1;
+    c.beginPath(); c.moveTo(0,y); c.lineTo(w,y); c.stroke(); c.setLineDash([]);
+  }
+}
+function drawMetrics(m){
+  const items = [
+    ['Уровень микрофона', m.mic_rms], ['Вероятность речи', m.vad_prob],
+    ['Порог VAD', m.vad_threshold], ['Шумовой пол', m.noise_rms],
+    ['Уровень речи', m.speech_rms], ['Порог гейта', m.gate_threshold],
+    ['Усиление (АРУ)', m.gain],
+  ];
+  $('metrics').innerHTML = items.map(([k,v]) => {
+    if(k.startsWith('Усиление')) return `<div class="metric"><div class="k">${k}</div><div class="v">${v==null?'—':(+v).toFixed(2)+'×'}</div></div>`;
+    return `<div class="metric"><div class="k">${k}</div><div class="v">${v==null?'—':(+v).toFixed(3)}</div></div>`;
+  }).join('');
+}
+
+// ---------- поллинг состояния ----------
+let chatsLoaded = false;
+async function tick(){
+  try{
+    const s = await api('/api/state');
+    syncFeatures(s.features);
+    drawPhrase(s.phrase); drawLive(s.waves); drawLevel(s.levels, s.metrics);
+    drawMetrics(s.metrics);
+    $('tUser').textContent = s.transcript || '—';
+    $('tBot').textContent  = s.answer || '—';
+
+    // --- статус в шапке и в hero-блоке ---
+    const running = s.assistant.running;
+    const hasErr = !!s.assistant.error;
+    $('stateTxt').textContent = running ? 'работает' : (hasErr ? 'ошибка' : 'остановлен');
+    const d = $('dot');
+    d.className = 'dot ' + (running ? 'on' : (hasErr ? 'err' : ''));
+
+    $('heroIco').textContent = running ? '🎙' : (hasErr ? '⚠' : '⏹');
+    $('heroState').textContent = running ? 'Валера слушает' : (hasErr ? 'Ошибка запуска' : 'Ассистент остановлен');
+    $('heroSub').textContent = running
+        ? (s.status || 'Говорите — я слушаю')
+        : (hasErr ? s.assistant.error : 'Нажмите «Запустить», чтобы Валера начал слушать');
+
+    // Время работы в читаемом виде
+    const up = s.assistant.uptime_sec || 0;
+    $('heroUptime').textContent = up > 0
+        ? `${Math.floor(up/60)}:${String(Math.floor(up%60)).padStart(2,'0')}`
+        : '—';
+    const mic = s.metrics.mic_rms;
+    $('heroMic').textContent = mic == null ? '—' : (+mic).toFixed(3);
+
+    $('btnStart').disabled = running; $('btnStop').disabled = !running;
+    $('chatTxt').textContent = 'чат: ' + (s.current_chat.chat_id ? s.current_chat.chat_id.slice(0,8) : '—');
+
+    // слайдеры (только если не тянем прямо сейчас)
+    const cfg = s.config;
+    if(!dragging){
+      $('sThr').value = cfg.vad.threshold; $('vThr').textContent = (+cfg.vad.threshold).toFixed(2);
+      $('sSil').value = cfg.vad.silence_timeout; $('vSil').textContent = (+cfg.vad.silence_timeout).toFixed(2);
+      $('sMin').value = cfg.vad.min_speech; $('vMin').textContent = (+cfg.vad.min_speech).toFixed(2);
+      $('autoChatSec').value = cfg.rag.auto_new_chat_after_silence_sec;
+    }
+    // модель ИИ: показываем реальную из конфига; список моделей подгружаем один раз
+    if(cfg.llm && cfg.llm.model){
+      const cur = cfg.llm.model;
+      $('modelTag').textContent = cur;
+      const sel = $('selModel');
+      if(sel && [...sel.options].some(o=>o.value===cur)) sel.value = cur;
+    }
+    if(!modelsLoaded) loadModels();
+    // журнал
+    const lb = $('logBox');
+    lb.innerHTML = s.events.map(e=>`<div class="${e.level}">[${e.time}] ${escapeHtml(e.text)}</div>`).join('');
+    lb.scrollTop = lb.scrollHeight;
+  }catch(e){ /* сервер перезапускается — просто пропускаем кадр */ }
+}
+function escapeHtml(t){return (t||'').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+// ---------- слайдеры ----------
+let dragging = false;
+['sThr','sSil','sMin'].forEach(id => {
+  const el = $(id);
+  const fmt = id==='sThr' ? 'vThr' : id==='sSil' ? 'vSil' : 'vMin';
+  const key = id==='sThr' ? 'vad.threshold'
+            : id==='sSil' ? 'vad.silence_timeout' : 'vad.min_speech';
+  el.addEventListener('input', ()=>{ dragging = true; $(fmt).textContent = (+el.value).toFixed(2); });
+  el.addEventListener('change', async ()=>{
+    // Держим блокировку до подтверждения сервера, иначе следующий tick()
+    // вернёт старое значение и ползунок «отскочит» назад.
+    try{
+      await api('/api/settings', {method:'POST', body: JSON.stringify({[key]: +el.value})});
+    }catch(e){ /* сеть — оставим как есть, следующий tick поправит */ }
+    dragging = false;
+  });
+});
+
+// ---------- устройства ----------
+async function loadDevices(){
+  const d = await api('/api/devices');
+  const fill = (sel, list, cur) => {
+    sel.innerHTML = list.map(o =>
+      `<option value="${o.name}" ${o.name===cur?'selected':''}>${escapeHtml(o.description||o.name)} — ${o.name}</option>`).join('');
+    if(cur && !list.some(o=>o.name===cur)) sel.insertAdjacentHTML('afterbegin',
+      `<option value="${cur}" selected>${cur} (текущее, не найдено в списке)</option>`);
+  };
+  fill($('selIn'), d.inputs, d.selected.input_device);
+  fill($('selOut'), d.outputs, d.selected.output_device);
+  $('selNic').innerHTML = d.interfaces.map(i =>
+    `<option value="${i.name}" ${i.name===d.selected.interface?'selected':''}>${escapeHtml(i.description||i.name)}</option>`).join('');
+}
+$('btnSaveDev').onclick = async () => {
+  await api('/api/settings', {method:'POST', body: JSON.stringify({
+    'audio.input_device': $('selIn').value,
+    'audio.output_device': $('selOut').value,
+    'network.interface': $('selNic').value,
+  })});
+  $('devStatus').textContent = '✓ сохранено';
+  setTimeout(()=>$('devStatus').textContent='', 2500);
+};
+$('btnRefreshDev').onclick = loadDevices;
+
+// ---------- модель ИИ ----------
+let modelsLoaded = false;
+async function loadModels(){
+  const d = await api('/api/models');
+  const list = d.models || [];
+  $('selModel').innerHTML = list.map(m =>
+    `<option value="${m.name}" ${m.name===d.current?'selected':''}>${escapeHtml(m.name)} — ${m.size_gb} ГБ</option>`).join('')
+    || `<option value="${d.current}">${escapeHtml(d.current)} (список недоступен)</option>`;
+  $('modelTag').textContent = d.current || 'Ollama';
+  if(!list.some(m=>m.name===d.current)){
+    $('selModel').insertAdjacentHTML('afterbegin',
+      `<option value="${d.current}" selected>${escapeHtml(d.current)} (текущая)</option>`);
+  }
+  modelsLoaded = true;
+}
+$('btnSaveModel').onclick = async () => {
+  await api('/api/settings', {method:'POST', body: JSON.stringify({'llm.model': $('selModel').value})});
+  $('modelStatus').textContent = '✓ модель: ' + $('selModel').value;
+  $('modelTag').textContent = $('selModel').value;
+  setTimeout(()=>$('modelStatus').textContent='', 3500);
+};
+$('btnWarmModel').onclick = async () => {
+  $('modelStatus').textContent = '⏳ прогреваю…';
+  const r = await api('/api/models/warm', {method:'POST', body:'{}'});
+  $('modelStatus').textContent = r.ok ? ('✓ готова: ' + r.model) : ('✗ ' + (r.error||''));
+};
+
+// ---------- триггеры ----------
+let triggers = [];
+async function loadTriggers(){
+  triggers = (await api('/api/triggers')).triggers;
+  $('trigBody').innerHTML = triggers.map(t => `
+    <tr><td>${t.enabled?'✅':'⛔'}</td><td><b>${escapeHtml(t.phrase)}</b></td>
+    <td class="mono">${t.match}</td><td class="mono">${t.cooldown_sec}s</td>
+    <td class="mono" style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(t.command)}</td>
+    <td><button class="sm" data-sel="${t.id}">выбрать</button>
+        <button class="sm" data-tgl="${t.id}">${t.enabled?'⏸':'▶'}</button></td></tr>`).join('')
+    || `<tr><td colspan="6" class="muted">Правил пока нет</td></tr>`;
+  document.querySelectorAll('[data-sel]').forEach(b => b.onclick = () => selectTrigger(b.dataset.sel));
+  document.querySelectorAll('[data-tgl]').forEach(b => b.onclick = async () => {
+    const t = triggers.find(x=>x.id===b.dataset.tgl);
+    await api('/api/triggers/'+t.id, {method:'PUT', body: JSON.stringify({enabled: !t.enabled})});
+    loadTriggers();
+  });
+}
+function selectTrigger(id){
+  const t = triggers.find(x=>x.id===id); if(!t) return;
+  $('tId').value=t.id; $('tPhrase').value=t.phrase; $('tMatch').value=t.match;
+  $('tCool').value=t.cooldown_sec; $('tCmd').value=t.command;
+}
+$('btnAddTrg').onclick = async () => {
+  const r = await api('/api/triggers', {method:'POST', body: JSON.stringify({
+    phrase: $('tPhrase').value, command: $('tCmd').value, match: $('tMatch').value,
+    cooldown_sec: +$('tCool').value })});
+  $('trgMsg').textContent = r.ok ? '✓ правило добавлено' : ('✗ ' + r.error);
+  loadTriggers();
+};
+$('btnUpdTrg').onclick = async () => {
+  const id = $('tId').value; if(!id) return $('trgMsg').textContent='выберите правило';
+  await api('/api/triggers/'+id, {method:'PUT', body: JSON.stringify({
+    phrase: $('tPhrase').value, command: $('tCmd').value,
+    match: $('tMatch').value, cooldown_sec: +$('tCool').value })});
+  $('trgMsg').textContent = '✓ обновлено'; loadTriggers();
+};
+$('btnDelTrg').onclick = async () => {
+  const id = $('tId').value; if(!id) return;
+  if(!confirm('Удалить правило?')) return;
+  await api('/api/triggers/'+id, {method:'DELETE'});
+  $('tId').value=''; $('tPhrase').value=''; $('tCmd').value='';
+  $('trgMsg').textContent = '✓ удалено'; loadTriggers();
+};
+$('btnTestTrg').onclick = async () => {
+  const id = $('tId').value; if(!id) return $('trgMsg').textContent='выберите правило';
+  $('trgMsg').textContent = '⏳ выполняю…';
+  const r = await api('/api/triggers/'+id+'/test', {method:'POST'});
+  const res = r.result || {};
+  $('trgMsg').textContent = res.ok ? ('✓ выполнено: ' + (res.stdout||'').trim().slice(0,160))
+                                   : ('✗ ' + (res.stderr || 'ошибка'));
+};
+
+// ---------- чаты ----------
+async function loadChats(){
+  const days = +($('oldDays').value || 1);
+  const d = await api('/api/chats?older_than_days='+days);
+  const st = d.stats;
+  $('mongoState').textContent = st.available ? 'MongoDB подключена' : 'MongoDB недоступна';
+  $('stChats').textContent = st.total_chats; $('stMsgs').textContent = st.total_messages;
+  $('stOld').textContent = st.old_chats; $('stOldK').textContent = `старше ${st.older_than_days} дн.`;
+  $('chatBody').innerHTML = d.chats.map(c => `
+    <tr><td><input type="checkbox" class="ck" value="${c.chat_id}"
+        ${c.chat_id===d.current_chat_id?'checked disabled':''}></td>
+      <td>${escapeHtml(c.title)} ${c.chat_id===d.current_chat_id?'<span class="badge b-ok">текущий</span>':''}</td>
+      <td class="mono">${c.message_count}</td>
+      <td class="mono">${c.age_days==null?'—':c.age_days+' дн.'}</td>
+      <td class="mono">${(c.updated_at||'').replace('T',' ').slice(0,16)}</td></tr>`).join('')
+    || `<tr><td colspan="5" class="muted">Чатов нет</td></tr>`;
+  chatsLoaded = true;
+}
+$('btnRefreshChats').onclick = loadChats;
+$('btnDelOld').onclick = async () => {
+  const days = +($('oldDays').value || 1);
+  if(!confirm(`Удалить все чаты старше ${days} дн.? Текущий чат останется.`)) return;
+  const r = await api('/api/chats/delete', {method:'POST', body: JSON.stringify({older_than_days: days})});
+  $('chatMsg').textContent = `✓ удалено чатов: ${r.deleted}`; loadChats();
+};
+$('btnDelAll').onclick = async () => {
+  if(!confirm('Удалить ВСЕ чаты, кроме текущего? Это очистит всю историю.')) return;
+  const r = await api('/api/chats/delete', {method:'POST', body: JSON.stringify({all: true})});
+  $('chatMsg').textContent = `✓ удалено чатов: ${r.deleted}`; loadChats();
+};
+$('btnDelSel').onclick = async () => {
+  const ids = [...document.querySelectorAll('.ck:checked')].map(x=>x.value).filter(Boolean);
+  if(!ids.length) return $('chatMsg').textContent='ничего не выбрано';
+  if(!confirm(`Удалить выбранные чаты (${ids.length})?`)) return;
+  const r = await api('/api/chats/delete', {method:'POST', body: JSON.stringify({chat_ids: ids})});
+  $('chatMsg').textContent = `✓ удалено чатов: ${r.deleted}`; loadChats();
+};
+$('btnNewChat').onclick = async () => {
+  const r = await api('/api/chat/new', {method:'POST'});
+  $('chatMsg').textContent = r.ok ? ('✓ новый чат: ' + (r.chat_id||'').slice(0,8)) : ('✗ ' + (r.error||''));
+  loadChats();
+};
+$('btnSaveChatCfg').onclick = async () => {
+  await api('/api/settings', {method:'POST', body: JSON.stringify({
+    'rag.auto_new_chat_after_silence_sec': +$('autoChatSec').value,
+    'features.auto_new_chat': $('fAutoChat').checked,
+  })});
+  $('chatMsg').textContent = '✓ настройки сохранены'; loadChats();
+};
+
+// ---------- ассистент ----------
+$('btnStart').onclick = async () => { await api('/api/assistant/start', {method:'POST', body:'{}'}); };
+$('btnStop').onclick  = async () => { await api('/api/assistant/stop',  {method:'POST', body:'{}'}); };
+$('btnClearLog').onclick = () => { $('logBox').innerHTML=''; };
+
+// переключение вкладок
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.pane').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active'); $('pane-'+t.dataset.pane).classList.add('active');
+  if(t.dataset.pane==='chats' && !chatsLoaded) loadChats();
+});
+
+// старт
+buildFeatureToggles();
+loadDevices(); loadTriggers();
+const od = $('oldDays'); od.addEventListener('change', loadChats);
+tick(); setInterval(tick, 1000);
+window.addEventListener('resize', ()=>{ /* перерисуется на следующем кадре */ });
+</script>
+</body>
+</html>
+"""
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Веб-пульт робота Валеры (замена настольного GUI)"
+    )
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="Адрес прослушивания (0.0.0.0 — доступ с других устройств)")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT,
+                        help=f"Порт (по умолчанию {DEFAULT_PORT})")
+    parser.add_argument("--stt", default="kairos",
+                        choices=["kairos"],
+                        help="Модель распознавания речи")
+    parser.add_argument("--no-autostart", action="store_true",
+                        help="Не запускать ассистента автоматически")
+    parser.add_argument("--proxy", default=None, help="HTTP-прокси для запросов")
+    # Толерантность к общим флагам проекта (--barge-in и т.п.)
+    args, _unknown = parser.parse_known_args()
+
+    if args.proxy:
+        os.environ["HTTP_PROXY"] = args.proxy
+        os.environ["HTTPS_PROXY"] = args.proxy
+        os.environ["ALL_PROXY"] = args.proxy
+        os.environ.setdefault("NO_PROXY",
+                              "localhost,127.0.0.1,::1,searxng,qdrant,mongodb,app")
+
+    rt = get_runtime()
+    runner = AssistantRunner(rt)
+    app = create_app(rt, runner)
+    app.config["PORT"] = args.port
+
+    print("=" * 64)
+    print("  💻  Веб-пульт «Валера»")
+    print(f"  Откройте:  http://{'localhost' if args.host in ('127.0.0.1','0.0.0.0') else args.host}:{args.port}")
+    if args.host == "0.0.0.0":
+        print("  (доступен с других устройств сети — используйте IP этого компьютера)")
+    print(f"  STT: {args.stt}")
+    print("  Ctrl+C — остановить")
+    print("=" * 64)
+
+    if not args.no_autostart:
+        # Небольшая задержка, чтобы сервер успел подняться до тяжёлой загрузки моделей
+        threading.Timer(1.0, lambda: runner.start(stt=args.stt)).start()
+
+    try:
+        app.run(host=args.host, port=args.port, threaded=True, debug=False,
+                use_reloader=False)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        runner.stop()
+        print("\n👋 Сервер остановлен.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

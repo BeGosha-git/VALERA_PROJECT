@@ -24,7 +24,10 @@ dependencies:
     - num2words
     - simpleaudio
     - python-dotenv
-    # Для STT через NVIDIA Nemotron (--stt nemotron)
-    - "transformers>=5.13.0"
+    # Ресемплинг аудио
     - librosa>=0.10.0
-    - accelerate>=0.20.0
+    # GUI-пульт (valera_gui.py): графики звука
+    - matplotlib>=3.7.0
+    # Веб-пульт (valera_web.py)
+    - flask>=3.0.0
+    - pymongo>=4.0.0

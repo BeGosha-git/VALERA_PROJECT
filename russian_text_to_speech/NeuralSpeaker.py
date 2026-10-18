@@ -97,6 +97,13 @@ class NeuralSpeaker:
         audio = audio.numpy()
         audio *= 32767 / np.max(np.abs(audio))
         audio = audio.astype(np.int16)
+        # Короткая тишина В НАЧАЛО: колонки/усилитель открываются не мгновенно,
+        # и первые ~200 мс речи иначе «проглатывались». Буфер даёт устройству
+        # время открыться — начало фразы звучит целиком.
+        lead_ms = 250
+        lead_samples = int(sample_rate * lead_ms / 1000)
+        if lead_samples > 0:
+            audio = np.concatenate([np.zeros(lead_samples, dtype=np.int16), audio])
         wave_obj = sa.WaveObject(audio, 1, 2, sample_rate)
 
         if not save_file:

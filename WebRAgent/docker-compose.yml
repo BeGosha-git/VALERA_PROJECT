@@ -4,8 +4,18 @@ services:
     image: ghcr.io/dkruyt/webragent:latest
     network_mode: "host"
     environment:
-    - OLLAMA_URL=http://localhost:11434
-    - QDRANT_URL=http://localhost:6333
+    # ВАЖНО: это НЕ localhost, и это принципиально.
+    # В этом окружении VPN перехватывает loopback и обрывает всё крупнее ~16 КБ.
+    # Запрос к LLM с контекстом из базы знаний весит десятки КБ, поэтому через
+    # localhost он висел до таймаута и Ollama отдавал 500 ("Error generating
+    # response") — именно из-за этого поиск в базе «не работал» и висел.
+    # 172.17.0.1 — docker bridge gateway (хост изнутри контейнера), такие
+    # запросы проходят мгновенно. Ollama поэтому слушает 0.0.0.0 (см. run_all.sh).
+    - OLLAMA_URL=http://172.17.0.1:11434
+    - OLLAMA_HOST=http://172.17.0.1:11434
+    - QDRANT_URL=http://172.17.0.1:6333
+    - QDRANT_HOST=172.17.0.1
+    - QDRANT_PORT=6333
     - SEARXNG_URL=http://localhost:8080
     - MONGODB_URI=mongodb://localhost:27017/ragapp
     - FLASK_DEBUG=1
@@ -18,6 +28,10 @@ services:
       # Монтируем локальный код поверх образа, чтобы правки в app/ применялись
       # без пересборки (Flask debug автоматически перезагружает при изменении).
       - ./app:/app/app
+      # run.py монтируем тоже: он задаёт threaded=True (параллельная обработка
+      # запросов) и use_reloader=False (без перезапуска на лету, который рвал
+      # длинные операции — например, заливку базы знаний).
+      - ./run.py:/app/run.py
     depends_on:
       - qdrant
       - searxng

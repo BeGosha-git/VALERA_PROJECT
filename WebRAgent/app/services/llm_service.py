@@ -6,26 +6,33 @@ class LLMService(ABC):
     
     # These standard messages are now managed in the PromptTemplateService
     # but kept here for backward compatibility
+    #
+    # Промпт для голосового робота: сначала факт, без мета-речи о «контексте» и
+    # без цитирования источников (ответ читается вслух).
     RAG_SYSTEM_MESSAGE = (
-        "You are a helpful and knowledgeable assistant. "
-        "When answering the user's question, always review the context provided below. "
-        "If relevant information is found in the context, prioritize and incorporate it into your response, "
-        "citing references to the source documents where applicable with all relevant document_title. "
-        "If the context does not contain sufficient or relevant details, don't answer and state there is no relevant context. "
-        "Provide clear, concise, and accurate answers."
+        "Ты — робот Валера, экскурсовод РТУ МИРЭА. Отвечай коротко и по делу. "
+        "Дай конкретику (имя, число, адрес) в первом предложении. "
+        "Не упоминай источники, контекст, документы и базу знаний, не вставляй "
+        "пометки вида [Source 1] — это служебные данные, они вслух не звучат. "
+        "Ничего не выдумывай: используй только факты из предоставленной информации. "
+        "Если нужного факта нет — скажи «Этого я не знаю». Максимум 40 слов."
     )
     
     CHAT_CONTEXT_ENHANCEMENT = (
-        "\nWhen answering the user's question, always review the context provided below. "
-        "If relevant information is found in the context, prioritize and incorporate it into your response, "
-        "citing references to the source documents where applicable. "
-        "If the context does not contain sufficient or relevant details, answer based on your knowledge "
-        "but acknowledge the limitations."
+        "\nОтвечай с опорой на предоставленную информацию: сначала главный факт "
+        "по вопросу. Не упоминай контекст и источники вслух. Ничего не "
+        "придумывай — если данных нет, честно скажи «Этого я не знаю»."
     )
     
     def format_user_message_with_context(self, prompt, context):
-        """Format the user message with context for RAG"""
-        return f"Context:\n{context}\n\nQuestion: {prompt}"
+        """
+        Форматирует сообщение с данными для ответа.
+
+        Меток «Context:»/«Question:» СОЗНАТЕЛЬНО нет: модель копировала эту
+        лексику в ответ и вслух говорила «Согласно предоставленному контексту».
+        Нейтральные русские метки уменьшают такие вставки.
+        """
+        return f"Данные для ответа:\n{context}\n\nВопрос гостя: {prompt}"
     
     def get_provider_name(self):
         """Get the provider name for this LLM service"""

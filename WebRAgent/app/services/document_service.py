@@ -28,6 +28,589 @@ from app.services.qdrant_service import QdrantService
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Гибридное ранжирование (вектор + лексика)
+# ---------------------------------------------------------------------------
+# Коллекция «МИРЭА» использует all-MiniLM-L6-v2 — АНГЛОЯЗЫЧНУЮ модель. На
+# русских вопросах она даёт посредственные вектора (score 0.38-0.52) и часто
+# НЕ находит нужный чанк, хотя он есть в базе: например, на «Какие институты?»
+# выдавала старые факультеты вместо новых ИИТ/ИИИ/ИКБ/ИРИП из README.
+#
+# Поэтому после векторного поиска переранжируем кандидатов с учётом
+# ЛЕКСИЧЕСКОГО совпадения (пересечение слов вопроса и текста). Это заметно
+# поднимает точные термины и названия, которые векторная модель «не видит».
+
+# Слова, которые не несут смысла и только мешают совпадению.
+_STOPWORDS = {
+    "и", "в", "во", "не", "что", "он", "на", "я", "с", "со", "как", "а", "то",
+    "все", "она", "так", "его", "но", "да", "ты", "к", "у", "же", "вы", "за",
+    "бы", "по", "только", "ее", "мне", "было", "вот", "от", "меня", "еще",
+    "нет", "о", "из", "ему", "теперь", "когда", "даже", "ну", "вдруг", "ли",
+    "если", "уже", "или", "ни", "быть", "был", "него", "до", "вас", "нибудь",
+    "опять", "уж", "вам", "ведь", "там", "потом", "себя", "ничего", "ей",
+    "может", "они", "тут", "где", "есть", "надо", "ней", "для", "мы", "тебя",
+    "их", "чем", "была", "сам", "чтоб", "без", "будто", "чего", "раз", "тоже",
+    "себе", "под", "будет", "ж", "тогда", "кто", "этот", "того", "потому",
+    "этого", "какой", "совсем", "ним", "здесь", "этом", "один", "почти",
+    "мой", "тем", "чтобы", "нее", "сейчас", "были", "куда", "зачем", "всех",
+    "никогда", "можно", "при", "наконец", "два", "об", "другой", "хоть",
+    "после", "над", "больше", "тот", "через", "эти", "нас", "про", "всего",
+    "них", "какая", "много", "разве", "три", "эту", "моя", "впрочем", "хорошо",
+    "свою", "этой", "перед", "иногда", "лучше", "чуть", "том", "нельзя",
+    "такой", "им", "более", "всегда", "конечно", "всю", "между",
+    # вопросительные и служебные «около-темные» слова
+    "какие", "какой", "каких", "сколько", "расскажи", "скажи", "подскажи",
+    "можно", "нужно", "хочу", "хотел", "бы", "про", "об", "это",
+    # «пустые» глаголы-связки — есть в половине предложений базы
+    "являет", "называ", "входит", "входят", "включ", "состав", "имеет",
+    "предст", "указан", "указан", "основн", "главн", "общий", "общая",
+    # указательные и «вопросные» слова: «Что такое СНО?» ищет «сно», а не «что такое»
+    "такое", "такая", "такие", "такого", "такому", "таком", "эдак",
+    "значит", "означа", "отлич", "отлича", "зовут", "называют",
+    "интерес", "интересн", "рассказа", "подробн", "кратко", "пожалуй",
+    # «находится / расположен» — есть почти в каждой строке про адреса
+    "находи", "найдит", "располож", "расположен", "находит",
+}
+
+# Синонимы для слов базы знаний МИРЭА.
+#
+# Слова обрезаются до 6 букв (см. _tokens), поэтому ключи — обрезанные формы.
+# Нужно, потому что в базе одни формулировки («Профсоюзная организация»,
+# «Студенческий союз»), а спросить могут другими («профком», «студсовет»).
+# Без расширения такие вопросы не находят нужный раздел вообще.
+_QUERY_EXPANSIONS = {
+    # профсоюз / профком / профбюро / профорганизация
+    "профко": ["профсо", "профбю", "профор", "профсоюзна", "объедин"],
+    "профсо": ["профко", "профбю", "профор", "объедин"],
+    "профор": ["профсо", "профко", "профбю"],
+    "профбю": ["профсо", "профко"],
+    # Студсоюз / студсовет / студенческий совет
+    "студсо": ["sumire", "студенческ", "союз", "самоуправ"],
+    "sumire": ["студсо", "союз"],
+    "студен": ["студсо", "самоуправ"],
+    "самоуп": ["студсо", "студсов", "самоуправ"],
+    "студсов": ["студсо", "самоуправ", "общежит"],
+    # старосты, волонтёры, отряды, СНО, ССК
+    "старос": ["старос"],
+    "волонт": ["волонт", "добровол"],
+    "отряд": ["отряд", "мсо"],
+    "сно": ["студенческ", "научное", "общество"],
+    "сск": ["спорти", "клуб", "альянс"],
+    "киберк": ["кибер", "спорти"],
+    "медиац": ["медиа", "медиац"],
+    "студоф": ["студоф", "офис"],
+    # ЛАТИНСКАЯ ТРАНСЛИТЕРАЦИЯ ИМЁН ФАЙЛОВ.
+    #
+    # Таблицы базы залиты из CSV, и имя файла транслитерировано:
+    # «9-1_obschezhitiya_shest_korpusov_i_das_2_t1.csv». Русского слова
+    # «общежитие» в таком чанке НЕТ вообще — поэтому вопрос «где находятся
+    # общежития?» не находил таблицу с АДРЕСАМИ общежитий: поиску было не за
+    # что зацепиться. Расширяем слова запроса латинскими вариантами из имён
+    # файлов (ключи — после обрезки до 6 букв, см. _tokens).
+    "общежи": ["obsche", "obshch", "hostel"],
+    "стипен": ["stipend"],
+    "бюджет": ["biudzh", "budget"],
+    "приём": ["priem"],
+    "прием": ["priem"],
+    "поступ": ["postupl", "priem"],
+    "инстит": ["instit"],
+    "стоимо": ["stoimost", "price"],
+    "кампус": ["kampus"],
+    "филиал": ["filial"],
+    "количе": ["kolichestvo"],
+    # ректорат и руководство
+    "ректор": ["ректор", "кудж"],
+    "директ": ["директ", "руковод"],
+}
+
+
+def _tokens(text: str) -> list:
+    """
+    Разбивает текст на значимые слова (без стоп-слов, в нижнем регистре).
+
+    Русские слова дополнительно «обрезаем» до основы (первые 6 букв), чтобы
+    ловить формы: «институты» / «института» / «институт» → «инсти».
+
+    ВАЖНО: стоп-слово проверяется и целиком, и по ОСНОВЕ. Иначе фильтр почти
+    бесполезен: «находится» не совпадёт со стоп-словом «находи», потому что до
+    обрезки слово длиннее. Именно из-за этого служебные слова («находится»,
+    «представляет») забивали ранжирование — на вопрос «где находится Студсоюз?»
+    побеждал случайный чанк, где просто есть слово «находится».
+    """
+    if not text:
+        return []
+    words = re.findall(r"[а-яёa-z0-9]+", text.lower())
+    out = []
+    for w in words:
+        if len(w) < 3:
+            continue
+        stem = w[:6]
+        if w in _STOPWORDS or stem in _STOPWORDS:
+            continue
+        out.append(stem)
+    return out
+
+
+def _counter(text: str) -> "Counter":
+    """
+    Частоты токенов текста (токен → сколько раз встретился).
+
+    Нужно для BM25: важно не просто «есть ли слово», а КАК ЧАСТО. Чанк, где
+    «общежитие» встречается 20 раз, почти наверняка про общежития, а чанк с
+    одним упоминанием — нет.
+    """
+    from collections import Counter
+
+    return Counter(_tokens(text))
+
+
+def _counter_q(text: str) -> "Counter":
+    """Частоты токенов ВОПРОСА (с сохранением вопросительных слов)."""
+    from collections import Counter
+
+    return Counter(_tokens_for_questions(text))
+
+
+def _lexical_score(query_terms, content: str, idf: dict = None) -> float:
+    """
+    Взвешенная доля слов запроса, найденных в тексте (0..1).
+
+    ``query_terms`` — список НАБОРОВ словоформ: для каждого слова вопроса это
+    само слово плюс его синонимы (см. ``_QUERY_EXPANSIONS``). Слово считается
+    найденным, если в тексте есть ХОТЯ БЫ ОДНА форма из набора.
+
+    Если передан ``idf`` (обратная частота слова по кандидатам), редкие слова
+    получают больший вес. Это важно: в базе МИРЭА почти в каждом чанке есть
+    «институт» и «МИРЭА», поэтому по ним совпадение ничего не различает, а
+    редкое «ректор» или «стипендия» — различает.
+    """
+    if not query_terms:
+        return 0.0
+    content_tokens = set(_tokens(content))
+    if not content_tokens:
+        return 0.0
+
+    total_w = 0.0
+    hit_w = 0.0
+    for alts in query_terms:
+        w = 1.0
+        if idf:
+            w = max((idf.get(a, 1.0) for a in alts), default=1.0)
+        total_w += w
+        if content_tokens & alts:
+            hit_w += w
+    return (hit_w / total_w) if total_w > 0 else 0.0
+
+
+def _faq_question(content: str) -> str:
+    """
+    Вытаскивает вопрос из фрагмента формата «В: <вопрос> О: <ответ>».
+
+    Нужно для точного бонуса: раньше ЛЮБОЙ FAQ-фрагмент получал плоскую
+    надбавку, и на вопрос «Кто ректор МИРЭА?» побеждал фрагмент «Почему часть
+    данных о МИРЭА неофициальная?» — он тоже из FAQ, но к ректору не относится,
+    просто содержит слово «МИРЭА». Теперь надбавка пропорциональна совпадению
+    ВОПРОСА фрагмента с вопросом гостя.
+    """
+    if not content:
+        return ""
+    import re as _re
+
+    # Формат: «### В: … О: …» или «В: … О: …»
+    m = _re.search(r"(?:^|\n)\s*(?:#{1,6}\s*)?В:\s*(.+?)\s*(?:\n|О:)", content)
+    return m.group(1)[:200] if m else ""
+
+
+def _faq_questions(content: str):
+    """
+    Вытаскивает ВСЕ вопросы из фрагмента формата «В: <вопрос> О: <ответ>».
+
+    ВАЖНО: один чанк почти всегда содержит НЕСКОЛЬКО FAQ-записей (чанкование
+    идёт по размеру текста, а не по записям). Раньше брался только ПЕРВЫЙ
+    вопрос, поэтому чанк с нужным ответом («Сколько бюджетных мест на
+    бакалавриат…») оценивался по чужому вопросу и проигрывал случайному
+    разделу. Теперь собираем все вопросы чанка и при ранжировании берём
+    ЛУЧШЕЕ совпадение.
+    """
+    if not content:
+        return []
+    import re as _re
+
+    found = []
+    for m in _re.finditer(
+        r"(?:^|\n)\s*(?:#{1,6}\s*)?В:\s*([^\n]+)", content
+    ):
+        q = m.group(1).strip()
+        if q:
+            found.append(q[:200])
+        if len(found) >= 25:
+            break
+    return found
+
+
+# Слова, которые ВАЖНЫ при сопоставлении ВОПРОСА с ВОПРОСОМ, хотя бесполезны
+# при сравнении с обычным текстом.
+#
+# Зачем отдельный набор: «где», «они», «сколько» выброшены из _STOPWORDS,
+# потому что в тексте разделов они ничего не значат. Но при подборе FAQ-записи
+# они — главный различающий признак: «Сколько ОБЩЕЖИТИЙ и ГДЕ ОНИ?» должно
+# совпасть с «Сколько общежитий … и где они находятся?», а НЕ с «Сколько СТОИТ
+# общежитие?». Без этих слов оба вопроса имели одинаковый вес, и выбирался
+# неверный.
+_QUESTION_WORDS = {
+    "кто", "что", "где", "когда", "сколько", "как", "какой", "какая",
+    "какие", "каких", "каком", "почему", "зачем", "куда", "откуда", "чей",
+    "чья", "они", "есть", "ли", "можно", "нужно", "сколько-нибудь",
+    "находится", "находятся", "сколько", "есть",
+}
+
+# Мелкие искажения имён, которые лёгкая модель уверенно выдаёт вслух.
+# Только для имён, которые реально звучат в ответе (руководство вуза).
+_NAME_FIXES = {
+    "санислав": "Станислав",
+    "станислова": "Станислава",
+    "алексевеч": "Алексеевич",
+    "алексеевичь": "Алексеевич",
+    "кужд": "Кудж",
+    "сигово": "Сигова",
+    "сигав": "Сигов",
+}
+
+
+def _tokens_for_questions(text: str) -> list:
+    """
+    Токены для сопоставления ВОПРОСА с вопросом: вопросительные слова СОХРАНЯЮТСЯ.
+
+    Отличается от ``_tokens`` только тем, что не выкидывает слова из
+    ``_QUESTION_WORDS``. Это даёт правильный выбор FAQ-записи.
+    """
+    if not text:
+        return []
+    words = re.findall(r"[а-яёa-z0-9]+", text.lower())
+    out = []
+    for w in words:
+        if len(w) < 3:
+            continue
+        stem = w[:6]
+        if stem in _QUESTION_WORDS:
+            out.append(stem)
+            continue
+        if w in _STOPWORDS or stem in _STOPWORDS:
+            continue
+        out.append(stem)
+    return out
+
+
+def fix_known_names(text: str) -> str:
+    """Исправляет частые искажения имён руководства вуза."""
+    if not text:
+        return text
+    out = text
+    for bad, good in _NAME_FIXES.items():
+        out = re.sub(rf"\b{bad}", good, out, flags=re.IGNORECASE)
+    return out
+
+
+def _faq_entries(content: str):
+    """
+    Разбивает текст на FAQ-записи: [(вопрос, текст_записи «В: … О: …»)].
+
+    Зачем построчно, а не чанками: чанкование идёт по размеру текста, поэтому
+    в ОДНОМ чанке лежат 5–15 разных вопросов. Раньше чанк оценивался по одному
+    (первому) вопросу или по всем сразу — и в контекст уходил блок, где нужный
+    ответ зарыт среди чужих. Теперь мы можем ВЫРЕЗАТЬ ровно ту запись, чей
+    вопрос совпал с вопросом гостя, и поставить её первой в контекст.
+    """
+    if not content:
+        return []
+    import re as _re
+
+    marks = []
+    for m in _re.finditer(r"(?:^|\n)\s*(?:#{1,6}\s*)?В:\s*([^\n]+)", content):
+        marks.append((m.start(), m.group(1).strip()))
+        if len(marks) >= 30:
+            break
+    entries = []
+    for i, (pos, q) in enumerate(marks):
+        end = marks[i + 1][0] if i + 1 < len(marks) else len(content)
+        entry = content[pos:end].strip()
+        if q and entry:
+            entries.append((q, entry))
+    return entries
+
+
+def _extract_heading(content: str) -> str:
+    """
+    Достаёт содержательный заголовок чанка.
+
+    ВАЖНО: нельзя слепо брать первую строку. У таблиц первая строка — это ШАПКА
+    СТОЛБЦОВ («| № | Адрес (2ГИС) | Тип, этажность | Мест | Плата в месяц
+    (бюджет / платно) |»), и она случайно содержит слова запроса («мест»,
+    «бюджет»). Из-за этого скоринг по заголовку давал 1.0 нерелевантным чанкам,
+    все оценки сравнивались, и в ответ уходил мусор.
+
+    Поэтому шапки таблиц как заголовок игнорируем: берём первую строку, которая
+    не начинается с «|» и не является ссылкой/служебной пометкой.
+    """
+    for line in (content or "").split("\n")[:5]:
+        line = line.strip()
+        if not line or line.startswith("|"):
+            continue
+        # Строка-разделитель таблицы (|---|---|) и цитаты-ссылки не подходят.
+        if set(line) <= set("-|: "):
+            continue
+        return line[:200]
+    return ""
+
+
+def _bm25_terms(query_terms, tf, n_toks: int, avg_len: float, idf: dict,
+                k1: float = 1.5, b: float = 0.6) -> float:
+    """
+    BM25-подобный скор по набору терминов запроса (нормированный в 0..1).
+
+    Зачем BM25, а не доля совпадений: раньше любой чанк, где встретились все
+    слова вопроса, получал ровно 1.0. Таких чанков в базе МИРЭА десятки — все
+    сравнивались, и победитель выбирался случайно (выигрывал «институт ИТУ»
+    вместо сводки о бюджетных местах).
+
+    BM25 учитывает ЧАСТОТУ слова в чанке и ДЛИНУ чанка: короткий текст, плотно
+    посвящённый теме («9.1. Общежития: шесть корпусов и ДАС-2»), обгоняет
+    длинный текст, где слово упомянуто мельком в одном абзаце.
+    """
+    if not query_terms or not tf:
+        return 0.0
+    norm = 0.0
+    total = 0.0
+    for alts in query_terms:
+        w = max((idf.get(a, 1.0) for a in alts), default=1.0)
+        norm += w
+        freq = max((tf.get(a, 0) for a in alts), default=0)
+        if freq:
+            denom = freq + k1 * (1 - b + b * (n_toks / max(1.0, avg_len)))
+            total += w * (freq * (k1 + 1.0)) / denom
+    if not norm:
+        return 0.0
+    # Делим ещё на (k1+1), чтобы результат был <= 1 и был сопоставим с весами.
+    return total / (norm * (k1 + 1.0))
+
+
+def _lexical_score_terms(query_terms, content_tokens: set, idf: dict = None) -> float:
+    """
+    Вариант ``_lexical_score`` для УЖЕ готового набора токенов текста.
+
+    Нужен для снимка коллекции: там токены каждого чанка посчитаны заранее, и
+    повторно токенизировать сотни чанков на каждый вопрос не надо.
+    """
+    if not query_terms or not content_tokens:
+        return 0.0
+    total_w = 0.0
+    hit_w = 0.0
+    for alts in query_terms:
+        w = max((idf.get(a, 1.0) for a in alts), default=1.0) if idf else 1.0
+        total_w += w
+        if content_tokens & alts:
+            hit_w += w
+    return (hit_w / total_w) if total_w > 0 else 0.0
+
+
+def _key_term(query_terms, idf: dict, threshold: float = None):
+    """
+    Возвращает набор словоформ САМОГО РЕДКОГО слова вопроса — «ключевого».
+
+    Зачем: в базе МИРЭА почти в каждом чанке есть «МИРЭА» и «институт». На
+    вопросе «Кто ректор МИРЭА?» доля совпадений у всех чанков почти одинаковая
+    (lex = 1.0 у десятков чанков), и победитель выбирается почти случайно.
+    А вот «ректор» встречается редко, и чанк с ним — почти наверняка ответ.
+
+    Берём слово с МАКСИМАЛЬНЫМ IDF из запроса. Порог (если задан) лишь отсекает
+    случай, когда в вопросе одни общеупотребительные слова.
+
+    ВАЖНО: сравнение с процентилем IDF по всей коллекции НЕ подходит — в базе
+    полно уникальных слов (номера источников, редкие термины), и 75-й процентиль
+    оказывается очень высоким (~6.8), так что «ректор» (3.5) до него не дотягивал
+    и правило не срабатывало вообще.
+    """
+    if not query_terms or not idf:
+        return set()
+    best, best_w = set(), 0.0
+    for alts in query_terms:
+        w = max((idf.get(a, 1.0) for a in alts), default=1.0)
+        if w > best_w:
+            best, best_w = alts, w
+    if threshold is not None and best_w < threshold:
+        return set()
+    return best
+
+
+def _idf_median_high(idf: dict, q: float = 0.10) -> float:
+    """
+    Порог «редкости» — 10-й процентиль IDF по коллекции.
+
+    Низкая квантиль (не 75-я!) выбрана специально: нужен фильтр только против
+    совсем общеупотребительных слов, а не «отбор самых уникальных». Так редкие
+    предметные слова вопроса («ректор», «стипендия») точно проходят порог.
+    """
+    if not idf:
+        return 0.0
+    vals = sorted(idf.values())
+    idx = min(len(vals) - 1, int(len(vals) * q))
+    return vals[idx]
+
+
+def _query_terms(query_tokens) -> list:
+    """
+    Превращает слова запроса в наборы словоформ (слово + синонимы).
+
+    Пример: «профком» (основа «профко») → {"профко", "профсо", "профор", …},
+    поэтому находится раздел про «Профсоюзную организацию».
+    """
+    terms = []
+    for t in query_tokens:
+        alts = {t}
+        for extra in _QUERY_EXPANSIONS.get(t, ()):
+            alts.add(extra)
+        terms.append(alts)
+    return terms
+
+
+def _compute_idf(token_lists) -> dict:
+    """
+    Считает IDF по набору документов: 1 + log(N / df).
+
+    Чем в большем числе чанков встречается слово, тем меньше его вес.
+    """
+    import math
+
+    n = max(1, len(token_lists))
+    df: dict = {}
+    for toks in token_lists:
+        for t in set(toks):
+            df[t] = df.get(t, 0) + 1
+    return {t: 1.0 + math.log(n / c) for t, c in df.items()}
+
+
+# ---------------------------------------------------------------------------
+# Снимок коллекции в памяти (сильно ускоряет поиск)
+# ---------------------------------------------------------------------------
+# Раньше КАЖДЫЙ поиск заново: выгружал все чанки с векторами из Qdrant (сотни
+# КБ), заново токенизировал их для IDF и считал близость по одному вектору.
+# На один вопрос это десятки-сотни миллисекунд, а в диалоге копится.
+#
+# База вуза меняется только при заливке, поэтому держим снимок в памяти
+# процесса: вектора как одну numpy-матрицу + заранее посчитанные токены и IDF.
+# Тогда поиск = эмбеддинг вопроса + одно умножение матриц.
+_SNAPSHOT_CACHE: Dict[str, Dict[str, Any]] = {}
+_SNAPSHOT_LOCK = __import__("threading").Lock()
+_SNAPSHOT_TTL_SEC = 600.0          # пересобирать не чаще, чем раз в 10 минут
+_SNAPSHOT_MAX = 4                  # сколько коллекций держим одновременно
+
+
+def invalidate_snapshot(collection_id: str = None) -> None:
+    """
+    Сбрасывает кэш снимка (после заливки/удаления документов).
+
+    Без этого поиск отдавал бы старые данные до истечения TTL.
+    """
+    with _SNAPSHOT_LOCK:
+        if collection_id is None:
+            _SNAPSHOT_CACHE.clear()
+        else:
+            _SNAPSHOT_CACHE.pop(str(collection_id), None)
+
+
+def _build_snapshot(qdrant_service: "QdrantService", collection_id: str):
+    """
+    Выгружает коллекцию целиком и готовит её к быстрому поиску.
+
+    Возвращает dict с элементами (payload + токены + вектор) и numpy-матрицей
+    векторов, либо ``None``, если коллекция недоступна/пуста.
+    """
+    import time as _time
+
+    points = qdrant_service.scroll_all(
+        collection_id, max_points=5000, with_vector=True
+    )
+    if not points:
+        return None
+
+    items = []
+    vectors = []
+    for p in points:
+        payload = p.get("payload") or {}
+        content = payload.get("content", "") or ""
+        title = payload.get("document_title", "") or ""
+        item = {
+            "id": p.get("id"),
+            "payload": payload,
+            "content": content,
+            "title": title,
+            "heading": _extract_heading(content),
+            # Токены считаем ОДИН раз — они нужны и для IDF, и для скоринга.
+            # Counter (token → частота) — BM25 нужна именно частота.
+            "toks": _counter(content),
+        }
+        item["head_toks"] = _counter(item["heading"])
+        item["title_toks"] = _counter(title)
+        item["n_toks"] = sum(item["toks"].values()) or 1
+        # FAQ-записи чанка (вопрос + текст ответа) — нужны, чтобы вырезать
+        # и подставить в контекст РОВНО ту запись, чей вопрос совпал.
+        item["entries"] = [(_counter_q(q), txt) for q, txt in _faq_entries(content)]
+        items.append(item)
+        vectors.append(p.get("vector"))
+
+    avg_len = (sum(it["n_toks"] for it in items) / len(items)) if items else 1.0
+
+    matrix = None
+    try:
+        import numpy as np
+
+        if all(v is not None for v in vectors):
+            m = np.asarray(vectors, dtype="float32")
+            norms = np.linalg.norm(m, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            matrix = m / norms
+    except Exception as e:  # noqa: BLE001
+        print(f"Снимок: не удалось собрать матрицу векторов: {e}")
+
+    # IDF считаем ОДИН раз по всей коллекции — это основа лексического скоринга.
+    idf = _compute_idf([it["toks"] for it in items])
+
+    return {
+        "items": items,
+        "matrix": matrix,
+        "idf": idf,
+        "avg_len": avg_len,
+        "ts": _time.time(),
+    }
+
+
+def _get_snapshot(qdrant_service: "QdrantService", collection_id: str):
+    """
+    Возвращает снимок коллекции из кэша, пересобирая его при необходимости.
+
+    Кэш потокобезопасный: приложение многопоточное (threaded=True), иначе
+    параллельные вопросы пересобирали бы снимок несколько раз.
+    """
+    import time as _time
+
+    key = str(collection_id)
+    with _SNAPSHOT_LOCK:
+        snap = _SNAPSHOT_CACHE.get(key)
+        if snap and (_time.time() - snap["ts"]) < _SNAPSHOT_TTL_SEC:
+            return snap
+    # Собираем ВНЕ блокировки: это сетевой запрос, держать лок нельзя.
+    snap = _build_snapshot(qdrant_service, collection_id)
+    if snap:
+        with _SNAPSHOT_LOCK:
+            _SNAPSHOT_CACHE[key] = snap
+            # Ограничиваем число коллекций в памяти (самые старые — вон).
+            while len(_SNAPSHOT_CACHE) > _SNAPSHOT_MAX:
+                oldest = min(_SNAPSHOT_CACHE, key=lambda k: _SNAPSHOT_CACHE[k]["ts"])
+                _SNAPSHOT_CACHE.pop(oldest, None)
+    return snap
+
+
 class DocumentService:
     """Service for processing and managing documents"""
     
@@ -668,7 +1251,11 @@ class DocumentService:
         # Update document metadata
         document.metadata['chunk_count'] = len(chunks)
         document.save()
-        
+
+        # Коллекция изменилась — сбрасываем снимок, иначе поиск до 10 минут
+        # отдавал бы старые данные (без только что залитых файлов).
+        invalidate_snapshot(collection_id)
+
         return document
     
     def search_documents(self, collection_id, query, limit=5):
@@ -689,35 +1276,172 @@ class DocumentService:
                 'results': [],
                 'message': 'Collection does not exist'
             }
-        
+
         # Get collection to determine embedding model to use
         collection = Collection.get(collection_id)
-        
-        # Search Qdrant with the collection's embedding model if defined
-        if collection and collection.embedding_provider and collection.embedding_model:
-            results = self.qdrant_service.search(
-                collection_id, 
-                query, 
-                limit=limit,
-                provider=collection.embedding_provider,
-                model=collection.embedding_model
-            )
-        else:
-            results = self.qdrant_service.search(collection_id, query, limit=limit)
-        
+
+        # Берём готовый снимок коллекции из памяти: вектора, токены и IDF уже
+        # посчитаны. Иначе на КАЖДЫЙ вопрос заново качались бы все чанки с
+        # векторами (сотни КБ) и пересчитывался IDF — из-за этого поиск «долго
+        # идёт». Снимок пересобирается раз в 10 минут или после заливки.
+        snapshot = _get_snapshot(self.qdrant_service, collection_id)
+        if not snapshot or not snapshot.get("items"):
+            return {
+                'query': query,
+                'results': [],
+                'message': 'Collection is empty or unavailable'
+            }
+
+        # Эмбеддинг вопроса — один раз (самая дорогая часть поиска).
+        query_vector = None
+        try:
+            if collection and collection.embedding_provider and collection.embedding_model:
+                query_vector = self.qdrant_service.get_embedding(
+                    query,
+                    provider=collection.embedding_provider,
+                    model=collection.embedding_model,
+                )
+            else:
+                query_vector = self.qdrant_service.get_embedding(query)
+        except Exception as e:
+            print(f"Не удалось получить эмбеддинг запроса: {e}")
+
+        items = snapshot["items"]
+        matrix = snapshot.get("matrix")
+        idf = snapshot["idf"]
+        # Векторная близость одним умножением матриц (646 × 384 → микросекунды).
+        # Косинус = скалярное произведение нормализованных векторов.
+        vec_scores = None
+        if query_vector is not None and matrix is not None:
+            try:
+                import numpy as np
+
+                qv = np.asarray(query_vector, dtype="float32")
+                qn = float(np.linalg.norm(qv))
+                if qn > 0:
+                    vec_scores = matrix @ (qv / qn)
+            except Exception as e:  # noqa: BLE001
+                print(f"Векторный скоринг не удался: {e}")
+
+        query_tokens = _tokens(query)
+        query_terms = _query_terms(query_tokens)
+        # Отдельный набор терминов ДЛЯ СОПОСТАВЛЕНИЯ С ВОПРОСАМИ FAQ: здесь
+        # сохранены вопросительные слова («где», «они», «сколько»).
+        q_terms = _query_terms(_tokens_for_questions(query))
+        # Вопрос ли это (есть вопросительное слово или «?») — от этого зависит
+        # бонус фрагментам формата «В: … О: …».
+        is_question = query.rstrip().endswith("?") or bool(re.match(
+            r"(?i)^\s*(кто|что|где|когда|сколько|как|какой|какая|какие|каких|"
+            r"почему|зачем|куда|откуда|чей|чья|есть\s+ли|можно\s+ли)",
+            query.strip(),
+        ))
+        # Отдельного бонуса за «самое редкое слово» здесь БОЛЬШЕ НЕТ: в этой базе
+        # тематические слова («ректор», «стипендия») встречаются в СОТНЯХ чанков,
+        # и бонус за них только шумел — победителями становились случайные
+        # FAQ-фрагменты, где слово просто упомянуто.
+
+        scored = []
+        avg_len = snapshot.get("avg_len") or 1.0
+        # Лучшая совпавшая FAQ-запись по всей коллекции — (bm25, текст).
+        faq_best = (0.0, "")
+        for idx, item in enumerate(items):
+            vec = float(vec_scores[idx]) if vec_scores is not None else 0.0
+
+            # BM25 по СОДЕРЖИМОМУ: учитывает частоту слова и длину чанка.
+            lex = _bm25_terms(query_terms, item["toks"], item["n_toks"],
+                              avg_len, idf)
+            head_lex = _bm25_terms(query_terms, item["head_toks"],
+                                   max(1, sum(item["head_toks"].values())),
+                                   avg_len, idf)
+            title_lex = _bm25_terms(query_terms, item["title_toks"],
+                                    max(1, sum(item["title_toks"].values())),
+                                    avg_len, idf)
+
+            # Веса подобраны по реальным вопросам к базе МИРЭА:
+            #  • заголовок раздела («3.1. Ректор», «9.2. Стипендии») — сильный
+            #    признак темы чанка;
+            #  • BM25 по тексту — основа (плотность темы);
+            #  • document_title почти всегда общий («faq», имя файла);
+            #  • вектор — лёгкая поправка (на русском ненадёжен).
+            score = (0.20 * vec
+                     + 0.90 * lex
+                     + 0.10 * title_lex
+                     + 0.60 * head_lex)
+
+            # Обрывки-«приложения» — списки источников [И12, И34] и дампы таблиц
+            # («| колонка | колонка |»). Они набиты служебными токенами, поэтому
+            # по лексике часто обгоняют настоящий раздел. Ответом они быть не
+            # могут — слегка штрафуем, чтобы уступали содержательным чанкам.
+            if item["heading"].startswith(("Источники", "|", "Приложение")):
+                score -= 0.15
+
+            # Кураторские фрагменты (chunks/) — короткие, с заголовками разделов
+            # («# 9.2. Стипендии…»), лучший источник для ответа. Раньше бонус был
+            # 0.05 — слишком мал, чтобы перебить мусорные таблицы.
+            if item["title"].startswith("chunks"):
+                score += 0.20
+
+            # Фрагмент в формате «В: <вопрос> О: <ответ>» — курируемая
+            # энциклопедия, созданная РОВНО под такие вопросы.
+            # Считаем совпадение по каждому вопросу чанка и запоминаем лучшую
+            # запись — её потом подставим первой в контекст.
+            if is_question and item.get("entries"):
+                for qc, etext in item["entries"]:
+                    q_lex = _bm25_terms(q_terms, qc,
+                                        max(1, sum(qc.values())), avg_len, idf)
+                    # Плюс ПОЛНОТА совпадения: доля слов вопроса, найденных в
+                    # вопросе FAQ. Без неё BM25 выбирал запись, где одно редкое
+                    # слово встречается часто, игнорируя то, что остальные слова
+                    # вопроса в ней отсутствуют. Например, на «Сколько бюджетных
+                    # мест?» выигрывала запись про экономику (там есть «бюджет» и
+                    # «мест», но нет «сколько»), а не запись про бакалавриат, где
+                    # совпадают ВСЕ слова.
+                    matched = sum(1 for alts in q_terms
+                                  if any(qc.get(a) for a in alts))
+                    coverage = matched / max(1, len(q_terms))
+                    q_lex = 0.5 * q_lex + 0.5 * coverage
+                    score += 0.80 * q_lex
+                    if q_lex > faq_best[0]:
+                        faq_best = (q_lex, etext)
+
+            scored.append((score, item))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        results = scored[:limit]
+
         # Format search results
         formatted_results = []
-        for result in results:
-            payload = result['payload']
+        for score, item in results:
+            payload = item["payload"]
             formatted_results.append({
-                'score': result['score'],
+                'score': score,
                 'document_id': payload.get('document_id'),
                 'document_title': payload.get('document_title'),
-                'content': payload.get('content', ''),
+                'content': item["content"],
                 'file_path': payload.get('file_path', ''),
                 'page_number': payload.get('page_number', 1)
             })
-        
+
+        # Если нашлась FAQ-запись, чей вопрос почти дословно совпал с вопросом
+        # гостя, — ставим её ПЕРВОЙ и отдельным результатом. В базе МИРЭА FAQ —
+        # самый точный источник («Сколько бюджетных мест на бакалавриат было в
+        # 2026 году?» → конкретные цифры), но он лежит в больших чанках вместе
+        # с чужими вопросами, поэтому модель его не использовала и отвечала
+        # общими словами или путала соседние темы.
+        #
+        # Порог 0.55 отсекает случайные совпадения по одному общему слову.
+        if is_question and faq_best[0] >= 0.55 and faq_best[1]:
+            print(f"⭐ FAQ-запись подставлена первой (bm25={faq_best[0]:.2f})")
+            formatted_results.insert(0, {
+                'score': 10.0 + faq_best[0],   # заведомо первое место
+                'document_id': 'faq-best',
+                'document_title': 'faq',
+                'content': faq_best[1],
+                'file_path': '',
+                'page_number': 1,
+            })
+            formatted_results = formatted_results[:limit]
+
         return {
             'query': query,
             'results': formatted_results

@@ -1,5 +1,7 @@
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash
 from flask_login import login_required, current_user
+import logging
+
 from app.models.chat import Chat
 from app.models.collection import Collection
 from app.services.rag_service import RAGService
@@ -7,6 +9,12 @@ from app.services.agent_search_service import AgentSearchService
 from app.services.searxng_service import SearXNGService
 from app.services.web_search_agent_service import WebSearchAgentService
 from app.services.llm_service import LLMFactory
+from app.utils import slim_result, estimate_size
+
+# Логгер на уровне модуля. Объявлять его внутри функции нельзя: ниже по коду
+# он же присваивался в блоке except, из-за чего Python считал имя локальным —
+# обращение к нему до присваивания падало с UnboundLocalError.
+logger = logging.getLogger(__name__)
 
 chat_bp = Blueprint('chat', __name__, url_prefix='/chat')
 
@@ -182,16 +190,23 @@ def chat_query(chat_id):
         import markdown
         if 'response' in result:
             result['formatted_response'] = markdown.markdown(result['response'])
-        
+
         # Return the result with additional chat info
         result['chat'] = chat.to_dict()
-        
-        return jsonify(result)
+
+        # Уменьшаем ответ: в этом окружении VPN обрывает HTTP-ответы крупнее
+        # ~16 КБ, и клиент получал 0 байт вместо данных ("Ошибка соединения").
+        # Полные тексты чанков клиенту не нужны — достаточно превью.
+        payload = slim_result(result)
+        logger.info(
+            "[CHAT] ответ %d байт, контекстов %d",
+            estimate_size(payload), len(payload.get('contexts') or []),
+        )
+
+        return jsonify(payload)
         
     except Exception as e:
         # Log the error
-        import logging
-        logger = logging.getLogger(__name__)
         logger.error(f"Error processing chat query: {str(e)}")
         
         # Return an error response
@@ -229,6 +244,39 @@ def get_messages(chat_id):
         'chat': chat.to_dict(),
         'messages': messages
     })
+
+@chat_bp.route('/<chat_id>/append', methods=['POST'])
+@login_required
+def append_messages(chat_id):
+    """
+    Append an already-produced question/answer pair to the chat.
+
+    Used by external clients (e.g. the voice assistant) that answer some
+    phrases WITHOUT going through the search services (fast conversational
+    replies via a direct LLM call). Persisting those turns keeps the chat
+    history complete, so the conversation context stays coherent for
+    follow-up questions.
+
+    Form fields:
+        question (str): user message to store
+        answer (str): assistant message to store
+    """
+    chat = Chat.get(chat_id)
+    if not chat:
+        return jsonify({'error': 'Chat not found'}), 404
+
+    if chat.user_id != current_user.id:
+        return jsonify({'error': 'You do not have permission to access this chat'}), 403
+
+    question = (request.form.get('question') or '').strip()
+    answer = (request.form.get('answer') or '').strip()
+    if not question or not answer:
+        return jsonify({'error': 'Missing question or answer'}), 400
+
+    chat.add_message('user', question)
+    chat.add_message('assistant', answer, {'search_type': 'direct'})
+
+    return jsonify({'success': True, 'chat': chat.to_dict()})
 
 @chat_bp.route('/<chat_id>/title', methods=['POST'])
 @login_required

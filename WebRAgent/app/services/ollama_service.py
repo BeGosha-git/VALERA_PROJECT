@@ -1,8 +1,27 @@
 import os
+import json
+import logging
 from datetime import datetime
 import requests
 from app.services.llm_service import LLMService
 from app.services.model_service import ModelService
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Лимит размера ТЕЛА запроса к Ollama
+# ---------------------------------------------------------------------------
+# В этом окружении VPN перехватывает соединения и ОБРЫВАЕТ крупные HTTP-тела
+# (проверено: 2-5 КБ проходит, ~7 КБ и больше — виснет). При обрыве Ollama ждёт
+# остаток тела до собственного таймаута (~107 с), всё это время слот занят,
+# и ВСЕ следующие запросы встают в очередь и падают по таймауту — поиск в базе
+# знаний «висел» именно из-за этого (10.4 КБ → 500 на /api/generate).
+#
+# Второй важный момент: `requests` при передаче `json=` сериализует с
+# ensure_ascii=True, то есть КАЖДАЯ русская буква превращается в `\u0444` —
+# 6 байт вместо 2. Тело раздувается В ТРИ РАЗА. Поэтому отправляем свой JSON
+# с ensure_ascii=False.
+_MAX_BODY_BYTES = int(os.getenv("OLLAMA_MAX_BODY_BYTES", "4500"))
 
 class OllamaService(LLMService):
     """Service for interacting with Ollama API"""
@@ -40,6 +59,130 @@ class OllamaService(LLMService):
                 f"Сейчас {now.hour:02d}:{now.minute:02d} по московскому времени. "
                 f"Используй эту дату, когда спрашивают о сегодняшнем дне, числе или времени.")
     
+    @staticmethod
+    def _fit_body(payload):
+        """
+        Уменьшает тело запроса до безопасного размера (см. _MAX_BODY_BYTES).
+
+        Умеет ужимать оба формата: ``{"prompt": "..."}`` и
+        ``{"messages": [{"role": ..., "content": ...}]}``. Коротко обрезаемый
+        хвост промпта теряет контекст, но это лучше, чем полностью зависший
+        запрос: база знаний отдаёт самые нужные фрагменты в НАЧАЛЕ контекста.
+        """
+        def encode(p):
+            return json.dumps(p, ensure_ascii=False).encode("utf-8")
+
+        data = encode(payload)
+        if len(data) <= _MAX_BODY_BYTES:
+            return data
+
+        # Находим самое длинное текстовое поле и обрезаем его.
+        target = None
+        if isinstance(payload.get("prompt"), str):
+            target = ("prompt", None)
+        elif isinstance(payload.get("messages"), list):
+            best, best_len = None, -1
+            for i, m in enumerate(payload["messages"]):
+                if isinstance(m, dict) and isinstance(m.get("content"), str):
+                    if len(m["content"]) > best_len:
+                        best, best_len = i, len(m["content"])
+            if best is not None:
+                target = ("messages", best)
+
+        if target is None:
+            logger.warning(
+                "[OLLAMA] Тело %d байт > лимита %d, но текстового поля нет — "
+                "отправляю как есть", len(data), _MAX_BODY_BYTES,
+            )
+            return data
+
+        key, idx = target
+        text = payload[key] if idx is None else payload["messages"][idx]["content"]
+        # Сколько байт остаётся на текст: вычитаем всё остальное в теле.
+        if idx is None:
+            probe = {**payload, key: ""}
+        else:
+            msgs = [dict(m) for m in payload["messages"]]
+            msgs[idx] = {**msgs[idx], "content": ""}
+            probe = {**payload, "messages": msgs}
+        reserve = len(encode(probe))
+        allow = max(400, _MAX_BODY_BYTES - reserve)
+
+        # Режем по границе символов (чтобы не сломать UTF-8) и ВЫРЕЗАЕМ
+        # СЕРЕДИНУ, а не хвост: в конце промпта стоит сам вопрос и метка
+        # «Assistant:» — если отрезать хвост, модель останется без вопроса.
+        # Начало (системная инструкция) и конец (вопрос) сохраняем, а теряем
+        # только ненужные куски контекста из середины.
+        marker = "\n\n...[часть контекста опущена]...\n\n"
+        head_ratio = 0.6
+        cut = text
+        while len(cut.encode("utf-8")) > allow and len(cut) > 200:
+            keep = int(len(cut) * 0.85)
+            h = int(keep * head_ratio)
+            t = keep - h
+            cut = cut[:h] + marker + (cut[-t:] if t > 0 else "")
+            # Режем по границе предложения, чтобы текст остался читаемым.
+            for sep in (". ", "! ", "? ", "\n"):
+                pos = cut.find(sep, max(0, h - 120))
+                if 0 < pos < h:
+                    cut = cut[: pos + 1] + marker + cut[h + len(marker):]
+                    break
+
+        logger.warning(
+            "[OLLAMA] Промпт обрезан: %d → %d символов (лимит тела %d байт)",
+            len(text), len(cut), _MAX_BODY_BYTES,
+        )
+
+        if idx is None:
+            new_payload = {**payload, key: cut}
+        else:
+            msgs = [dict(m) for m in payload["messages"]]
+            msgs[idx] = {**msgs[idx], "content": cut}
+            new_payload = {**payload, "messages": msgs}
+        return encode(new_payload)
+
+    def _post_chat(self, messages, max_tokens):
+        """
+        Отправляет запрос в Ollama через ``/api/chat`` и возвращает текст ответа.
+
+        ПОЧЕМУ НЕ ``/api/generate``. Этот эндпоинт возвращает в ответе ещё и
+        массив ``context`` — ВСЕ токены промпта числами. Замерено на реальном
+        запросе: ответ на вопрос из 95 символов весил 12 011 байт, из которых
+        13 548 байт (до сжатия) — именно ``context``. При контексте из базы
+        знаний массив переваливал за 16 КБ, VPN обрывал ответ, клиент получал
+        ноль байт и падал по таймауту — именно это выглядело как «RAG не
+        работает / висит».
+
+        ``/api/chat`` того же ответа занимает 441 байт и поля ``context`` не
+        содержит вообще, поэтому ответ всегда проходит целиком.
+
+        Плюс отправляем тело своим JSON с ``ensure_ascii=False``: стандартный
+        ``requests(json=...)`` экранирует кириллицу в ``\\uXXXX``, раздувая тело
+        в три раза (6 байт на букву вместо 2).
+        """
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "keep_alive": "30m",  # держим модель в памяти между вызовами
+            "options": {"num_predict": max_tokens},
+        }
+        data = self._fit_body(payload)
+        resp = requests.post(
+            f"{self.base_url}/chat",
+            data=data,
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            timeout=120,
+        )
+        if resp.status_code >= 400:
+            logger.error(
+                "[OLLAMA] /api/chat → %s (тело %d байт): %s",
+                resp.status_code, len(data), resp.text[:200],
+            )
+        resp.raise_for_status()
+        return (resp.json().get("message") or {}).get("content", "") or \
+            'No response received'
+
     def _generate_completion(self, system_message, user_message, max_tokens):
         """
         Generate a completion using Ollama API
@@ -54,24 +197,14 @@ class OllamaService(LLMService):
         """
         # Добавляем текущую дату, чтобы модель могла отвечать на вопросы о «сегодня»
         system_message = f"{system_message}\n\n{self._now_context()}"
-        # Format the prompt for Ollama, which often works better with explicit labels
-        full_prompt = f"System: {system_message}\n\nUser: {user_message}\n\nAssistant:"
-        
-        response = requests.post(
-            f"{self.base_url}/generate",
-            json={
-                "model": self.model,
-                "prompt": full_prompt,
-                "stream": False,
-                "keep_alive": "30m",  # держим модель в памяти между вызовами
-                "options": {
-                    "num_predict": max_tokens
-                }
-            }
+        return self._post_chat(
+            [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_message},
+            ],
+            max_tokens,
         )
-        response.raise_for_status()
-        return response.json().get('response', 'No response received')
-    
+
     def _generate_chat_completion(self, messages, max_tokens):
         """
         Generate a chat completion using Ollama API
@@ -138,18 +271,11 @@ class OllamaService(LLMService):
             conversation_prompt += "[CURRENT USER]:\n\n"
         
         conversation_prompt += "Assistant:"
-        
-        response = requests.post(
-            f"{self.base_url}/generate",
-            json={
-                "model": self.model,
-                "prompt": conversation_prompt,
-                "stream": False,
-                "keep_alive": "30m",  # держим модель в памяти между вызовами
-                "options": {
-                    "num_predict": max_tokens
-                }
-            }
+
+        return self._post_chat(
+            [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": conversation_prompt},
+            ],
+            max_tokens,
         )
-        response.raise_for_status()
-        return response.json().get('response', 'No response received')

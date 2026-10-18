@@ -1,0 +1,797 @@
+# Источники базы знаний РТУ МИРЭА
+
+Номера И1…И779 соответствуют ссылкам «[Иn]» в базе. Адреса приведены для проверки человеком; для ответов модели они не нужны. Источники сгруппированы по степени официальности; обращение — сентябрь–октябрь 2026 г.
+
+## А. Официальные сайты и документы РТУ МИРЭА
+
+- **И1.** Приказ РТУ МИРЭА № 835 от 08.04.2026 о стоимости обучения на 2026/27 учебный год (опубликован в /sveden/paid_edu Ставропольского филиала; приложения 1–2 — Москва). Официальный документ. https://stavropol.mirea.ru/wp-content/docs/sveden/paid_edu/Prikaz-835-ot-08.04.26.pdf
+- **И2.** Приказ РТУ МИРЭА № 2407 от 14.09.2026 «О размерах стипендий» (с 01.09.2026). Официальный документ. https://stavropol.mirea.ru/wp-content/docs/sveden/grants/Prikaz-tipovoy-o-razmerakh-stipendiy-na-2026_2027-uchebnyy-god.pdf
+- **И3.** english.mirea.ru — «International Relations Department» (отделы и контакты). Официальный, без даты. https://english.mirea.ru/international/international-relations-department/
+- **И4.** english.mirea.ru — новость от 28.09.2026 об экспертизе «Приоритет-2030» 23–24.09.2026. Официальный. https://english.mirea.ru/news/two-day-cross-university-expert-review-of-the-priority-2030-program-held-at-rtu-mirea/
+- **И5.** stavropol.mirea.ru — «Основные сведения» филиала (наименование, учредитель, дата создания, программы). Официальный. https://stavropol.mirea.ru/sveden/common
+- **И6.** english.mirea.ru — главная страница официального англоязычного сайта (перечень институтов, новости 2026 г.). Официальный, обращение 14.10.2026. https://english.mirea.ru/
+- **И7.** english.mirea.ru — страница «Rector» (биография ректора). Официальный, без даты обновления. https://english.mirea.ru/about-university/administration/rector
+- **И8.** english.mirea.ru — страница «Rectorate» (состав ректората, кабинеты, телефоны, часы приёма). Официальный, без даты обновления. https://english.mirea.ru/about-university/administration/rectorate
+- **И9.** english.mirea.ru — «Contacts» (адреса кампусов, центральные контакты, соцсети). Официальный. https://english.mirea.ru/contacts/
+- **И10.** project.mirea.ru — портал проектов, «RTU MIREA Accelerator». Официальный, без даты. https://project.mirea.ru/en
+- **И11.** english.mirea.ru — «Strategic development program» (программа развития 2020–2024, приказы о реорганизации). Официальный. https://english.mirea.ru/about-university/strategic-development-program/
+- **И12.** english.mirea.ru — «Trade Union Organization of Workers and Students» (структура, председатель, контакты). Официальный, без даты (© 2026). https://english.mirea.ru/about-university/public-organizations/trade-union-organization-of-workers-and-students/
+- **И13.** english.mirea.ru — новость от 05.10.2021 о защите проекта в программе «Приоритет-2030». Официальный. https://english.mirea.ru/news/rtu-mirea-began-defending-its-project-on-the-track-of-the-priority-2030-program
+- **И14.** english.mirea.ru — «University today». Официальный, без даты. https://english.mirea.ru/about-university/university-today/
+- **И15.** english.mirea.ru — «Mega-laboratories» (31 мегалаборатория и центр). Официальный. https://english.mirea.ru/academics/mega-laboratories/
+- **И16.** english.mirea.ru — «Infrastructure / RTU MIREA campuses» (числа кампусов и общежитий не называет). Официальный, без даты. https://english.mirea.ru/about-university/infrastructure/rtu-mirea-campuses/
+- **И17.** english.mirea.ru — «Sports infrastructure». Официальный, страница изменена 06.10.2025. https://english.mirea.ru/about-university/infrastructure/sports-infrastructure/
+- **И18.** english.mirea.ru — «RTU MIREA in Rankings». Официальный, данные 2025 г. https://english.mirea.ru/international/rtu-mirea-in-rankings/
+- **И19.** english.mirea.ru — новость от 09.09.2026 о награждении ректора орденом Дружбы Республики Южная Осетия. Официальный. https://english.mirea.ru/news/rtu-mirea-rector-stanislav-kudzh-awarded-the-order-of-friendship-of-the-republic-of-south-ossetia/
+- **И20.** www.mirea.ru — «Запись на личный приём к ректору». Только заголовок в поисковой выдаче. https://www.mirea.ru/rector-reception/
+- **И21.** english.mirea.ru — контакты научного блока (проректор по инновационному развитию). Официальный, © 2026. https://english.mirea.ru/research/contact/
+- **И22.** dovuz.mirea.ru — Институт довузовской подготовки. Официальный, без даты. https://dovuz.mirea.ru/
+- **И23.** www.mirea.ru — «Ректорат» (русская версия). Страница существует (по поисковой выдаче), но была недоступна. https://www.mirea.ru/about/administration/rektorat/
+- **И24.** english.mirea.ru — перечень институтов (без учёта реорганизации 01.10.2026). Официальный, 14.10.2026. https://english.mirea.ru/academics/institutes/
+- **И25.** english.mirea.ru — «Institute Administration», Институт информационных технологий. Официальный, без даты (отражает изменения 2026 г.). https://english.mirea.ru/academics/institutes/institute-of-information-technologies/institute-administration/
+- **И26.** english.mirea.ru — «Institute Administration», Институт искусственного интеллекта. Официальный, без даты. https://english.mirea.ru/academics/institutes/institute-of-cybernetics/institute-administration/
+- **И27.** english.mirea.ru — «Institute Administration», Институт кибербезопасности и цифровых технологий. Официальный, без даты. https://english.mirea.ru/academics/institutes/institute-of-integrated-safety-and-special-instrument-engineering-/institute-administration/
+- **И28.** english.mirea.ru — «Institute Administration», Институт технологий управления. Официальный, без даты. https://english.mirea.ru/academics/institutes/institute-of-management-technologies/institute-administration/
+- **И29.** english.mirea.ru — «Institute Administration», ИТХТ им. М. В. Ломоносова. Официальный, без даты. https://english.mirea.ru/academics/institutes/lomonosov-institute-of-fine-chemical-technologies/institute-administration/
+- **И30.** priem.mirea.ru — презентация ПИШ СВЧ-электроники (2025/26). Официальный. https://priem.mirea.ru/lk/docs/pish_present
+- **И31.** english.mirea.ru — Институт международного образования. Официальный, без даты. https://english.mirea.ru/academics/institutes/institute-of-international-education/
+- **И32.** english.mirea.ru — «Heads of branches». Официальный, без даты. https://english.mirea.ru/about-university/administration/heads-of-branches/
+- **И33.** stavropol.mirea.ru — дирекция Ставропольского филиала. Официальный. https://stavropol.mirea.ru/directorate
+- **И34.** stavropol.mirea.ru — «Структура и органы управления» филиала. Официальный. https://stavropol.mirea.ru/sveden/struct
+- **И35.** «Российский технологический журнал», 2021, т. 9, № 4 (30.07.2021). Официальное издание РТУ МИРЭА. https://www.rtj-mirea.ru/jour/issue/download/34/32
+- **И36.** english.mirea.ru — «Institute Administration», Институт радиоэлектроники и информатики. Официальный, без даты (не обновлена после апреля 2026 г.). https://english.mirea.ru/academics/institutes/institute-of-radio-engineering-and-telecommunication-systems/institute-administration/
+- **И37.** english.mirea.ru — «Institute Administration», ИПТИП. Официальный, без даты. https://english.mirea.ru/academics/institutes/institute-of-physics-and-technology/institute-administration/
+- **И38.** priem.mirea.ru — презентация ИИТ для абитуриентов (баллы 2024 г., места 2025 г.). Официальный. https://priem.mirea.ru/lk/docs/iit_present
+- **И39.** priem.mirea.ru — презентация ИИИ для абитуриентов (приём 2024–2025). Официальный. https://priem.mirea.ru/lk/docs/iii_present
+- **И40.** priem.mirea.ru — презентация ИКБ для абитуриентов (приём 2024–2025). Официальный. https://priem.mirea.ru/lk/docs/ikb_present
+- **И41.** english.mirea.ru — новость от 20.05.2025 о победе команды cR4.sh (ИКБ) на AITU ICTF. Официальный. https://english.mirea.ru/news/rtu-mirea-icb-triumphs-at-international-ctf-competitions
+- **И42.** priem.mirea.ru — презентация ИРИ для абитуриентов (приём 2024–2025). Официальный. https://priem.mirea.ru/lk/docs/iri_present
+- **И43.** «Российский технологический журнал», 2026, т. 14, № 1 (30.01.2026) — состав редколлегии. Официальное издание РТУ МИРЭА. https://www.rtj-mirea.ru/jour/issue/download/63/85
+- **И44.** cosmos.mirea.ru — программа конференции «Космические технологии», 26.10.2023. Официальный. https://cosmos.mirea.ru/docs/program_cosmos.pdf
+- **И45.** priem.mirea.ru — презентация ИПТИП для абитуриентов (приём 2024–2025). Официальный. https://priem.mirea.ru/lk/docs/iptip_present
+- **И46.** www.mirea.ru — «Кафедра метрологии и стандартизации» (ИПТИП). Только заголовок в поисковой выдаче. https://www.mirea.ru/education/the-institutes-and-faculties/institut-perspektivnykh-tekhnologiy-i-industrialnogo-programmirovaniya/the-structure-of-the-institute/department-of-metrology-and-standardization/
+- **И47.** www.mirea.ru — новость о кафедре высшей математики и программирования ИПТИП. Только заголовок в поисковой выдаче. https://www.mirea.ru/news/dotsentu-kafedry-vysshey-matematiki-i-programmirovaniya-iptip-prisvoena-uchyenaya-stepen-doktora-eko/
+- **И48.** www.mirea.ru — новость о гранте РНФ кафедры физики ИПТИП. Только заголовок в поисковой выдаче. https://www.mirea.ru/news/kollektiv-nauchnykh-rabotnikov-i-studentov-rtu-mirea-pod-rukovodstvom-professora-kafedry-fiziki-ipti/
+- **И49.** www.mirea.ru — «Базовая кафедра № 130 — твердотельной электроники» (ИПТИП). Только заголовок в поисковой выдаче. https://www.mirea.ru/education/the-institutes-and-faculties/institut-perspektivnykh-tekhnologiy-i-industrialnogo-programmirovaniya/the-structure-of-the-institute/base-department-130-solid-state-electronics/
+- **И50.** priem.mirea.ru — презентация ИТУ для абитуриентов (приём 2024–2025). Официальный. https://priem.mirea.ru/lk/docs/itu_present
+- **И51.** www.mirea.ru — «Кафедра современных технологий управления» (ИТУ). Только заголовок в поисковой выдаче. https://www.mirea.ru/education/the-institutes-and-faculties/institut-tekhnologii-upravleniya/struktura-instituta/kafedra-sovremennykh-tekhnologiy-upravleniya/
+- **И52.** www.mirea.ru — «Кафедра наилучших доступных технологий и регуляторных практик» (ИТУ). Только заголовок в поисковой выдаче. https://www.mirea.ru/education/the-institutes-and-faculties/institut-tekhnologii-upravleniya/struktura-instituta/kafedra-nailuchshikh-dostupnykh-tekhnologiy-i-regulyatornykh-praktik-i-informatsiyu/
+- **И53.** priem.mirea.ru — презентация ИТХТ для абитуриентов (приём 2024–2025). Официальный. https://priem.mirea.ru/lk/docs/itht_present
+- **И54.** chemtech.mirea.ru — кафедра экологической и промышленной безопасности (ЭПБ). Только заголовок в поисковой выдаче. https://chemtech.mirea.ru/department/department-of-fundamental-and-engineering-chemistry/department-of-environmental-and-industrial-safety-epb/
+- **И55.** www.mirea.ru — «Кафедра информационных систем в химической технологии» (ИТХТ). Только заголовок в поисковой выдаче. https://www.mirea.ru/education/the-institutes-and-faculties/institute-of-fine-chemical-technology/the-structure-of-the-institute/department-of-information-systems-in-chemical-technology/
+- **И56.** chemtech.mirea.ru — кафедра общей химической технологии (ОХТ). Только заголовок в поисковой выдаче. https://chemtech.mirea.ru/department/department-of-fundamental-and-engineering-chemistry/of-the-ccl/
+- **И57.** www.mirea.ru — «Базовая кафедра «Иммунологическая химия»» (ИТХТ). Только заголовок в поисковой выдаче. https://www.mirea.ru/education/the-institutes-and-faculties/institute-of-fine-chemical-technology/the-structure-of-the-institute/chair-of-immunological-chemistry/
+- **И58.** www.mirea.ru — «Кафедра передовых технологий — Структура школы» (ПИШ). Только заголовок в поисковой выдаче. https://www.mirea.ru/education/peredovaya-inzhenernaya-shkola-svch-elektroniki/struktura-instituta/kafedra-peredovykh-tekhnologiy/
+- **И59.** www.mirea.ru — «Кафедра инженерии материалов» (ПИШ). Только заголовок в поисковой выдаче. https://www.mirea.ru/education/peredovaya-inzhenernaya-shkola-svch-elektroniki/struktura-instituta/kafedra-inzhenerii-materialov/
+- **И60.** priem.mirea.ru — страница о колледже (СПО). Официальный. https://priem.mirea.ru/spo/info
+- **И61.** priem.mirea.ru — презентация Колледжа программирования и кибербезопасности (2024/25). Официальный. https://priem.mirea.ru/lk/docs/kpk_present
+- **И62.** english.mirea.ru — новость от 30.04.2025 о проекте «Приключения иностранцев в России»; заведующая кафедрой РКИ. Официальный. https://english.mirea.ru/news/rtu-mirea-foreign-students-join-adventures-of-foreigners-in-russia-project
+- **И63.** www.mirea.ru — новость «Опубликованы правила приёма в РТУ МИРЭА на 2026/2027 учебный год». Только заголовок в поисковой выдаче. https://www.mirea.ru/news/opublikovany-pravila-priyema-v-rtu-mirea-na-2026-2027-uchebnyy-god/
+- **И64.** stavropol.mirea.ru — раздел «Платные образовательные услуги». Официальный, 2026. https://stavropol.mirea.ru/sveden/paid_edu
+- **И65.** stavropol.mirea.ru — адрес и контакты Ставропольского филиала. Официальный. https://stavropol.mirea.ru/addres
+- **И66.** english.mirea.ru — «Department of Physical Education» (заведующий, залы, контакты). Официальный, © 2026, без даты. https://english.mirea.ru/academics/physical-education-and-sports/department-of-physical-education/
+- **И67.** english.mirea.ru — «Inclusive education support» (отдел сопровождения инклюзивного образования). Официальный, без даты (© 2026). https://english.mirea.ru/about-university/infrastructure/inclusive-education-support/
+- **И68.** english.mirea.ru — «Social security» (Студофис, отдел стипендиальных и социальных программ). Официальный, без даты (© 2026). https://english.mirea.ru/about-university/social-security/
+- **И69.** english.mirea.ru — «Additional education programs» (Институт дополнительного образования). Официальный, © 2026. https://english.mirea.ru/academics/additional-education-programs/
+- **И70.** english.mirea.ru — «Public organizations» (Студсоюз и профорганизация). Официальный, © 2026. https://english.mirea.ru/about-university/public-organizations/
+- **И71.** english.mirea.ru — «Student Union». Официальный. https://english.mirea.ru/about-university/public-organizations/student-union
+- **И72.** english.mirea.ru — новость от 02.12.2025 о делегации на V Конгрессе молодых учёных. Официальный. https://english.mirea.ru/news/rtu-mirea-delegation-at-5th-young-scientists-congress-in-sirius
+- **И73.** www.mirea.ru — «Управление молодёжной науки и конструирования — Общая информация». Только заголовок в поисковой выдаче. https://www.mirea.ru/about/the-structure-of-the-university/administrative-structural-unit/the-office-for-the-organization-of-research-activity-of-students/obshchaya-informatsiya/
+- **И74.** english.mirea.ru — «Graduate employment» (Центр карьеры; данные 2019 г.). Официальный. https://english.mirea.ru/about-university/graduate-employment/
+- **И75.** english.mirea.ru — «Altair Children's Technopark». Официальный. https://english.mirea.ru/about-university/infrastructure/altair-children-s-technopark/
+- **И76.** english.mirea.ru — «Situation Center» Минобрнауки. Официальный, © 2026. https://english.mirea.ru/academics/mega-laboratories/situation-center/
+- **И77.** student.mirea.ru — «Клуб студенческой песни (КСП МИРЭА) и Гитарная школа». Только заголовок в поисковой выдаче. https://student.mirea.ru/center_culture/creativity/?ELEMENT_ID=255
+- **И78.** english.mirea.ru — «Physical education and sports: general information». Официальный, © 2026. https://english.mirea.ru/academics/physical-education-and-sports/general-information/
+- **И79.** english.mirea.ru — «Cyberzone Cybersport Center». Официальный, страница изменена 15.07.2024. https://english.mirea.ru/about-university/infrastructure/cyberzone-cybersport-center/
+- **И80.** english.mirea.ru — «Center for Cybersports Robotics». Официальный, © 2026. https://english.mirea.ru/academics/mega-laboratories/center-for-cybersports-robotics/
+- **И81.** www.mirea.ru — «Пресс-служба». Только заголовок в поисковой выдаче. https://mirea.ru/about/the-structure-of-the-university/administrative-structural-unit/press-service
+- **И82.** english.mirea.ru — подготовительное отделение для иностранных граждан. Официальный, © 2026. https://english.mirea.ru/admission/pre-university-training-department/
+- **И83.** english.mirea.ru — раздел «International». Официальный. https://english.mirea.ru/international/
+- **И84.** english.mirea.ru — «International cooperation». Официальный. https://english.mirea.ru/international/international-cooperation/
+- **И85.** student.mirea.ru — «Служба психологической поддержки: сотрудники». Только заголовок в поисковой выдаче. https://student.mirea.ru/psychological_service/staff/
+- **И86.** www.mirea.ru — объявление «Организована круглосуточная горячая линия по оказанию психологической помощи студентам». Только заголовок в поисковой выдаче. https://www.mirea.ru/ads/organizovana-kruglosutochnaya-goryachaya-liniya-po-okazaniyu-psikhologicheskoy-pomoshchi-studentam/
+- **И87.** priem.mirea.ru — Порядок предоставления мест в общежитиях (приказ № 1189 от 29.04.2025). Официальный документ. https://priem.mirea.ru/lk/docs/01JT0DGDT05G10BM5MY778MCQW
+- **И88.** stavropol.mirea.ru — раздел «Стипендии и меры поддержки» (приказы № 2407, 1192, 1024 за 2026 г.). Официальный. https://stavropol.mirea.ru/sveden/grants
+- **И89.** 2030.mirea.ru — «О программе — Приоритет 2030 — МИРЭА». Официальный; только заголовок в поисковой выдаче (загрузка запрещена robots.txt). https://2030.mirea.ru/about
+- **И90.** english.mirea.ru — страница журнала «Russian Technological Journal». Официальный. https://english.mirea.ru/research/scientific-publications/russian-technological-journal-/
+- **И91.** english.mirea.ru — страница журнала «Fine Chemical Technologies». Официальный. https://english.mirea.ru/research/scientific-publications/fine-chemical-technologies/
+- **И92.** finechem-mirea.ru — сайт журнала «Тонкие химические технологии», раздел «О журнале». Официальное издание. https://www.finechem-mirea.ru/jour/about
+- **И93.** english.mirea.ru — «History» (музей университета на двух площадках). Официальный, без даты. https://english.mirea.ru/about-university/history/
+- **И94.** english.mirea.ru — «Infrastructure» (перечень из 15 разделов инфраструктуры). Официальный, без даты. https://english.mirea.ru/about-university/infrastructure/
+- **И95.** english.mirea.ru — «Canteens and cafeterias». Официальный, без даты. https://english.mirea.ru/about-university/infrastructure/canteens-cafeterias/
+- **И96.** english.mirea.ru — «Information and Library Center» (три отдела ИБЦ, фонд и каталог). Официальный, без даты (© 2026). https://english.mirea.ru/about-university/infrastructure/information-and-library-center/
+- **И97.** english.mirea.ru — «Partners» (27 организаций из 8 стран). Официальный, без даты. https://english.mirea.ru/international/partners/
+- **И98.** library.mirea.ru — сайт ИБЦ (перечень ЭБС; самые поздние даты — 2019 г.). Официальный, устаревший. https://library.mirea.ru/
+
+## Б. Официальные каналы РТУ МИРЭА и его подразделений (Telegram, VK, «Одноклассники»)
+
+- **И99.** Telegram @rtumirea_official, пост № 25525 (01.10.2026): объединение ИРИ и ИПТИП в ИРИП с 01.10.2026 (решение учёного совета от 24.06.2026). https://t.me/rtumirea_official/25525
+- **И100.** Telegram @rtumirea_official, пост № 25780 (≈ октябрь 2026). https://t.me/rtumirea_official/25780
+- **И101.** Telegram @rtumirea_official, пост № 25424 (28.09.2026): визит делегации СИБУР; «проректоры О. Е. Винокуров и М. А. Маслов». https://t.me/rtumirea_official/25424
+- **И102.** Telegram @rtumirea_official, пост № 23599 (13.06.2026): директор ИТХТ М. Маслов вручил дипломы стипендиатам им. К. А. Большакова. https://t.me/rtumirea_official/23599
+- **И103.** Telegram @rtumirea_official, пост № 22364 (24.04.2026): «Андрей Тимошенко — проректор по учебной работе». https://t.me/rtumirea_official/22364
+- **И104.** Telegram @rtumirea_official, пост № 24307 (20.07.2026): «исполняющий обязанности ректора Н. И. Прокопов» открыл Summer Techno School 2026. https://t.me/rtumirea_official/24307
+- **И105.** Telegram @rtumirea_official, пост № 24764 (21.08.2026): проректор О. Винокуров. https://t.me/rtumirea_official/24764
+- **И106.** Telegram @rtumirea_official, пост № 11768 (12.12.2024): проректор Ю. Г. Графов на форуме финансово-экономических служб вузов. https://t.me/rtumirea_official/11768
+- **И107.** Telegram @rtumirea_official, пост № 25243 (18.09.2026): проректор И. А. Тарасов; «Команда Арктики». https://t.me/rtumirea_official/25243
+- **И108.** Telegram @rtumirea_official — поиск «Вера Рогова» (посты 2025–2026). https://t.me/s/rtumirea_official?q=Вера%20Рогова
+- **И109.** Telegram @rtumirea_official, пост № 19082 (25.11.2025): начальник Управления международных связей А. Е. Сиземина. https://t.me/rtumirea_official/19082
+- **И110.** Telegram @rtumirea_official, пост № 17804 (≈ 09.10.2025): итоги кросс-вузовской экспертизы «Приоритет-2030» 2025 г. (пять групп). https://t.me/rtumirea_official/17804
+- **И111.** Telegram @rtumirea_official, пост № 23799 (≈ 24.06.2026): ректор: «агрегированный рейтинг-2026», 26-е место из 732. https://t.me/rtumirea_official/23799
+- **И112.** Telegram @rtumirea_official, пост № 24748 (≈ август 2026): рейтинг медиаактивности вузов Минобрнауки за июль 2026 г. https://t.me/rtumirea_official/24748
+- **И113.** Telegram приёмной комиссии @priem_mirea, пост № 6895 (07.08.2026): общежития по итогам основного этапа, отдел по работе с общежитиями. https://t.me/priem_mirea/6895
+- **И114.** Telegram @rtumirea_official, пост № 24750 (19.08.2026): заселение первокурсников в общежития, 970 мест. https://t.me/rtumirea_official/24750
+- **И115.** Telegram @rtumirea_official, пост № 17667 (04.10.2025): «ректор и председатель Учёного совета С. А. Кудж». https://t.me/rtumirea_official/17667
+- **И116.** Telegram @rtumirea_official, пост № 24919 (31.08.2026): программа «За верность науке», протокол Учёного совета № 1 от 28.08.2026. https://t.me/rtumirea_official/24919
+- **И117.** Telegram @rtumirea_official, пост № 18537 (06.11.2025): назначение начальника ВУЦ полковника Д. А. Непорожнева. https://t.me/rtumirea_official/18537
+- **И118.** Telegram @rtumirea_official, пост № 25344 (≈ 24.09.2026): выпуск студентов, завершивших обучение в ВУЦ; ректор, проректор Г. В. Фисенко, начальник ВУЦ Д. А. Непорожнев. https://t.me/rtumirea_official/25344
+- **И119.** Telegram @rtumirea_official, пост № 10211 (≈ сентябрь 2024): первое заседание СНО: председатель К. Аврамиди. https://t.me/rtumirea_official/10211
+- **И120.** Telegram @rtumirea_official, пост № 24128 (≈ июль 2026): выездная сессия СНО «Алые Паруса»; председатель СНО К. Аврамиди. https://t.me/rtumirea_official/24128
+- **И121.** Telegram Волонтёрского центра @vc_rtumirea, пост № 2016 (≈ вторая половина сентября 2026): обновление руководящего состава. https://t.me/vc_rtumirea/2016
+- **И122.** Telegram @rtumirea_official, пост № 24959 (01.09.2026): посвящение первокурсников: А. С. Сигов, С. Ю. Губин, Д. А. Бункин, Н. А. Бакин. https://t.me/rtumirea_official/24959
+- **И123.** Telegram-канал Военного учебного центра @wutz_mirea (осень 2026; контакты ВУЦ). https://t.me/s/wutz_mirea
+- **И124.** Telegram @rtumirea_official, пост № 24271 (≈ июль 2026): обращение директора Фонда РТУ МИРЭА к выпускникам, клуб меценатов. https://t.me/rtumirea_official/24271
+- **И125.** Telegram @rtumirea_official, пост № 24736 (≈ август 2026): Фонд целевого капитала: 383 мецената, около 26 млн ₽, 16 проектов. https://t.me/rtumirea_official/24736
+- **И126.** Telegram @rtumirea_official, пост № 9090 (правка 10.06.2024): назначение и.о. директора колледжа. https://t.me/rtumirea_official/9090
+- **И127.** Telegram @rtumirea_official, пост № 9353 (02.07.2024): назначение директора ИРИ. https://t.me/rtumirea_official/9353
+- **И128.** Telegram @rtumirea_official, пост № 9354 (02.07.2024): назначение и.о. директора ИИИ. https://t.me/rtumirea_official/9354
+- **И129.** Telegram @rtumirea_official, пост № 14083 (апрель 2025): избрание председателя Студсоюза. https://t.me/rtumirea_official/14083
+- **И130.** Telegram @rtumirea_official, пост № 20965 (≈ начало 2026): итоги ПИШ СВЧ-электроники. https://t.me/rtumirea_official/20965
+- **И131.** Telegram @rtumirea_official, пост № 22167 (17.04.2026). https://t.me/rtumirea_official/22167
+- **И132.** Telegram @rtumirea_official, пост № 22137 (16.04.2026). https://t.me/rtumirea_official/22137
+- **И133.** Telegram @rtumirea_official, пост № 23118 (≈ май 2026): заселение в ДАС-2. https://t.me/rtumirea_official/23118
+- **И134.** Telegram @rtumirea_official, пост № 23803 (≈ июнь 2026): первый набор на подготовку офицеров кадра. https://t.me/rtumirea_official/23803
+- **И135.** Telegram профорганизации @mireaprofkom, пост № 2453 (≈ 19.08.2026; дата подписания в тексте не указана): коллективный договор на 2026–2029 гг. https://t.me/mireaprofkom/2453
+- **И136.** Telegram @rtumirea_official, пост № 25795 (14.10.2026): анонс Евтихиевских чтений 16.10.2026. https://t.me/rtumirea_official/25795
+- **И137.** Telegram @rtumirea_official, пост № 24940 (01.09.2026): поздравление с Днём знаний. https://t.me/rtumirea_official/24940
+- **И138.** Telegram @rtumirea_official, пост № 23802 (24.06.2026): ректор о старте приёмной кампании и итогах приёма-2025. https://t.me/rtumirea_official/23802
+- **И139.** Telegram @rtumirea_official, пост № 10048 (≈ 2024): итоги зачисления 2024 г. https://t.me/rtumirea_official/10048
+- **И140.** Telegram @rtumirea_official, пост № 15639 (≈ лето 2025): средний балл ЕГЭ зачисленных. https://t.me/rtumirea_official/15639
+- **И141.** Telegram @rtumirea_official — лента официального канала (в т. ч. отчётный доклад ректора, ~2024 г.). https://t.me/s/rtumirea_official
+- **И142.** Telegram @rtumirea_official, пост № 18905 (≈ ноябрь 2025): защита проектов на основном треке «Приоритет-2030». https://t.me/rtumirea_official/18905
+- **И143.** Telegram @rtumirea_official, пост № 17713 (≈ 06.10.2025): старт кросс-вузовской экспертизы «Приоритет-2030» 2025 г. https://t.me/rtumirea_official/17713
+- **И144.** Telegram @rtumirea_official, пост № 22358 (≈ апрель 2026): РТУ МИРЭА — опорный вуз ГК «Ростех». https://t.me/rtumirea_official/22358
+- **И145.** Telegram @rtumirea_official, пост № 23656 (≈ июнь 2026): рейтинг медиаактивности вузов за май 2026 г. https://t.me/rtumirea_official/23656
+- **И146.** Telegram @rtumirea_official, пост № 25297 (≈ сентябрь 2026): рейтинг медиаактивности: Telegram-канал вуза. https://t.me/rtumirea_official/25297
+- **И147.** Telegram @rtumirea_official, пост № 24809 (≈ 27.08.2026). https://t.me/rtumirea_official/24809
+- **И148.** Telegram @rtumirea_official, пост № 25458 (29.09.2026): первый проректор Н. И. Прокопов; соглашение РФ и КНДР о признании образования. https://t.me/rtumirea_official/25458
+- **И149.** Telegram @rtumirea_official, пост № 23986 (≈ июль 2026): выпускной колледжа. https://t.me/rtumirea_official/23986
+- **И150.** Telegram @rtumirea_official, пост № 23195 (≈ май 2026): заседание наблюдательного совета ПИШ. https://t.me/rtumirea_official/23195
+- **И151.** Telegram @rtumirea_official, пост № 21962 (≈ апрель 2026): соглашение с НПО «Орион»; заместитель первого проректора В. Рогова. https://t.me/rtumirea_official/21962
+- **И152.** Telegram @rtumirea_official, пост № 24377 (≈ август 2026): Summer Techno School 2026. https://t.me/rtumirea_official/24377
+- **И153.** Telegram @rtumirea_official, пост № 11992 (≈ декабрь 2024): награды Минобрнауки; заместитель проректора по учебной работе И. В. Бакеева. https://t.me/rtumirea_official/11992
+- **И154.** Telegram @rtumirea_official, пост № 25660 (07.10.2026): проректор Г. В. Петушков; заместитель директора ИМПМО Д. Соколова. https://t.me/rtumirea_official/25660
+- **И155.** Telegram @rtumirea_official, пост № 25343 (23.09.2026). https://t.me/rtumirea_official/25343
+- **И156.** Telegram @rtumirea_official, пост № 24852 (27.08.2026): проректор И. Е. Рогов о востребованности инженеров (интервью НСН). https://t.me/rtumirea_official/24852
+- **И157.** Telegram @rtumirea_official, пост № 24046 (06.07.2026): проректор И. Е. Рогов об изменениях приёмной кампании 2026 г. https://t.me/rtumirea_official/24046
+- **И158.** Telegram @rtumirea_official, пост № 11343 (23.11.2024): проректор И. А. Тарасов. https://t.me/rtumirea_official/11343
+- **И159.** Telegram @rtumirea_official — поиск «Фисенко» (посты 2023–2026). https://t.me/s/rtumirea_official?q=Фисенко
+- **И160.** Telegram @rtumirea_official — поиск «Тимошенко» (посты 2022–2026). https://t.me/s/rtumirea_official?q=Тимошенко
+- **И161.** Telegram @rtumirea_official — поиск «назначен» (кадровые объявления; последнее — 06.11.2025). https://t.me/s/rtumirea_official?q=назначен
+- **И162.** Telegram @rtumirea_official — поиск «Учёного совета» (протоколы 2026 г.). https://t.me/s/rtumirea_official?q=Учёного%20совета
+- **И163.** Telegram @rtumirea_official, пост № 22078 (≈ апрель 2026): стипендия им. В. И. Острейко; протокол Учёного совета № 8 от 25.02.2026. https://t.me/rtumirea_official/22078
+- **И164.** Telegram @rtumirea_official, пост № 21596 (≈ март–апрель 2026): протокол Учёного совета № 9 от 25.03.2026. https://t.me/rtumirea_official/21596
+- **И165.** Telegram @rtumirea_official, пост № 23257 (≈ конец мая 2026). https://t.me/rtumirea_official/23257
+- **И166.** Telegram @rtumirea_official, пост № 23814 (≈ июнь 2026): протокол Учёного совета № 12 от 24.06.2026. https://t.me/rtumirea_official/23814
+- **И167.** Telegram @rtumirea_official, пост № 24853 (≈ 28.08.2026): новая редакция Положения о наградах; знак «Почётный донор РТУ МИРЭА». https://t.me/rtumirea_official/24853
+- **И168.** Telegram @rtumirea_official — поиск «учёный секретарь». https://t.me/s/rtumirea_official?q=учёный%20секретарь
+- **И169.** Telegram @rtumirea_official — поиск «Наблюдательный совет». https://t.me/s/rtumirea_official?q=Наблюдательный%20совет
+- **И170.** Telegram @rtumirea_official, пост № 21226 (10.03.2026): начальник УВиСР Л. В. Скоропупов; открытие «Школы Волонтёра 2026». https://t.me/rtumirea_official/21226
+- **И171.** Telegram @rtumirea_official — поиск «Скоропупов» (посты 2024–2026). https://t.me/s/rtumirea_official?q=Скоропупов
+- **И172.** Telegram @rtumirea_official, пост № 18854 (18.11.2025): заместитель начальника УВиСР П. М. Щуров. https://t.me/rtumirea_official/18854
+- **И173.** Telegram @rtumirea_official, пост № 24420 (28.07.2026): заместитель ответственного секретаря приёмной комиссии Т. Е. Комарова. https://t.me/rtumirea_official/24420
+- **И174.** Telegram @rtumirea_official, пост № 19892 (26.12.2025): начальник Управления по работе с абитуриентами Т. Е. Комарова. https://t.me/rtumirea_official/19892
+- **И175.** Telegram @rtumirea_official — поиск «ответственный секретарь» (приёмная комиссия 2025 г.). https://t.me/s/rtumirea_official?q=ответственный%20секретарь
+- **И176.** Telegram @rtumirea_official, пост № 24233 (≈ июль 2026): «Альтаир» на фестивале «Больше, чем путешествие»; П. Бученкова. https://t.me/rtumirea_official/24233
+- **И177.** Telegram @rtumirea_official — поиск «Управления международных связей». https://t.me/s/rtumirea_official?q=Управления%20международных%20связей
+- **И178.** Telegram @rtumirea_official — поиск «пресс-службы». https://t.me/s/rtumirea_official?q=пресс-службы
+- **И179.** Telegram @rtumirea_official, пост № 18895 (≈ ноябрь 2025): директор Ситуационного центра Минобрнауки О. Тулаев. https://t.me/rtumirea_official/18895
+- **И180.** Telegram @rtumirea_official, пост № 23496 (≈ июнь 2026): Единый контакт-центр приёмной кампании на базе Ситуационного центра. https://t.me/rtumirea_official/23496
+- **И181.** Telegram @rtumirea_official, пост № 23465 (≈ июнь 2026): директор проектного офиса «Наука» Г. Артамонов. https://t.me/rtumirea_official/23465
+- **И182.** VK, официальное сообщество mirea_official — «Факты о вузе: Социальные гарантии студентам РТУ МИРЭА», 31.03.2023. https://vk.ru/@mirea_official-fakty-o-vuze-socialnye-garantii-studentam-rtu-mirea
+- **И183.** Telegram @rtumirea_official — поиск «управления кадров». https://t.me/s/rtumirea_official?q=управления%20кадров
+- **И184.** Telegram @rtumirea_official, пост № 24854 (27.08.2026): директор ИИТ А. Б. Уланский, председатели профорганизации и Студсоюза. https://t.me/rtumirea_official/24854
+- **И185.** Telegram @rtumirea_official, пост № 18954 (20.11.2025). https://t.me/rtumirea_official/18954
+- **И186.** Telegram @rtumirea_official, пост № 22879 (правка 13.05.2026). https://t.me/rtumirea_official/22879
+- **И187.** Telegram @rtumirea_official, пост № 22545 (30.04.2026): директор ИИИ Ш. Г. Магомедов. https://t.me/rtumirea_official/22545
+- **И188.** Telegram @rtumirea_official, пост № 13799 (04.04.2025): директор ИКБ А. А. Бакаев; директор ИПТИП П. Ю. Пушкин. https://t.me/rtumirea_official/13799
+- **И189.** Telegram @rtumirea_official — поиск «ИРИП» (посты 01–14.10.2026). https://t.me/s/rtumirea_official?q=ИРИП
+- **И190.** Telegram @rtumirea_official, пост № 22217 (19.04.2026). https://t.me/rtumirea_official/22217
+- **И191.** Telegram @rtumirea_official, пост № 19178 (28.11.2025): директор ИРИ А. Н. Дементьев. https://t.me/rtumirea_official/19178
+- **И192.** Telegram @rtumirea_official, пост № 23076 (≈ 21.05.2026). https://t.me/rtumirea_official/23076
+- **И193.** Telegram @rtumirea_official, пост № 8983 (≈ май 2024): С. А. Банников покинул должность директора колледжа. https://t.me/rtumirea_official/8983
+- **И194.** Telegram @rtumirea_official, пост № 22265 (≈ 20.04.2026). https://t.me/rtumirea_official/22265
+- **И195.** VK, сообщество приёмной комиссии priem_mirea — «Кто есть кто в университете», 04.09.2023. https://vk.ru/@priem_mirea-kto-est-kto-v-universitete43
+- **И196.** Telegram @rtumirea_official, пост № 25578 (04.10.2026): кафедра компьютерного дизайна ИРИП. https://t.me/rtumirea_official/25578
+- **И197.** Telegram @rtumirea_official, пост № 25640 (≈ 06.10.2026): кафедра цифровых и аддитивных технологий ИРИП. https://t.me/rtumirea_official/25640
+- **И198.** Telegram @rtumirea_official — поиск «Институт молодёжной политики». https://t.me/s/rtumirea_official?q=Институт+молодёжной+политики
+- **И199.** Telegram @rtumirea_official, пост № 22981 (17.05.2026): соглашение о Центре опережающего инженерного образования (Рязань). https://t.me/rtumirea_official/22981
+- **И200.** Telegram @rtumirea_official, пост № 23787 (≈ июнь 2026). https://t.me/rtumirea_official/23787
+- **И201.** Telegram @rtumirea_official — поиск «заведующий кафедрой» (посты ≈ апрель–октябрь 2026). https://t.me/s/rtumirea_official?q=заведующий%20кафедрой
+- **И202.** Telegram @rtumirea_official, пост № 15873 (≈ осень 2025): заместитель директора ИТХТ Ж. Пастухова. https://t.me/rtumirea_official/15873
+- **И203.** Telegram @rtumirea_official — поиск «Института международного образования». https://t.me/s/rtumirea_official?q=Института%20международного%20образования
+- **И204.** Telegram @rtumirea_official, пост № 24387 (≈ август 2026): базовая кафедра № 234 и кафедра А. С. Зуева. https://t.me/rtumirea_official/24387
+- **И205.** Telegram @rtumirea_official, пост № 15971 (≈ 2025): выпуск базовой кафедры Росатома. https://t.me/rtumirea_official/15971
+- **И206.** Telegram @rtumirea_official, пост № 22171 (≈ апрель 2026): ярмарка вакансий ИИТ 28.04.2026. https://t.me/rtumirea_official/22171
+- **И207.** Telegram @rtumirea_official, пост № 19790 (≈ декабрь 2025): KIB CTF кафедры КИБ. https://t.me/rtumirea_official/19790
+- **И208.** Telegram @rtumirea_official, пост № 20092 (≈ декабрь 2025): карьерный проект с УЭК Сбербанка и кафедрой КИБ. https://t.me/rtumirea_official/20092
+- **И209.** Telegram @rtumirea_official, пост № 25123 (≈ сентябрь 2026). https://t.me/rtumirea_official/25123
+- **И210.** Telegram @rtumirea_official, пост № 17129 (≈ октябрь 2025): что такое СКБ: перечень студенческих конструкторских бюро. https://t.me/rtumirea_official/17129
+- **И211.** Telegram @rtumirea_official, пост № 17392 (≈ октябрь 2025): лаборатория кибербезопасности BI.ZONE. https://t.me/rtumirea_official/17392
+- **И212.** Telegram @rtumirea_official, посты № 10523, 11935, 11997, 17666, 22536, 23658 (2024–2026): диссертационные советы 24.2.326.xx. https://t.me/rtumirea_official/22536
+- **И213.** Telegram @rtumirea_official, пост № 25282 (≈ сентябрь 2026): СКБ «Спутник» в топ-30 студенческих КБ России. https://t.me/rtumirea_official/25282
+- **И214.** Telegram @rtumirea_official, пост № 22625 (≈ май 2026): СНО ИРИ; хакатон GISIT 2026. https://t.me/rtumirea_official/22625
+- **И215.** Telegram @rtumirea_official, пост № 18983 (≈ ноябрь 2025): базовая кафедра № 343. https://t.me/rtumirea_official/18983
+- **И216.** Telegram @rtumirea_official, пост № 14414 (≈ 2025): базовая кафедра № 536. https://t.me/rtumirea_official/14414
+- **И217.** Telegram @rtumirea_official, пост № 15333 (≈ 2025): базовые кафедры «Алмаз-Антей». https://t.me/rtumirea_official/15333
+- **И218.** Telegram @rtumirea_official, пост № 20541 (≈ февраль 2026): базовая кафедра НИЦЭВТ. https://t.me/rtumirea_official/20541
+- **И219.** Telegram @rtumirea_official, пост № 25292 (≈ сентябрь 2026): стипендия им. академика А. И. Савина. https://t.me/rtumirea_official/25292
+- **И220.** Одноклассники, официальная группа РТУ МИРЭА — пост об ИПТИП, 24.03.2025. https://ok.ru/group/61619756466261/topic/157640515912533
+- **И221.** Telegram @rtumirea_official, пост № 21408 (≈ март 2026): ярмарка вакансий ИПТИП 20.03.2026. https://t.me/rtumirea_official/21408
+- **И222.** Telegram @rtumirea_official, пост № 23175 (26.05.2026). https://t.me/rtumirea_official/23175
+- **И223.** Telegram @rtumirea_official — поиск «психолог» (2025–2026). https://t.me/s/rtumirea_official?q=психолог
+- **И224.** Telegram @rtumirea_official, пост № 25533 (≈ октябрь 2026): конкурс «Адгезивы-2026»; трудоустройство магистрантов. https://t.me/rtumirea_official/25533
+- **И225.** Telegram @rtumirea_official, пост № 25522 (≈ октябрь 2026): «Битва роботов»: команды РТУ МИРЭА. https://t.me/rtumirea_official/25522
+- **И226.** Telegram @rtumirea_official, пост № 23049 (≈ май 2026): финал RedShift CTF. https://t.me/rtumirea_official/23049
+- **И227.** Telegram @rtumirea_official, пост № 25632 (≈ октябрь 2026): посвящение в студенты колледжа 08.10.2026. https://t.me/rtumirea_official/25632
+- **И228.** Telegram @priem_mirea, пост № 7004 (31.08.2026): итоги приёмной кампании 2026 г. https://t.me/priem_mirea/7004
+- **И229.** Telegram @rtumirea_official, пост № 24530 (04.08.2026): приказы о зачислении (приоритетный этап); места в общежитиях. https://t.me/rtumirea_official/24530
+- **И230.** Telegram @rtumirea_official, пост № 24581 (07.08.2026): списки зачисленных по общему конкурсу; «все бюджетные места заполнены». https://t.me/rtumirea_official/24581
+- **И231.** Telegram @rtumirea_official — поиск «зачислен» (приказы о зачислении 2026 г.). https://t.me/s/rtumirea_official?q=%D0%B7%D0%B0%D1%87%D0%B8%D1%81%D0%BB%D0%B5%D0%BD
+- **И232.** Telegram @priem_mirea, пост № 6924 (август 2026): конкурс на платные места. https://t.me/priem_mirea/6924
+- **И233.** Telegram @priem_mirea, пост № 6883 (август 2026): рост проходных баллов, продление скидки. https://t.me/priem_mirea/6883
+- **И234.** Telegram @rtumirea_official, пост № 24212 (≈ август 2026): целевое обучение кадровых офицеров. https://t.me/rtumirea_official/24212
+- **И235.** Telegram @rtumirea_official, пост № 24409 (≈ июль 2026): соглашение с Тульской областью о бесплатном обучении. https://t.me/rtumirea_official/24409
+- **И236.** Telegram @rtumirea_official, пост № 25691 (≈ октябрь 2026): аспирант — стипендиат Президента РФ на 2026/27 г. https://t.me/rtumirea_official/25691
+- **И237.** Telegram @rtumirea_official, пост № 981 (ранний, дата не отображается): «10 диссертационных советов». https://t.me/rtumirea_official/981
+- **И238.** Telegram @rtumirea_official, пост № 21600 (≈ март 2026): грант Акселератора проекту Ставропольского филиала Niniam Modeler. https://t.me/rtumirea_official/21600
+- **И239.** Telegram @mireaprofkom, пост № 2084 (10.11.2025): конференция профбюро ИТХТ. https://t.me/mireaprofkom/2084
+- **И240.** Telegram @rtumirea_official — поиск «старост» (старостаты, 2024–2026). https://t.me/s/rtumirea_official?q=старост
+- **И241.** Telegram @rtumirea_official, пост № 25299 (≈ 19.09.2026): педотряд «Атмосфера»: «ПОгружение» для новых бойцов. https://t.me/rtumirea_official/25299
+- **И242.** Telegram @rtumirea_official, пост № 24558 (≈ август 2026): педотряды «Атмосфера» и «Априори» в лагере «Сондовон» (КНДР). https://t.me/rtumirea_official/24558
+- **И243.** Telegram @rtumirea_official, пост № 25572 (≈ октябрь 2026): набор курсантов в спасательный отряд. https://t.me/rtumirea_official/25572
+- **И244.** Telegram @rtumirea_official, пост № 25562 (≈ октябрь 2026): поисковая разведка в Духовщинском районе. https://t.me/rtumirea_official/25562
+- **И245.** Telegram @rtumirea_official, пост № 25764 (≈ октябрь 2026): экспедиция «Команды Арктики» в Себежский укрепрайон. https://t.me/rtumirea_official/25764
+- **И246.** Telegram @mireaprofkom — лента канала (сентябрь–октябрь 2026; 6,86 тыс. подписчиков). https://t.me/s/mireaprofkom
+- **И247.** Telegram @rtumirea_official, пост № 13810 (01.04.2025): урок мужества: Совет ветеранов, Волонтёрский центр, спасотряд. https://t.me/rtumirea_official/13810
+- **И248.** Telegram @rtumirea_official, пост № 20597 (≈ февраль 2026): открытие Недели студенческой науки; О. Х. Каримов. https://t.me/rtumirea_official/20597
+- **И249.** Telegram @rtumirea_official, пост № 25786 (≈ октябрь 2026): интервью руководителя СКБ «Спутник» В. С. Иванова. https://t.me/rtumirea_official/25786
+- **И250.** Telegram @rtumirea_official, пост № 24954 (≈ сентябрь 2026): приём заявок в Акселератор, гранты до 300 000 ₽. https://t.me/rtumirea_official/24954
+- **И251.** Telegram @rtumirea_official, пост № 21933 (≈ апрель 2026): директор Дирекции «Траектория» А. Шумилин на венчурном форуме. https://t.me/rtumirea_official/21933
+- **И252.** Telegram @rtumirea_official, пост № 24993 (≈ сентябрь 2026): «Альтаир» и профком: летние программы для школьников. https://t.me/rtumirea_official/24993
+- **И253.** Telegram @rtumirea_official, пост № 25507 (01.10.2026): директор Центра культуры и творчества Н. В. Кириллова. https://t.me/rtumirea_official/25507
+- **И254.** Telegram @rtumirea_official, пост № 25538 (≈ октябрь 2026): открытие сезона КВН 22.10.2026. https://t.me/rtumirea_official/25538
+- **И255.** Telegram @rtumirea_official, пост № 25011 (≈ сентябрь 2026): заседание Совета по спорту. https://t.me/rtumirea_official/25011
+- **И256.** Telegram киберспортивного клуба «Киберкружочек РТУ МИРЭА» @mirea_esports (октябрь 2026). https://t.me/s/mirea_esports
+- **И257.** Telegram @rtumirea_official, пост № 25067 (≈ 09.2026): комната психологической разгрузки. https://t.me/rtumirea_official/25067
+- **И258.** Telegram @rtumirea_official, пост № 25278 (≈ сентябрь 2026): медицинский кабинет А-109. https://t.me/rtumirea_official/25278
+- **И259.** Telegram @mireaprofkom, пост № 1472 (29.01.2025): профсоюзные знаки на Учёном совете. https://t.me/mireaprofkom/1472
+- **И260.** Telegram @mireaprofkom, пост № 1598 (26.03.2025): председатель М. М. Расулов; клуб «Наставник» МГО Профсоюза. https://t.me/mireaprofkom/1598
+- **И261.** Telegram @mireaprofkom, пост № 1783 (15.05.2025): договор с Фондом целевого капитала о премии профорганизации. https://t.me/mireaprofkom/1783
+- **И262.** Telegram @mireaprofkom, пост № 2419 (02.06.2026): взнос 200 000 ₽ в Фонд целевого капитала. https://t.me/mireaprofkom/2419
+- **И263.** Telegram @rtumirea_official — поиск «профсоюз» (посты 2025 г.). https://t.me/s/rtumirea_official?q=профсоюз
+- **И264.** Telegram @mireaprofkom — поиск «конференция» (ноябрь 2025). https://t.me/s/mireaprofkom?q=конференция
+- **И265.** Telegram @mireaprofkom, пост № 2491 (сентябрь 2026): встречи «ПроПроф» для первокурсников. https://t.me/mireaprofkom/2491
+- **И266.** Telegram @mireaprofkom, пост № 2085 (10.11.2025): конференция профбюро ИИТ. https://t.me/mireaprofkom/2085
+- **И267.** Telegram @mireaprofkom, пост № 2092 (11.11.2025): конференция профбюро ИРИ. https://t.me/mireaprofkom/2092
+- **И268.** Telegram @mireaprofkom, пост № 2098 (12.11.2025): конференция профбюро ИТУ. https://t.me/mireaprofkom/2098
+- **И269.** Telegram @mireaprofkom, пост № 2104 (13.11.2025): конференция профбюро ИПТИП. https://t.me/mireaprofkom/2104
+- **И270.** Telegram @mireaprofkom, пост № 2109 (13.11.2025): конференция профбюро ИИИ. https://t.me/mireaprofkom/2109
+- **И271.** Telegram @mireaprofkom, пост № 2113 (14.11.2025): конференция профбюро ИКБ. https://t.me/mireaprofkom/2113
+- **И272.** Telegram @mireaprofkom — поиск «2026». https://t.me/s/mireaprofkom?q=2026
+- **И273.** Telegram @mireaprofkom — поиск «вступить» (дотации, вступление). https://t.me/s/mireaprofkom?q=вступить
+- **И274.** Telegram @mireaprofkom, пост № 2507 (18.09.2026): дисконтная программа «ПрофПлюс». https://t.me/mireaprofkom/2507
+- **И275.** Telegram @rtumirea_official — поиск «профком». https://t.me/s/rtumirea_official?q=профком
+- **И276.** Telegram @mireaprofkom — поиск «студент» (2025–2026). https://t.me/s/mireaprofkom?q=студент
+- **И277.** Telegram @mireaprofkom — поиск «совет». https://t.me/s/mireaprofkom?q=совет
+- **И278.** Telegram @mireaprofkom, пост № 1459 (28.12.2024): итоги 2024 г. https://t.me/mireaprofkom/1459
+- **И279.** Telegram @mireaprofkom — поиск «материальная». https://t.me/s/mireaprofkom?q=материальная
+- **И280.** Telegram @rtumirea_official — поиск «совет обучающихся». https://t.me/s/rtumirea_official?q=совет%20обучающихся
+- **И281.** Telegram @rtumirea_official, пост № 7273 (2023): избрание А. Кочеткова председателем Студсоюза. https://t.me/rtumirea_official/7273
+- **И282.** Telegram @rtumirea_official, пост № 14077 (апрель 2025): отчёт и.о. председателя Студсоюза. https://t.me/rtumirea_official/14077
+- **И283.** Telegram @rtumirea_official, пост № 22394 (≈ апрель–май 2026): итоги конкурса «Студент и преподаватель года». https://t.me/rtumirea_official/22394
+- **И284.** Telegram @rtumirea_official, пост № 22385 (≈ апрель–май 2026): «Иностранный студент года». https://t.me/rtumirea_official/22385
+- **И285.** Telegram @rtumirea_official, пост № 17292 (≈ сентябрь 2025): конкурс «Студент года Москвы». https://t.me/rtumirea_official/17292
+- **И286.** Telegram @vc_rtumirea — поиск «председатель» (смены руководства 2025–2026). https://t.me/s/vc_rtumirea?q=председатель
+- **И287.** Telegram @rtumirea_official, пост № 13030 (≈ 2025): благодарности волонтёрам за маскировочные сети (Г. И. Стяблин). https://t.me/rtumirea_official/13030
+- **И288.** Telegram @vc_rtumirea, пост № 2046 (октябрь 2026): председатель Г. И. Стяблин. https://t.me/vc_rtumirea/2046
+- **И289.** Telegram @rtumirea_official, пост № 23760 (≈ лето 2026): экологический форум; А. Чупин (Волонтёрский центр). https://t.me/rtumirea_official/23760
+- **И290.** Telegram @rtumirea_official, пост № 23321 (≈ июнь 2026): Н. Миронов (Волонтёрский центр), «Студтуризм». https://t.me/rtumirea_official/23321
+- **И291.** Telegram @rtumirea_official, пост № 19136 (≈ ноябрь 2025): А. А. Лаврентьев, научное волонтёрство. https://t.me/rtumirea_official/19136
+- **И292.** Telegram @rtumirea_official, пост № 21657 (≈ март 2026): «Школа Волонтёра». https://t.me/rtumirea_official/21657
+- **И293.** Telegram @vc_rtumirea, пост № 2047 (октябрь 2026): плетение маскировочных сетей 13.10.2026. https://t.me/vc_rtumirea/2047
+- **И294.** Telegram @vc_rtumirea — лента канала (октябрь 2026; около 1,8 тыс. подписчиков). https://t.me/s/vc_rtumirea
+- **И295.** Telegram @rtumirea_official, пост № 25231 (≈ сентябрь 2026): изготовление окопных свечей. https://t.me/rtumirea_official/25231
+- **И296.** Telegram @rtumirea_official, пост № 25215 (≈ сентябрь 2026): мастер-класс экоцентра «Сборка». https://t.me/rtumirea_official/25215
+- **И297.** Telegram @rtumirea_official, пост № 25601 (≈ октябрь 2026): субботник в парке «Измайлово». https://t.me/rtumirea_official/25601
+- **И298.** Telegram @vc_rtumirea, пост № 2048 (октябрь 2026): сбор батареек. https://t.me/vc_rtumirea/2048
+- **И299.** Telegram @rtumirea_official, пост № 25173 (≈ сентябрь 2026): экспедиция в Зейский заповедник. https://t.me/rtumirea_official/25173
+- **И300.** Telegram @rtumirea_official, пост № 25373 (≈ сентябрь 2026): экспедиция в Налычевский природный парк. https://t.me/rtumirea_official/25373
+- **И301.** Telegram @rtumirea_official, пост № 25571 (≈ октябрь 2026): экологическая экспедиция волонтёров. https://t.me/rtumirea_official/25571
+- **И302.** Telegram @vc_rtumirea, пост № 2032 (октябрь 2026): выезды в приюты. https://t.me/vc_rtumirea/2032
+- **И303.** Telegram @rtumirea_official, пост № 25323 (≈ сентябрь 2026): слёт инклюзивных волонтёров. https://t.me/rtumirea_official/25323
+- **И304.** Telegram @rtumirea_official, пост № 25153 (≈ сентябрь 2026): волонтёры на выборах 18–21.09.2026. https://t.me/rtumirea_official/25153
+- **И305.** Telegram @vc_rtumirea, пост № 2049 (октябрь 2026): набор на форум «Ценности будущего мира». https://t.me/vc_rtumirea/2049
+- **И306.** Telegram @rtumirea_official, пост № 24987 (≈ сентябрь 2026): «Школа Вектора 2026». https://t.me/rtumirea_official/24987
+- **И307.** Telegram @rtumirea_official, пост № 23628 (≈ июнь 2026): вожатые «Атмосферы» в летних лагерях. https://t.me/rtumirea_official/23628
+- **И308.** Telegram @rtumirea_official, пост № 22522 (≈ апрель 2026): 300 маскировочных сетей для участников СВО. https://t.me/rtumirea_official/22522
+- **И309.** Telegram @rtumirea_official, пост № 23264 (≈ май 2026): 270 маскировочных сетей. https://t.me/rtumirea_official/23264
+- **И310.** Telegram @rtumirea_official, пост № 23418 (≈ июнь 2026): 200 маскировочных сетей переданы ОНФ. https://t.me/rtumirea_official/23418
+- **И311.** Telegram @rtumirea_official, пост № 24083 (≈ июль 2026): 100 маскировочных сетей. https://t.me/rtumirea_official/24083
+- **И312.** Telegram @rtumirea_official, пост № 24884 (≈ август–сентябрь 2026): сети, обогреватели, бойлеры для участников СВО. https://t.me/rtumirea_official/24884
+- **И313.** Telegram @rtumirea_official, пост № 25619 (≈ октябрь 2026): 200 сетей и зимняя одежда для участников СВО. https://t.me/rtumirea_official/25619
+- **И314.** Telegram поискового отряда @poiskovy_rtumirea (октябрь 2026). https://t.me/s/poiskovy_rtumirea
+- **И315.** Telegram @rtumirea_official, пост № 19276 (≈ ноябрь 2025): День поисковика; Д. И. Косарев. https://t.me/rtumirea_official/19276
+- **И316.** Telegram @rtumirea_official, пост № 21817 (≈ апрель 2026): слёт поисковых отрядов в Пятигорске. https://t.me/rtumirea_official/21817
+- **И317.** Telegram @rtumirea_official, пост № 22661 (≈ май 2026): Вахта Памяти в Вяземском районе. https://t.me/rtumirea_official/22661
+- **И318.** Telegram @rtumirea_official, пост № 23486 (≈ июнь 2026): экспедиция «Халхин-Гол 2026». https://t.me/rtumirea_official/23486
+- **И319.** Telegram @rtumirea_official, пост № 24824 (≈ август 2026): Вахта Памяти в Карелии. https://t.me/rtumirea_official/24824
+- **И320.** Telegram @rtumirea_official, пост № 25527 (≈ октябрь 2026): поисковый отряд в Ельнинском районе. https://t.me/rtumirea_official/25527
+- **И321.** Telegram @rtumirea_official, пост № 24712 (≈ август 2026): «Команда Арктики»: 116 вузов, 53 региона. https://t.me/rtumirea_official/24712
+- **И322.** Telegram @rtumirea_official, пост № 22707 (≈ май 2026): Вахта Памяти в Себеже. https://t.me/rtumirea_official/22707
+- **И323.** Telegram @rtumirea_official, пост № 24598 (≈ август 2026): летние экспедиции «Команды Арктики». https://t.me/rtumirea_official/24598
+- **И324.** Telegram @rtumirea_official, пост № 24718 (≈ август 2026): летние экспедиции «Команды Арктики». https://t.me/rtumirea_official/24718
+- **И325.** Telegram @rtumirea_official, пост № 23184 (≈ июнь 2026): конференция «Документы войны и Победы». https://t.me/rtumirea_official/23184
+- **И326.** Telegram @rtumirea_official, пост № 22573 (≈ май 2026): весенние дни донора. https://t.me/rtumirea_official/22573
+- **И327.** Telegram @rtumirea_official, пост № 25641 (≈ октябрь 2026): день донора 05.10.2026. https://t.me/rtumirea_official/25641
+- **И328.** Telegram @rtumirea_official — поиск «Движение первых». https://t.me/s/rtumirea_official?q=Движение%20первых
+- **И329.** Telegram @rtumirea_official, пост № 16513 (≈ август 2025): «Университетская смена» с «Движением первых». https://t.me/rtumirea_official/16513
+- **И330.** Telegram @rtumirea_official, пост № 24238 (≈ июль–август 2026): проект «Первые в науке». https://t.me/rtumirea_official/24238
+- **И331.** Telegram @rtumirea_official, пост № 20310 (≈ 27.01.2026): О. Х. Каримов в Совете Федерации: модель студенческой науки. https://t.me/rtumirea_official/20310
+- **И332.** Telegram @rtumirea_official, пост № 24228 (≈ июль 2026): съезд советов молодых учёных и СНО; председатель СНО ИТХТ М. Крылов. https://t.me/rtumirea_official/24228
+- **И333.** Telegram @rtumirea_official, пост № 21651 (≈ март 2026): мастер-классы СНО по биоинформатике. https://t.me/rtumirea_official/21651
+- **И334.** Telegram @rtumirea_official, пост № 25092 (≈ сентябрь 2026): председатель СНО ИРИ И. Бардина. https://t.me/rtumirea_official/25092
+- **И335.** Telegram @rtumirea_official, пост № 25304 (≈ сентябрь 2026): хакатон «Эвакуация»: СКБ «Алгоритм» и СНО ИИИ. https://t.me/rtumirea_official/25304
+- **И336.** Telegram @rtumirea_official, пост № 22368 (≈ апрель 2026): СНО ИТУ «Кружок по фундаментальной математике». https://t.me/rtumirea_official/22368
+- **И337.** Telegram @rtumirea_official, пост № 22302 (≈ апрель 2026): НУГ BioMedChemLab на естественнонаучном турнире. https://t.me/rtumirea_official/22302
+- **И338.** Telegram @rtumirea_official, пост № 20478 (≈ февраль 2026): Неделя студенческой науки 10–17.02.2026. https://t.me/rtumirea_official/20478
+- **И339.** Telegram @rtumirea_official, пост № 22243 (≈ апрель 2026): II Естественно-научный турнир. https://t.me/rtumirea_official/22243
+- **И340.** Telegram СНО РТУ МИРЭА @sno_rtu_mirea (октябрь 2026). https://t.me/s/sno_rtu_mirea
+- **И341.** Telegram @rtumirea_official, пост № 23811 (≈ июнь 2026): ректор о мегалаборатории СКБ 577 м². https://t.me/rtumirea_official/23811
+- **И342.** Telegram @rtumirea_official, пост № 25637 (≈ октябрь 2026): «Кубок РТК Высшая лига». https://t.me/rtumirea_official/25637
+- **И343.** Telegram @rtumirea_official, пост № 25205 (≈ сентябрь 2026): отборочный этап «Кубка РТК». https://t.me/rtumirea_official/25205
+- **И344.** Telegram @rtumirea_official, пост № 21487 (≈ март 2026): KIB CTF «ANGARA SECURITY». https://t.me/rtumirea_official/21487
+- **И345.** Telegram @rtumirea_official, пост № 25514 (≈ октябрь 2026): KIB CTF Junior. https://t.me/rtumirea_official/25514
+- **И346.** Telegram @rtumirea_official, пост № 17052 (≈ 2025): перечень официальных ресурсов «Главное — студентам». https://t.me/rtumirea_official/17052
+- **И347.** Telegram @rtumirea_official, пост № 14139 (≈ апрель 2025): ярмарка вакансий, более 65 компаний. https://t.me/rtumirea_official/14139
+- **И348.** Telegram @rtumirea_official, пост № 17946 (≈ октябрь 2025): ярмарка вакансий 17.10.2025. https://t.me/rtumirea_official/17946
+- **И349.** Telegram @rtumirea_official, пост № 22139 (≈ апрель 2026): ярмарка вакансий 17.04.2026, более 90 компаний. https://t.me/rtumirea_official/22139
+- **И350.** Telegram @rtumirea_official, пост № 22995 (≈ май 2026): ярмарка вакансий ИТХТ 28.05.2026. https://t.me/rtumirea_official/22995
+- **И351.** Telegram @rtumirea_official, пост № 25671 (≈ октябрь 2026): ярмарка вакансий 09.10.2026. https://t.me/rtumirea_official/25671
+- **И352.** Telegram @rtumirea_official, пост № 25740 (≈ октябрь 2026): ярмарка вакансий 09.10.2026: мастер-классы. https://t.me/rtumirea_official/25740
+- **И353.** Telegram @rtumirea_official, пост № 21658 (≈ март 2026): «Карьерный лекторий» ИКБ. https://t.me/rtumirea_official/21658
+- **И354.** Telegram @rtumirea_official, пост № 24941 (≈ август 2026): опрос выпускников 2026 г. об эндаументе. https://t.me/rtumirea_official/24941
+- **И355.** Telegram @rtumirea_official, пост № 23386 (≈ июнь 2026): взнос профорганизации в Фонд целевого капитала. https://t.me/rtumirea_official/23386
+- **И356.** Telegram @rtumirea_official, пост № 23444 (≈ июнь 2026): ректор о Фонде целевого капитала (249 меценатов). https://t.me/rtumirea_official/23444
+- **И357.** Telegram @rtumirea_official, пост № 24985 (≈ сентябрь 2026): стипендия им. Н. Н. Евтихиева. https://t.me/rtumirea_official/24985
+- **И358.** Telegram @rtumirea_official, пост № 24866 (≈ август 2026): стипендия им. А. С. Сигова. https://t.me/rtumirea_official/24866
+- **И359.** Telegram @rtumirea_official, пост № 22750 (≈ май 2026): стипендия им. К. А. Большакова. https://t.me/rtumirea_official/22750
+- **И360.** Telegram @rtumirea_official, пост № 23808 (≈ июнь 2026): стипендия им. Г. А. Кузьмина. https://t.me/rtumirea_official/23808
+- **И361.** Telegram @rtumirea_official, пост № 25587 (≈ октябрь 2026): новые разделы сайта Фонда. https://t.me/rtumirea_official/25587
+- **И362.** Telegram @rtumirea_official, пост № 25250 (≈ сентябрь 2026): эндаумент вуза и национальный план развития эндаументов. https://t.me/rtumirea_official/25250
+- **И363.** Telegram @rtumirea_official, пост № 25273 (≈ сентябрь 2026): новый сезон Акселератора. https://t.me/rtumirea_official/25273
+- **И364.** Telegram @rtumirea_official, пост № 23193 (≈ май 2026): XI конференция и Демо-день Акселератора. https://t.me/rtumirea_official/23193
+- **И365.** Telegram @rtumirea_official, пост № 19978 (≈ декабрь 2025): довузовский трек Акселератора. https://t.me/rtumirea_official/19978
+- **И366.** Telegram @rtumirea_official, пост № 21201 (≈ март 2026): консультации по «Студенческому стартапу». https://t.me/rtumirea_official/21201
+- **И367.** Telegram @rtumirea_official, пост № 22283 (≈ апрель 2026): «Проектная лаборатория 3.0». https://t.me/rtumirea_official/22283
+- **И368.** Telegram @rtumirea_official, пост № 19622 (≈ декабрь 2025): стартап Stellar Wave в топ-10 «ТехПред-2025». https://t.me/rtumirea_official/19622
+- **И369.** Telegram @rtumirea_official, пост № 23733 (≈ июнь 2026): дайджест: высшая категория директору ЦКТ Н. В. Кирилловой. https://t.me/rtumirea_official/23733
+- **И370.** VK, официальное сообщество mirea_official — «Факты о вузе: Внеучебная деятельность», 10.08.2023. https://vk.ru/@mirea_official-fakty-o-vuze-vneuchebnaya-deyatelnost
+- **И371.** Telegram @rtumirea_official, пост № 25199 (≈ сентябрь 2026): отбор ЦКТ для «Посвящения в студенты — 2026». https://t.me/rtumirea_official/25199
+- **И372.** Telegram @rtumirea_official, пост № 22931 (≈ май 2026): итоги XI «Московской студенческой весны». https://t.me/rtumirea_official/22931
+- **И373.** Telegram @rtumirea_official, пост № 23862 (≈ июнь 2026): XXXIV Российская студенческая весна. https://t.me/rtumirea_official/23862
+- **И374.** Telegram @rtumirea_official — поиск «Центр культуры и творчества» (сентябрь 2026). https://t.me/s/rtumirea_official?q=Центр+культуры+и+творчества
+- **И375.** Telegram @rtumirea_official, пост № 23435 (≈ июнь 2026): отчётный концерт Школы мюзикла. https://t.me/rtumirea_official/23435
+- **И376.** Telegram @rtumirea_official, пост № 25223 (≈ сентябрь 2026): 5 лет Школе мюзикла. https://t.me/rtumirea_official/25223
+- **И377.** Telegram @rtumirea_official, пост № 24344 (≈ июль 2026): «Масенький театрик». https://t.me/rtumirea_official/24344
+- **И378.** Telegram @rtumirea_official, пост № 22724 (≈ май 2026): «Кноопс Young». https://t.me/rtumirea_official/22724
+- **И379.** Telegram @rtumirea_official, пост № 12723 (≈ начало 2025): Камерный хор. https://t.me/rtumirea_official/12723
+- **И380.** Telegram @rtumirea_official, пост № 21882 (≈ апрель 2026): Камерный хор на хоровом фестивале. https://t.me/rtumirea_official/21882
+- **И381.** Telegram @rtumirea_official, пост № 20142 (≈ январь 2026): команды КВН на «КиВиН-2026». https://t.me/rtumirea_official/20142
+- **И382.** Telegram @rtumirea_official, пост № 23252 (≈ май 2026): Весенний Кубок КВН РТУ МИРЭА. https://t.me/rtumirea_official/23252
+- **И383.** Telegram @rtumirea_official, пост № 25461 (≈ сентябрь 2026): набор в КВН «Фарс». https://t.me/rtumirea_official/25461
+- **И384.** Telegram @rtumirea_official, пост № 24844 (≈ 01.09.2026): День первокурсника 2026. https://t.me/rtumirea_official/24844
+- **И385.** Telegram @rtumirea_official, пост № 23902 (≈ июль 2026): единая структура спортивной деятельности. https://t.me/rtumirea_official/23902
+- **И386.** Telegram @rtumirea_official, пост № 24081 (≈ июль 2026): «бронзовый уровень» сертификации ССК «Альянс». https://t.me/rtumirea_official/24081
+- **И387.** Telegram ССК «Альянс» @sscalliance (октябрь 2026). https://t.me/s/sscalliance
+- **И388.** Telegram @rtumirea_official, пост № 22634 (≈ май 2026): Кубок ректора 2026. https://t.me/rtumirea_official/22634
+- **И389.** Telegram @rtumirea_official, пост № 23342 (≈ июнь 2026): бронза МССИ по хоккею. https://t.me/rtumirea_official/23342
+- **И390.** Telegram @rtumirea_official, пост № 24311 (≈ июль 2026): волейбол: «Московское лето». https://t.me/rtumirea_official/24311
+- **И391.** Telegram @rtumirea_official, пост № 23359 (≈ июнь 2026): волейбол и шахматы: итоги сезона. https://t.me/rtumirea_official/23359
+- **И392.** Telegram @rtumirea_official, пост № 23007 (≈ май 2026): спортивные итоги мая 2026. https://t.me/rtumirea_official/23007
+- **И393.** Telegram @rtumirea_official, пост № 15439 (≈ лето 2025): «Киберзона»; руководитель отдела киберспорта В. Б. Редин. https://t.me/rtumirea_official/15439
+- **И394.** Telegram @rtumirea_official, пост № 20021 (≈ декабрь 2025): итоги киберспорта 2025 г. https://t.me/rtumirea_official/20021
+- **И395.** Telegram @rtumirea_official, пост № 24401 (≈ июль 2026): соглашение с Федерацией компьютерного спорта России. https://t.me/rtumirea_official/24401
+- **И396.** Telegram @rtumirea_official — поиск «ССК». https://t.me/s/rtumirea_official?q=ССК
+- **И397.** Telegram @rtumirea_official, пост № 17771 (≈ осень 2025): «Отряд допсихологической поддержки». https://t.me/rtumirea_official/17771
+- **И398.** Telegram @rtumirea_official, пост № 24759 (≈ август 2026): Зимний университет по инженерным наукам. https://t.me/rtumirea_official/24759
+- **И399.** Telegram @rtumirea_official — поиск «психологическ» (2026). https://t.me/s/rtumirea_official?q=психологическ
+- **И400.** Telegram @rtumirea_official — поиск «здравпункт» (пост № 18559). https://t.me/s/rtumirea_official?q=здравпункт
+- **И401.** Telegram @rtumirea_official, пост № 25075 (≈ сентябрь 2026): группа здоровья в ЛКС. https://t.me/rtumirea_official/25075
+- **И402.** VK — статья о Студенческом офисе, 08.08.2023. https://vk.ru/@life.mirea-office
+- **И403.** Telegram @rtumirea_official, пост № 17408 (≈ сентябрь 2025): курсы довузовской подготовки. https://t.me/rtumirea_official/17408
+- **И404.** Telegram @rtumirea_official, пост № 23800 (≈ июнь 2026): ректор о довузовской и профориентационной работе. https://t.me/rtumirea_official/23800
+- **И405.** Telegram @rtumirea_official, пост № 25280 (≈ сентябрь 2026): «Цифровая кафедра» 2026/27. https://t.me/rtumirea_official/25280
+- **И406.** Telegram @rtumirea_official — поиск «общежитие» (посты № 24615, 24750, 24838, 25160; август–сентябрь 2026). https://t.me/s/rtumirea_official?q=общежитие
+- **И407.** Telegram @rtumirea_official, пост № 24615 (≈ август 2026): общежитие не предоставляется поступившим на платное. https://t.me/rtumirea_official/24615
+- **И408.** Telegram @rtumirea_official, пост № 24838 (≈ август 2026): заселение магистрантов. https://t.me/rtumirea_official/24838
+- **И409.** Telegram @rtumirea_official, пост № 25160 (≈ сентябрь 2026): пилот Digital ID в MAX. https://t.me/rtumirea_official/25160
+- **И410.** Telegram @rtumirea_official, пост № 24477 (≈ август 2026): ПГАС и стипендии. https://t.me/rtumirea_official/24477
+- **И411.** Telegram @rtumirea_official, пост № 22574 (≈ май 2026): размеры стипендий Президента и Правительства РФ. https://t.me/rtumirea_official/22574
+- **И412.** Telegram @rtumirea_official, пост № 25319 (≈ сентябрь 2026): именная стипендия Правительства Москвы. https://t.me/rtumirea_official/25319
+- **И413.** Telegram @rtumirea_official, пост № 25673 (≈ октябрь 2026): стипендии им. Курчатова и Александрова. https://t.me/rtumirea_official/25673
+- **И414.** Telegram @rtumirea_official, пост № 25201 (≈ сентябрь 2026): стипендия АНО ЦИСМ. https://t.me/rtumirea_official/25201
+- **И415.** Telegram @rtumirea_official, пост № 25556 (≈ октябрь 2026): стипендия им. Гагарина. https://t.me/rtumirea_official/25556
+- **И416.** Telegram @rtumirea_official — поиск «размер стипендии» (пост № 22574 и др.). https://t.me/s/rtumirea_official?q=размер+стипендии
+- **И417.** Telegram @rtumirea_official, пост № 25150 (≈ сентябрь 2026): Социальный регистр Москвы. https://t.me/rtumirea_official/25150
+- **И418.** Telegram @rtumirea_official — поиск «online-edu» (пост № 20579 и др.). https://t.me/s/rtumirea_official?q=online-edu
+- **И419.** Telegram @rtumirea_official — поиск «расписание» (пост № 20684). https://t.me/s/rtumirea_official?q=расписание
+- **И420.** Telegram @rtumirea_official, пост № 23974 (≈ июнь 2026): мерч для меценатов фонда. https://t.me/rtumirea_official/23974
+- **И421.** Telegram @priem_mirea — поиск «итоги» (посты до октября 2026 г.). https://t.me/s/priem_mirea?q=%D0%B8%D1%82%D0%BE%D0%B3%D0%B8
+- **И422.** Telegram @rtumirea_official, пост № 21106 (≈ март 2026): ВУЦ, лаборатория БПЛА. https://t.me/rtumirea_official/21106
+- **И423.** Telegram @wutz_mirea, пост № 5509 (2026): набор на подготовку кадровых офицеров. https://t.me/wutz_mirea/5509
+- **И424.** Telegram @wutz_mirea, пост № 5785 (осень 2026): «Марш кремлёвских курсантов». https://t.me/wutz_mirea/5785
+- **И425.** Telegram @rtumirea_official — поиск «Маслов» (посты 2024–2026: «д.х.н., профессор» ≈ 12.2024; «директор» до № 23599; «проректор» — № 25424). https://t.me/s/rtumirea_official?q=Маслов
+- **И426.** Telegram @rtumirea_official — поиск «Центр специальной подготовки» (посты 2025–2026; экскурсии Г. В. Фисенко и полковника Д. А. Непорожнева, курсы 2026 г.). https://t.me/s/rtumirea_official?q=Центр%20специальной%20подготовки
+- **И427.** Telegram @rtumirea_official — поиск «Предуниверсарий» (постов не найдено). https://t.me/s/rtumirea_official?q=Предуниверсарий
+- **И428.** Telegram @rtumirea_official — лента постов № 25792–25811 (≈ 14–15.10.2026; Старостат № 2). https://t.me/s/rtumirea_official?before=25812
+- **И429.** Telegram Центра специальной подготовки @mirea_csp (974 подписчика; описание направлений, «Лето в спецназе 2026»). https://t.me/s/mirea_csp
+- **И430.** Telegram ТОП ЦКТ @top_ckt_mirea (1,07 тыс. подписчиков; «Студент года Москвы», октябрь 2026). https://t.me/s/top_ckt_mirea
+- **И431.** Telegram @top_ckt_mirea, пост № 1856 (≈ 10.2026): открытые занятия СЭТ; лекция «День театра» директора ЦКТ. https://t.me/top_ckt_mirea/1856
+- **И432.** Telegram @top_ckt_mirea, пост № 1866 (≈ 10.2026): театральная студия «ПАХТ им. 1900 года». https://t.me/top_ckt_mirea/1866
+- **И433.** Telegram Сообщества CTF РТУ МИРЭА @CTF_RTU_MIREA (950 подписчиков; «CTF 101», дайджест за октябрь 2026, набор команды КБ-1). https://t.me/s/CTF_RTU_MIREA
+- **И434.** Telegram-чат Стартап-клуба РТУ МИРЭА @StartupClub_RTUMIREA (1 146 участников; описание и администраторы не видны). https://t.me/s/StartupClub_RTUMIREA
+- **И435.** Telegram @vc_rtumirea, пост № 2038 (≈ 10.2026): мастер-классы 5 и 6 октября, выезд в приют в Бирюлёво. https://t.me/vc_rtumirea/2038
+- **И436.** Telegram ССК «Альянс» @sscalliance, пост № 723 (≈ 10.2026): «УниверФест СТАРТ». https://t.me/sscalliance/723
+- **И437.** Telegram @sscalliance, пост № 738 (≈ 10.2026): студенческий сектор ФК «Локомотив». https://t.me/sscalliance/738
+- **И438.** Telegram @sscalliance, пост № 739 (≈ 10.2026): мужская баскетбольная сборная. https://t.me/sscalliance/739
+- **И439.** Telegram @sscalliance, пост № 740 (14.10.2026): мастер-класс по тэг-регби. https://t.me/sscalliance/740
+- **И440.** Telegram @sscalliance, пост № 743 (≈ 10.2026): матч «Альянс» — «Альянс-М» 16.10.2026. https://t.me/sscalliance/743
+- **И441.** Telegram @sscalliance, пост № 744 (≈ 10.2026): секция эстетической гимнастики, тренер Е. Д. Быстрицкая. https://t.me/sscalliance/744
+- **И442.** Telegram @rtumirea_official, пост № 954 (≈ 12.2021): консорциум «Технологические приоритеты». https://t.me/rtumirea_official/954
+- **И443.** Telegram @rtumirea_official, пост № 1101 (≈ 2022): консорциум «Защита от биогенных факторов». https://t.me/rtumirea_official/1101
+- **И444.** Telegram @rtumirea_official, пост № 2173 (≈ 2022): рейтинг Роскосмоса, опорный вуз аэрокосмической отрасли. https://t.me/rtumirea_official/2173
+- **И445.** Telegram @rtumirea_official, пост № 5075 (≈ 2023): день абитуриента Роскосмоса. https://t.me/rtumirea_official/5075
+- **И446.** Telegram @rtumirea_official, пост № 5320 (≈ 2022–2023): подкаст «ВЧИТКА». https://t.me/rtumirea_official/5320
+- **И447.** Telegram @rtumirea_official, пост № 9905 (≈ 2024): соглашение о консорциуме Московского научно-промышленного кластера. https://t.me/rtumirea_official/9905
+- **И448.** Telegram @rtumirea_official, пост № 11916 («13 декабря», ≈ 2024): соглашение с ООО «СП «Квант», консорциум «Национальная квантовая лаборатория». https://t.me/rtumirea_official/11916
+- **И449.** Telegram @rtumirea_official, пост № 15772 (≈ лето 2025): НОЦ «Искусственный интеллект» с Федеральным казначейством. https://t.me/rtumirea_official/15772
+- **И450.** Telegram @rtumirea_official, пост № 15788 (≈ 07.2025): соглашение с АНО «Консорциум печатных плат». https://t.me/rtumirea_official/15788
+- **И451.** Telegram @rtumirea_official, пост № 15928 (≈ лето 2025): презентация НОЦ «Искусственный интеллект». https://t.me/rtumirea_official/15928
+- **И452.** Telegram @rtumirea_official, пост № 15950 (≈ 07.2025): подкаст Студсоюза о студенческих семьях. https://t.me/rtumirea_official/15950
+- **И453.** Telegram @rtumirea_official, пост № 16346 (≈ 08.2025): вступление в консорциум опорных вузов Росатома. https://t.me/rtumirea_official/16346
+- **И454.** Telegram @rtumirea_official, пост № 16361 (дайджест 28.07–01.08.2025): консорциум опорных вузов Росатома. https://t.me/rtumirea_official/16361
+- **И455.** Telegram @rtumirea_official, пост № 17987 (≈ 10.2025): НИИ информатики МИРЭА и Евтихиевские чтения. https://t.me/rtumirea_official/17987
+- **И456.** Telegram @rtumirea_official, пост № 19675 (≈ 12.2025): полуфинал NEF, тренеры Д. С. Козырев и М. С. Яковлев. https://t.me/rtumirea_official/19675
+- **И457.** Telegram @rtumirea_official, пост № 19736 (≈ 12.2025–01.2026): блиц-турнир; М. В. Мельников — руководитель шахматной сборной. https://t.me/rtumirea_official/19736
+- **И458.** Telegram @rtumirea_official, пост № 20024 (≈ 12.2025): итоги года ССК «Альянс». https://t.me/rtumirea_official/20024
+- **И459.** Telegram @rtumirea_official, пост № 20037 (≈ 12.2025): шахматы, канал t.me/MMVChess. https://t.me/rtumirea_official/20037
+- **И460.** Telegram @rtumirea_official, пост № 20660 (≈ 02.2026): «Маломензурное трио» на фестивале «Зимородок-2026». https://t.me/rtumirea_official/20660
+- **И461.** Telegram @rtumirea_official, пост № 20687 (≈ 02.2026): турнир «ТРИрнир». https://t.me/rtumirea_official/20687
+- **И462.** Telegram @rtumirea_official, пост № 20741 (≈ 02.2026): соглашение с корпорацией «Галактика». https://t.me/rtumirea_official/20741
+- **И463.** Telegram @rtumirea_official, пост № 20821 (≈ 02.2026): сборная по шахматам и шашкам. https://t.me/rtumirea_official/20821
+- **И464.** Telegram @rtumirea_official, пост № 20990 (≈ 02–03.2026): отчёт ПИШ; центр критической инфраструктуры. https://t.me/rtumirea_official/20990
+- **И465.** Telegram @rtumirea_official, пост № 21328 (≈ 03.2026): подкаст СНО, 2-й выпуск. https://t.me/rtumirea_official/21328
+- **И466.** Telegram @rtumirea_official, пост № 21548 (≈ 03.2026): Многопрофильная олимпиада РТУ МИРЭА. https://t.me/rtumirea_official/21548
+- **И467.** Telegram @rtumirea_official, пост № 21784 (≈ 04.2026): проект «Инженерный класс в московской школе». https://t.me/rtumirea_official/21784
+- **И468.** Telegram @rtumirea_official, пост № 21876 (≈ 04.2026): вступление в Ассоциацию производителей клеёв и герметиков. https://t.me/rtumirea_official/21876
+- **И469.** Telegram @rtumirea_official, пост № 21993 (дайджест 6–10.04.2026): АПКГ. https://t.me/rtumirea_official/21993
+- **И470.** Telegram @rtumirea_official, пост № 22121 (≈ 04.2026): «День настольных игр» 25.04.2026. https://t.me/rtumirea_official/22121
+- **И471.** Telegram @rtumirea_official, пост № 22148 (≈ 04.2026): соглашение с АО «АСКОН». https://t.me/rtumirea_official/22148
+- **И472.** Telegram @rtumirea_official, пост № 22226 (≈ 04.2026): MIREARunClub на забеге 18.04.2026. https://t.me/rtumirea_official/22226
+- **И473.** Telegram @rtumirea_official, пост № 22275 (≈ 04.2026): общее собрание АРПП «Отечественный софт» в РТУ МИРЭА. https://t.me/rtumirea_official/22275
+- **И474.** Telegram @rtumirea_official, пост № 22280 (≈ 04.2026): ансамбль гитарной школы КСП. https://t.me/rtumirea_official/22280
+- **И475.** Telegram @rtumirea_official, пост № 22293 (≈ 04.2026): соглашение с ООО «ИНТСИС». https://t.me/rtumirea_official/22293
+- **И476.** Telegram @rtumirea_official, пост № 22322 (≈ 04.2026): АРПП, Н. Касперская. https://t.me/rtumirea_official/22322
+- **И477.** Telegram @rtumirea_official, пост № 22553 (≈ 30.04.2026): Центр реабилитационных и нейротехнологий, А. Виленский. https://t.me/rtumirea_official/22553
+- **И478.** Telegram @rtumirea_official, пост № 22629 (≈ 05.2026): канал t.me/mireacoding. https://t.me/rtumirea_official/22629
+- **И479.** Telegram @rtumirea_official, пост № 22653 (≈ 05.2026): каналы Камерного хора. https://t.me/rtumirea_official/22653
+- **И480.** Telegram @rtumirea_official, пост № 22816 (дайджест 4–8.05.2026): 1-е место Студии экспериментального танца. https://t.me/rtumirea_official/22816
+- **И481.** Telegram @rtumirea_official, пост № 22847 (≈ 05.2026): регата «Паруса победы». https://t.me/rtumirea_official/22847
+- **И482.** Telegram @rtumirea_official, пост № 22869 (≈ 05.2026): конкурс с ассоциацией «Цифровая Эра Транспорта». https://t.me/rtumirea_official/22869
+- **И483.** Telegram @rtumirea_official, пост № 22966 (≈ 05.2026): итоги «СТАРТИН’26». https://t.me/rtumirea_official/22966
+- **И484.** Telegram @rtumirea_official, пост № 22974 (≈ 16.05.2026): КНООПС&М на UPGRADE COMPETITION; руководители М. Шакур и А. Соляник. https://t.me/rtumirea_official/22974
+- **И485.** Telegram @rtumirea_official, пост № 22992 (≈ 05.2026): Гран-при хора на конкурсе «Хрустальная часовня». https://t.me/rtumirea_official/22992
+- **И486.** Telegram @rtumirea_official, пост № 23062 (≈ 05.2026): «Золотая дюжина», В. А. Рогова. https://t.me/rtumirea_official/23062
+- **И487.** Telegram @rtumirea_official, пост № 23107 (≈ 05.2026): конференция по печатным платам. https://t.me/rtumirea_official/23107
+- **И488.** Telegram @rtumirea_official, пост № 23140 (≈ 05.2026): «Масенький театрик». https://t.me/rtumirea_official/23140
+- **И489.** Telegram @rtumirea_official, пост № 23166 (≈ 05.2026): конференция «Наука для жизни». https://t.me/rtumirea_official/23166
+- **И490.** Telegram @rtumirea_official, пост № 23167 (≈ 05.2026): концерт «Вечерний джаз» 28.05.2026. https://t.me/rtumirea_official/23167
+- **И491.** Telegram @rtumirea_official, пост № 23280 (≈ 06.2026): Гран-при конкурса «Славянские мотивы», И. А. Самойлов — «Лучший дирижёр». https://t.me/rtumirea_official/23280
+- **И492.** Telegram @rtumirea_official, пост № 23335 (≈ 01.06.2026): поздравление ректора; довузовская подготовка «более 30 лет». https://t.me/rtumirea_official/23335
+- **И493.** Telegram @rtumirea_official, пост № 23428 (≈ 06.2026): инженерные классы. https://t.me/rtumirea_official/23428
+- **И494.** Telegram @rtumirea_official, пост № 23447 (≈ 06.2026): Альянс университетов 1С, меморандум об «Академии Цифровизации». https://t.me/rtumirea_official/23447
+- **И495.** Telegram @rtumirea_official, пост № 23463 (≈ 11.06.2026): курс «Голосовая йога». https://t.me/rtumirea_official/23463
+- **И496.** Telegram @rtumirea_official, пост № 23530 (≈ 06.2026): II Всероссийская конференция по печатным платам. https://t.me/rtumirea_official/23530
+- **И497.** Telegram @rtumirea_official, пост № 23562 (≈ 06.2026): мегалаборатория телематики и автоэлектроники, «Транстелематика». https://t.me/rtumirea_official/23562
+- **И498.** Telegram @rtumirea_official, пост № 23625 (≈ 06.2026): «Инженерный класс» и «IT-класс в московской школе». https://t.me/rtumirea_official/23625
+- **И499.** Telegram @rtumirea_official, пост № 23627 (≈ 06.2026): видео с А. С. Сиговым (член Научного совета при Совете Безопасности РФ). https://t.me/rtumirea_official/23627
+- **И500.** Telegram @rtumirea_official, пост № 23634 (≈ 06.2026): грант СТД РФ «Масенькому театрику». https://t.me/rtumirea_official/23634
+- **И501.** Telegram @rtumirea_official, пост № 23665 (≈ 06.2026): «Транстелематика», М. Казаков. https://t.me/rtumirea_official/23665
+- **И502.** Telegram @rtumirea_official, пост № 23681 (≈ 06.2026): хакатон по САПР печатных плат. https://t.me/rtumirea_official/23681
+- **И503.** Telegram @rtumirea_official, пост № 23741 (≈ 06.2026): соглашение с НМИЦ АГП им. В. И. Кулакова. https://t.me/rtumirea_official/23741
+- **И504.** Telegram @rtumirea_official, пост № 23804 (≈ 06–07.2026): Клуб рукопашного боя им. В. К. Минеева. https://t.me/rtumirea_official/23804
+- **И505.** Telegram @rtumirea_official, пост № 23826 (≈ 07.2026): сборная по пляжному футболу. https://t.me/rtumirea_official/23826
+- **И506.** Telegram @rtumirea_official, пост № 23903 (≈ 07.2026): итоги Российской студенческой весны. https://t.me/rtumirea_official/23903
+- **И507.** Telegram @rtumirea_official, пост № 24054 (≈ 07.2026): военно-историческая викторина. https://t.me/rtumirea_official/24054
+- **И508.** Telegram @rtumirea_official, пост № 24163 (≈ 07.2026): марафон «Белые ночи». https://t.me/rtumirea_official/24163
+- **И509.** Telegram @rtumirea_official, пост № 24218 (≈ 07.2026): Кубок Европы U21 по дзюдо. https://t.me/rtumirea_official/24218
+- **И510.** Telegram @rtumirea_official, пост № 24345 (≈ 07.2026): спортивные смены в «Алых парусах». https://t.me/rtumirea_official/24345
+- **И511.** Telegram @rtumirea_official, пост № 24447 (≈ 08.2026): канал t.me/coding_aii. https://t.me/rtumirea_official/24447
+- **И512.** Telegram @rtumirea_official, пост № 24495 (≈ 08.2026): конкурс «Россия без фильтров». https://t.me/rtumirea_official/24495
+- **И513.** Telegram @rtumirea_official, пост № 24547 (≈ 08.2026): летний интенсив ИИИ по программированию. https://t.me/rtumirea_official/24547
+- **И514.** Telegram @rtumirea_official, пост № 24623 (≈ 08.2026): самбо. https://t.me/rtumirea_official/24623
+- **И515.** Telegram @rtumirea_official, пост № 24625 (≈ 08.2026): женская баскетбольная сборная. https://t.me/rtumirea_official/24625
+- **И516.** Telegram @rtumirea_official, пост № 24760 (≈ 08.2026): фестиваль «АРТ ВИК», литературный клуб. https://t.me/rtumirea_official/24760
+- **И517.** Telegram @rtumirea_official, пост № 24765 (≈ 08.2026): IV Российско-Кыргызский медиафорум; Е. А. Натахина. https://t.me/rtumirea_official/24765
+- **И518.** Telegram @rtumirea_official, пост № 24841 (≈ 08.2026): премия «Вечный вклад». https://t.me/rtumirea_official/24841
+- **И519.** Telegram @rtumirea_official, пост № 24937 (≈ 01.09.2026): знакомство с внеучебной деятельностью; Дирекция «Импульс». https://t.me/rtumirea_official/24937
+- **И520.** Telegram @rtumirea_official, пост № 24992 (≈ 03.09.2026): набор в сборные, часть 1. https://t.me/rtumirea_official/24992
+- **И521.** Telegram @rtumirea_official, пост № 24995 (≈ 04.09.2026): набор в сборные, часть 2. https://t.me/rtumirea_official/24995
+- **И522.** Telegram @rtumirea_official, пост № 25038 (≈ 05.09.2026): набор в сборные, часть 3. https://t.me/rtumirea_official/25038
+- **И523.** Telegram @rtumirea_official, пост № 25060 (≈ 09.2026): AJP Grand Slam. https://t.me/rtumirea_official/25060
+- **И524.** Telegram @rtumirea_official, пост № 25089 (≈ 09.2026): августовский интенсив ИИИ. https://t.me/rtumirea_official/25089
+- **И525.** Telegram @rtumirea_official, пост № 25127 (≈ 09.2026): «Многоголосье–2026», КСП. https://t.me/rtumirea_official/25127
+- **И526.** Telegram @rtumirea_official, пост № 25152 (≈ 09.2026): «Цифровая кафедра», условия записи. https://t.me/rtumirea_official/25152
+- **И527.** Telegram @rtumirea_official, пост № 25222 (≈ 09.2026): чемпионат на Codeforces 20.09.2026. https://t.me/rtumirea_official/25222
+- **И528.** Telegram @rtumirea_official, пост № 25240 (≈ 09.2026): квест «Погружение» ТОП ЦКТ. https://t.me/rtumirea_official/25240
+- **И529.** Telegram @rtumirea_official, пост № 25266 (≈ 09.2026): турнир по дзюдо U23. https://t.me/rtumirea_official/25266
+- **И530.** Telegram @rtumirea_official, пост № 25313 (≈ 09.2026): студия огня и света «Diamond Flow». https://t.me/rtumirea_official/25313
+- **И531.** Telegram @rtumirea_official, пост № 25356 (≈ 30.09.2026): лекция Э. А. Зубакина. https://t.me/rtumirea_official/25356
+- **И532.** Telegram @rtumirea_official, пост № 25369 (≈ 09.2026): Бал РТУ МИРЭА. https://t.me/rtumirea_official/25369
+- **И533.** Telegram @rtumirea_official, пост № 25375 (≈ 09.2026): MIREA Welcome Contest 2026. https://t.me/rtumirea_official/25375
+- **И534.** Telegram @rtumirea_official, пост № 25418 (≈ 06.10.2026): 14 лет КНООПС. https://t.me/rtumirea_official/25418
+- **И535.** Telegram @rtumirea_official, пост № 25449 (≈ 30.09.2026): Молодёжный клуб землячества Красноярского края. https://t.me/rtumirea_official/25449
+- **И536.** Telegram @rtumirea_official, пост № 25468 (≈ 30.09.2026): фестиваль педагогических отрядов «Вожак». https://t.me/rtumirea_official/25468
+- **И537.** Telegram @rtumirea_official, пост № 25490 (≈ 10.2026): «Лига танца». https://t.me/rtumirea_official/25490
+- **И538.** Telegram @rtumirea_official, пост № 25497 (≈ 30.09.2026): Камерный хор на VI Форуме классных руководителей. https://t.me/rtumirea_official/25497
+- **И539.** Telegram @rtumirea_official, пост № 25526 (≈ 01.10.2026): программы «Альтаира» на сентябрь 2026 г. https://t.me/rtumirea_official/25526
+- **И540.** Telegram @rtumirea_official, пост № 25539 (≈ 10.2026): туристский клуб и Волонтёрский центр. https://t.me/rtumirea_official/25539
+- **И541.** Telegram @rtumirea_official, пост № 25566 (≈ 10.2026): «EMO сообщество» на XIII БиоТурнире. https://t.me/rtumirea_official/25566
+- **И542.** Telegram @rtumirea_official, пост № 25593 (≈ 05.10.2026): футбольные и баскетбольные сборные. https://t.me/rtumirea_official/25593
+- **И543.** Telegram @rtumirea_official, пост № 25608 (≈ 06.10.2026): подкоманды R2MIREA. https://t.me/rtumirea_official/25608
+- **И544.** Telegram @rtumirea_official, пост № 25631 (≈ 10.2026): сборная ГТО. https://t.me/rtumirea_official/25631
+- **И545.** Telegram @rtumirea_official, пост № 25642 (≈ 10.2026): ИТ-класс школы № 1238. https://t.me/rtumirea_official/25642
+- **И546.** Telegram @rtumirea_official, пост № 25647 (≈ 10.2026): КНООПС&М на World Dance Festival. https://t.me/rtumirea_official/25647
+- **И547.** Telegram @rtumirea_official, пост № 25656 (≈ 08–10.10.2026): соглашение с Федерацией спортивного программирования Москвы. https://t.me/rtumirea_official/25656
+- **И548.** Telegram @rtumirea_official, пост № 25667 (≈ 10.2026): «Битва роботов», TITANS AI. https://t.me/rtumirea_official/25667
+- **И549.** Telegram @rtumirea_official, пост № 25685 (≈ 10.2026): команда TITANS AI. https://t.me/rtumirea_official/25685
+- **И550.** Telegram @rtumirea_official, пост № 25701 (≈ 10.2026): «Учебные субботы РТУ МИРЭА». https://t.me/rtumirea_official/25701
+- **И551.** Telegram @rtumirea_official, пост № 25741 (≈ 10.2026): хакатон «Москва — Индонезия». https://t.me/rtumirea_official/25741
+- **И552.** Telegram @rtumirea_official, пост № 25773 (≈ 13.10.2026): театральная студия «ПАХТ им. 1900 года». https://t.me/rtumirea_official/25773
+- **И553.** Telegram @rtumirea_official, пост № 25774 (≈ 13.10.2026): круглый стол о музее на Евтихиевских чтениях. https://t.me/rtumirea_official/25774
+- **И554.** Telegram @rtumirea_official, пост № 25782 (≈ 13.10.2026): кавер-группа «Незваные гости». https://t.me/rtumirea_official/25782
+- **И555.** Telegram @rtumirea_official, пост № 25793 (≈ 14.10.2026): стратегическая сессия в МАДИ; Д. Колодяжный, С. Котова. https://t.me/rtumirea_official/25793
+- **И556.** Telegram @rtumirea_official, пост № 25796 (≈ 14.10.2026): заявки на стипендии Президента и Правительства РФ. https://t.me/rtumirea_official/25796
+- **И557.** Telegram @rtumirea_official, пост № 25806 (≈ 14.10.2026): мастер-класс Волонтёрского центра 18.10.2026. https://t.me/rtumirea_official/25806
+- **И558.** Telegram @rtumirea_official, пост № 25809 (≈ 15.10.2026): ССК — «Турнир первокурсников», Студлига. https://t.me/rtumirea_official/25809
+
+## В. Студенческий союз МИРЭА
+
+- **И559.** Telegram Студсоюза @sumirea, пост № 12730 (01.10.2026): объединение ИРИ и ИПТИП в ИРИП. https://t.me/sumirea/12730
+- **И560.** Telegram @sumirea, пост № 12685 (27.09.2026): заместитель председателя А. Хабарова, руководитель Досугового центра М. Логунова, председатель отделения ИИТ Д. Леонов. https://t.me/sumirea/12685
+- **И561.** Telegram @sumirea — поиск «Отчётно-выборная» (конференции отделений 14–17.04.2026). https://t.me/s/sumirea?q=Отчётно-выборная
+- **И562.** sumirea.ru — «История». https://sumirea.ru/history/
+- **И563.** sumirea.ru — официальный сайт ММОО «Студенческий союз МИРЭА», главная (изменена 08.04.2026). https://sumirea.ru/
+- **И564.** sumirea.ru — «Наша команда» (изменена 20.01.2026). https://sumirea.ru/team/
+- **И565.** Telegram @sumirea, пост № 12488 (01.09.2026): выступление председателя Н. Бакина. https://t.me/sumirea/12488
+- **И566.** Telegram @sumirea, пост № 12201 (изменён 02.07.2026): члены Бюро и Комитета, председатель студсовета общежития № 2. https://t.me/sumirea/12201
+- **И567.** sumirea.ru — «Студенческие отряды» (изменена 07.12.2024). https://sumirea.ru/activity/squad/
+- **И568.** sumirea.ru — «Патриотическое направление» (подразделение «Слава»). Без даты. https://sumirea.ru/activity/patriotic/
+- **И569.** sumirea.ru — «Клубы по интересам». https://sumirea.ru/activity/clubs/
+- **И570.** sumirea.ru — «Руководители» (страница не обновлена после 2025 г.). https://sumirea.ru/history/leaders/
+- **И571.** Telegram @sumirea, пост № 11112 (12.02.2026): члены Бюро, завершившие деятельность. https://t.me/sumirea/11112
+- **И572.** Telegram @sumirea, пост № 11731 (24.04.2026): заместитель председателя А. А. Гуртовая. https://t.me/sumirea/11731
+- **И573.** Telegram @sumirea, пост № 12748 (04.10.2026): номинанты «Общественник года». https://t.me/sumirea/12748
+- **И574.** Telegram @sumirea, пост № 11356 (изменён 14.03.2026): график отчётно-выборных конференций отделений. https://t.me/sumirea/11356
+- **И575.** Telegram @sumirea, пост № 11630 (14.04.2026): председатель отделения ИКБ. https://t.me/sumirea/11630
+- **И576.** Telegram @sumirea, пост № 11649 (17.04.2026): председатель отделения ИТХТ. https://t.me/sumirea/11649
+- **И577.** Telegram @sumirea, пост № 11629 (14.04.2026): председатель отделения в колледже. https://t.me/sumirea/11629
+- **И578.** VK, сообщество Студсоюза — «Структурные подразделения РТУ МИРЭА» (31.08.2021, с последующими обновлениями). https://vk.ru/@sumirea-strukturnye-podrazdeleniya-rtu-mirea
+- **И579.** sumirea.ru — «Проекты». https://sumirea.ru/projects/
+- **И580.** sumirea.ru — «Контакты». https://sumirea.ru/contacts/
+- **И581.** Telegram-канал Студсоюза @sumirea (октябрь 2026). https://t.me/s/sumirea
+- **И582.** sumirea.ru — «Волонтёрский центр» (изменена 08.05.2024). https://sumirea.ru/activity/volunteer/
+- **И583.** Telegram @sumirea, пост № 9201 (2025): член Бюро М. Дорма, куратор штаба отрядов 2023–2025. https://t.me/sumirea/9201
+- **И584.** sumirea.ru — «Культурно-массовое направление» (Досуговый центр). Страница изменена 02.05.2024. https://sumirea.ru/activity/cultural/
+- **И585.** sumirea.ru — «Спорт» (ССК «Альянс»). Страница изменена 18.06.2024. https://sumirea.ru/activity/sport/
+- **И586.** sumirea.ru — «Информационное направление» (Медиацентр). Страница изменена 01.04.2025. https://sumirea.ru/activity/information/
+- **И587.** sumirea.ru — журнал «Ступени» (последний выпуск — № 70, январь 2025). Страница изменена 01.04.2025. https://sumirea.ru/journal/
+- **И588.** Telegram @sumirea, пост № 10706 (15.12.2025): Клуб спортивной мафии. https://t.me/sumirea/10706
+- **И589.** Telegram @sumirea, пост № 10784 (≈ 12.2025): опрос о конном клубе и велоклубе. https://t.me/sumirea/10784
+- **И590.** Telegram @sumirea, пост № 10818 (≈ 12.2025): Клуб спортивной мафии. https://t.me/sumirea/10818
+- **И591.** Telegram @sumirea, пост № 11653 (≈ 04.2026): Стартап-клуб, диалог с А. Валиуллиным. https://t.me/sumirea/11653
+- **И592.** Telegram @sumirea, пост № 11779 (≈ 04–05.2026): смена руководства Сообщества CTF. https://t.me/sumirea/11779
+- **И593.** Telegram @sumirea, пост № 12616 (≈ 26.09.2026): встреча Стартап-клуба с основателями стартапов. https://t.me/sumirea/12616
+- **И594.** Telegram @sumirea, пост № 12679 (≈ 09.2026): Студенческий парламентский клуб. https://t.me/sumirea/12679
+- **И595.** Telegram @sumirea — лента постов № 12770–12789 (≈ 9–14.10.2026): Байкал, пропуск через MAX, «Медиашкола». https://t.me/s/sumirea?before=12790
+
+## Г. Государственные органы, госкорпорации, рейтинговые агентства и другие вузы
+
+- **И596.** RAEX — карточка РТУ МИРЭА в базе рейтингов (данные 2012–2026). Сайт рейтингового агентства. https://raex-rr.com/database/vuz/10004011/
+- **И597.** «Интерфакс» — Национальный рейтинг университетов 2026, страница 5 (РТУ МИРЭА — 44–45). Рейтинговое агентство. https://www.interfax-russia.ru/academia/ratings?page=5&rating=1&year=2026
+- **И598.** Минобрнауки России — перечень университетов-участников программы «Приоритет-2030» (без даты). Официальный государственный. https://minobrnauki.gov.ru/%D0%A3%D0%BD%D0%B8%D0%B2%D0%B5%D1%80%D1%81%D0%B8%D1%82%D0%B5%D1%82%D1%8B_%D1%83%D1%87%D0%B0%D1%81%D1%82%D0%BD%D0%B8%D0%BA%D0%B8_%D0%9F%D1%80%D0%B8%D0%BE%D1%80%D0%B8%D1%82%D0%B5%D1%82_2030_xlsx_%D0%9B%D0%B8%D1%81%D1%821.pdf
+- **И599.** priority2030.ru — «Рейтинг университетов-участников программы «Приоритет-2030»» (РТУ МИРЭА — в основном списке без номера и группы). Оператор программы. https://priority2030.ru/upload/iblock/ddf/0dqshnho56ij6rbswz8ol55abs1jrerm/Prioritet_itogi.pdf
+- **И600.** НИУ ВШЭ, 24.11.2025 — итоги отбора «Приоритет-2030» на 2026 г. Официальный сайт вуза-участника программы. https://www.hse.ru/news/priority/1104955783.html
+- **И601.** RAEX — «Образовательные рейтинги RAEX 2026 года» (16.06.2026; файл назван RAEX_three_missions_2026.pdf, но содержит рейтинг RAEX-100). Рейтинговое агентство. https://raex-rr.com/files/analytics/RAEX_three_missions_2026.pdf
+- **И602.** «Интерфакс» — Национальный рейтинг университетов 2026, страница 1 (методология). Рейтинговое агентство. https://www.interfax-russia.ru/academia/ratings?page=1&rating=1&year=2026
+- **И603.** НИТУ МИСИС, 01.07.2026 — о Национальном рейтинге университетов 2026. Официальный сайт другого вуза. https://misis.ru/news/10441/
+- **И604.** Гарант — письмо Минобрнауки № ВК-264/09 от 14.02.2014 (методические рекомендации о советах обучающихся). Правовая база. https://base.garant.ru/70595824/
+- **И605.** НИТУ МИСИС — «Открытая химическая олимпиада» (организаторы, уровень, сроки 2026/27). Официальный сайт другого вуза. https://misis.ru/applicants/school-leavers/competitions/oho/
+- **И606.** ГК «Ростех», пресс-релиз от 10.03.2025 о передовых инженерных школах (АО «ОПК» — партнёр ПИШ РТУ МИРЭА). Госкорпорация. https://rostec.ru/upload/iblock/7ff/2lcyqn1s5ujyuc8ulfmnk033v37eq43u.pdf
+
+## Д. Неофициальные источники: агрегаторы, справочники и СМИ
+
+- **И607.** ucheba.ru — программа «Искусственный интеллект и машинное обучение» (02.03.02). Неофициальный. https://www.ucheba.ru/program/775245
+- **И608.** ucheba.ru — программа 11 «Проходные баллы 2026» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775211
+- **И609.** vuzopedia.ru — сводная таблица конкурса РТУ МИРЭА (обновлена 03.08.2024). Неофициальный агрегатор. https://vuzopedia.ru/admission-aggregate/753
+- **И610.** 2ГИС — карточка Фрязинского филиала. Неофициальный справочник. https://2gis.ru/fryazino/firm/70000001021911027
+- **И611.** ucheba.ru — карточка РТУ МИРЭА. Неофициальный агрегатор. https://www.ucheba.ru/uz/5857
+- **И612.** Контур.Фокус — карточка юрлица (ОГРН 1037739552740). Неофициальный. https://focus.kontur.ru/entity?query=1037739552740
+- **И613.** kp.ru — «РТУ МИРЭА» (приём 2026). СМИ, неофициальный. https://www.kp.ru/edu/moskva/rtu-mireha/
+- **И614.** poisknews.ru, 13.10.2025 — «РТУ МИРЭА: университет, где формируется будущее страны». СМИ, неофициальный. https://poisknews.ru/gde-uchitsya/rtu-mirea-universitet-gde-formiruetsya-budushhee-strany/
+- **И615.** 24smi.org — биография С. А. Куджа. Неофициальный. https://24smi.org/celebrity/156620-stanislav-kudzh.html
+- **И616.** mos.ru, 05.03.2021 — о детском технопарке «Альтаир». Сайт Правительства Москвы. https://www.mos.ru/news/item/86633073/
+- **И617.** «Известия», 07.07.2022 — «Росатом откроет профильную кафедру в РТУ МИРЭА». СМИ, неофициальный. https://iz.ru/1361247/2022-07-07/rosatom-otkroet-profilnuiu-kafedru-v-rtu-mirea
+- **И618.** Naked Science, 08.04.2026 — о спутнике RTU MIREA1. СМИ, неофициальный. https://naked-science.ru/article/column/zapuske-sputnika-dlya-vuz
+- **И619.** «Российская газета» (rg.ru), 20.04.2026 — «РТУ МИРЭА: поступление, проходные баллы, бюджетные места и стоимость обучения» (со ссылкой на приёмную комиссию). СМИ, неофициальный. https://rg.ru/post/rtu-mirea-postuplenie-v-godu-prohodnye-bally-biudzhetnye-mesta-i-stoimost-obucheniia.html
+- **И620.** fulledu.ru — РТУ МИРЭА в программе «Приоритет-2030» (без даты). Неофициальный. https://fulledu.ru/priority-2030/rtu-mirea/
+- **И621.** «Т—Ж», 30.03.2026 — рейтинг Forbes «Лучшие вузы России — 2026». СМИ, неофициальный. https://t-j.ru/news/forbes-topvuzov-26/
+- **И622.** НИУ ВШЭ, 21.10.2022 — новость о конференции военных учебных центров. Неофициальный для РТУ МИРЭА. https://www.hse.ru/org/hse/ouk/mil/news/786747623.html
+- **И623.** ucheba.ru — подразделения РТУ МИРЭА. Неофициальный агрегатор. https://www.ucheba.ru/uz/5857/units
+- **И624.** ucheba.ru — карточка ИКБ (без даты). Неофициальный агрегатор. https://www.ucheba.ru/uz/100736
+- **И625.** ucheba.ru — карточка ИРИ (без даты). Неофициальный агрегатор. https://www.ucheba.ru/uz/52459
+- **И626.** Рамблер, 26.11.2025 — «Юбилей отметил флагманский институт РТУ МИРЭА». СМИ, неофициальный. https://finance.rambler.ru/realty/55668613-yubiley-otmetil-flagmanskiy-institut-rtu-mirea/
+- **И627.** engineers2030.ru — карточка ПИШ СВЧ-электроники РТУ МИРЭА на портале ПИШ. Неофициальный для вуза. https://www.engineers2030.ru/upload/iblock/690/04dllu4qwqptquqmzpee920sdujx4wh4/q47ohuni2vyqigx32sr91n7r26c1uzwv.pdf
+- **И628.** ucheba.ru — Колледж программирования и кибербезопасности (приём 2026). Неофициальный агрегатор. https://www.ucheba.ru/uz/68693/programs
+- **И629.** ucheba.ru — программы ИИТ (приём 2026). Неофициальный агрегатор. https://www.ucheba.ru/uz/52457/programs
+- **И630.** ucheba.ru — программы ИКБ (приём 2026). Неофициальный агрегатор. https://www.ucheba.ru/uz/100736/programs
+- **И631.** ucheba.ru — программы ИИИ (приём 2026). Неофициальный агрегатор. https://www.ucheba.ru/uz/52458/programs
+- **И632.** ucheba.ru — программы ИТХТ (приём 2026). Неофициальный агрегатор. https://www.ucheba.ru/uz/102812/programs
+- **И633.** ucheba.ru — программы ИРИ (приём 2026). Неофициальный агрегатор. https://www.ucheba.ru/uz/52459/programs
+- **И634.** ucheba.ru — программы ИТУ (приём 2026). Неофициальный агрегатор. https://www.ucheba.ru/uz/52460/programs
+- **И635.** ucheba.ru — программы ИПТИП (приём 2026). Неофициальный агрегатор. https://www.ucheba.ru/uz/52461/programs
+- **И636.** ucheba.ru — программы ПИШ СВЧ-электроники (приём 2026). Неофициальный агрегатор. https://www.ucheba.ru/uz/109739/programs
+- **И637.** ucheba.ru — программа 09.03.01 «Инфраструктура информационных технологий» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775213
+- **И638.** ucheba.ru — программа 09.03.01 «Цифровые комплексы, системы и сети» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818472
+- **И639.** ucheba.ru — программа 09.03.01 «Квантовые коммуникации и вычисления» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/847098
+- **И640.** ucheba.ru — программа 09.03.03 «Информатизация организаций» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775215
+- **И641.** ucheba.ru — программа 09.03.03 «Управление данными» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818473
+- **И642.** ucheba.ru — программа 09.03.03 «Цифровая трансформация» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818475
+- **И643.** ucheba.ru — программа «Разработка программных продуктов и проектирование ИС» (баллы 2023–2026). Неофициальный. https://www.ucheba.ru/program/818480
+- **И644.** ucheba.ru — программа «Системная и программная инженерия». Неофициальный. https://www.ucheba.ru/program/818481
+- **И645.** ucheba.ru — программа «Разработка и дизайн компьютерных игр и мультимедийных приложений». Неофициальный. https://www.ucheba.ru/program/818478
+- **И646.** ucheba.ru — программа «Интеллектуальные системы поддержки принятия решений». Неофициальный. https://www.ucheba.ru/program/818482
+- **И647.** ucheba.ru — программа 09.03.04 «Проектирование и разработка сред и приложений AR/VR» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818477
+- **И648.** ucheba.ru — программа 09.03.04 «Информационные системы управления ресурсами предприятия» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775216
+- **И649.** ucheba.ru — программа 09.03.04 «Информационные технологии в атомной отрасли» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818476
+- **И650.** ucheba.ru — программа 09.03.02 «Технологии ИИ и анализ данных» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818987
+- **И651.** ucheba.ru — программа 09.03.02 «Технологии разработки ПО полного цикла» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/824294
+- **И652.** ucheba.ru — программа 09.03.02 «Безопасность программных решений» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818989
+- **И653.** ucheba.ru — программа 09.03.02 «Разработка кроссплатформенных бизнес-приложений» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818982
+- **И654.** ucheba.ru — программа 09.03.02 «Технологии виртуальных пространств» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818990
+- **И655.** ucheba.ru — программа «Безопасность автоматизированных систем» (10.03.01). Неофициальный. https://www.ucheba.ru/program/775247
+- **И656.** ucheba.ru — программа 10.03.01 «Организация и технологии защиты информации» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818977
+- **И657.** ucheba.ru — программа 12.03.01 «Интеллектуальные системы безопасности и аналитическое приборостроение» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775252
+- **И658.** ucheba.ru — программа 10.05.03 «Разработка АС в защищённом исполнении» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775249
+- **И659.** ucheba.ru — программа 10.05.04 «Технологии информационно-аналитического мониторинга» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775250
+- **И660.** ucheba.ru — программа 10.05.05 «Компьютерная экспертиза» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775251
+- **И661.** ucheba.ru — программа «Математическое моделирование и вычислительная математика». Неофициальный. https://www.ucheba.ru/program/775223
+- **И662.** ucheba.ru — программа 01.03.02 «Системное программирование и компьютерные технологии» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818609
+- **И663.** ucheba.ru — программа 03.03.02 «Медицинская физика» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/783386
+- **И664.** ucheba.ru — программа «Интеллектуальные системы управления и обработки информации». Неофициальный. https://www.ucheba.ru/program/775225
+- **И665.** ucheba.ru — программа 09.03.01 «Киберфизические системы» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818610
+- **И666.** ucheba.ru — программа 09.03.01 «Промышленная информатика» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818612
+- **И667.** ucheba.ru — программа «Технологии и системы ИИ в здравоохранении». Неофициальный. https://www.ucheba.ru/program/818613
+- **И668.** ucheba.ru — программа «Интеллектуальные системы обработки медико-биологической информации». Неофициальный. https://www.ucheba.ru/program/775228
+- **И669.** ucheba.ru — программа «Цифровое производство». Неофициальный. https://www.ucheba.ru/program/775229
+- **И670.** ucheba.ru — программа «Автономные роботы». Неофициальный. https://www.ucheba.ru/program/775231
+- **И671.** ucheba.ru — программа 15.03.06 «Роботизированные мультироторные беспилотные авиационные системы» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818620
+- **И672.** ucheba.ru — программа «Инженерия автоматизированных систем». Неофициальный. https://www.ucheba.ru/program/775233
+- **И673.** ucheba.ru — программа «Разработка защищённого программного обеспечения». Неофициальный. https://ucheba.ru/program/818621
+- **И674.** ucheba.ru — программа «Анализ безопасности компьютерных систем». Неофициальный. https://www.ucheba.ru/program/775226
+- **И675.** ucheba.ru — программа 10.05.02 «Разработка защищённых телекоммуникационных систем» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/824287
+- **И676.** ucheba.ru — программа 04.03.01 «Медицинская и фармацевтическая химия» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775482
+- **И677.** ucheba.ru — программа 04.03.01 «Фундаментальная и прикладная химия» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818975
+- **И678.** ucheba.ru — программа 04.03.01 «Химия гибридных полимерных систем» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818976
+- **И679.** ucheba.ru — программа 18.03.01 «ХТ природных и синтетических полимерных материалов» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775483
+- **И680.** ucheba.ru — программа 18.03.01 «ХТ органических веществ» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818978
+- **И681.** ucheba.ru — программа 18.03.01 «ХТ природных энергоносителей и углеродных материалов» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818979
+- **И682.** ucheba.ru — программа 18.03.01 «ХТ синтетических биологически активных веществ и химико-фармацевтических препаратов» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818981
+- **И683.** ucheba.ru — программа «ХТ редких и благородных металлов». Неофициальный. https://www.ucheba.ru/program/818980
+- **И684.** ucheba.ru — программа 18.03.01 «Химия и технология функциональных полимеров» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818983
+- **И685.** ucheba.ru — программа 18.03.01 «Цифровая химическая технология» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/818985
+- **И686.** ucheba.ru — программа «Биотехнология». Неофициальный. https://www.ucheba.ru/program/775484
+- **И687.** ucheba.ru — программа 20.03.01 «Инженерная защита окружающей среды» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775485
+- **И688.** ucheba.ru — программа 04.05.01 «Зелёная химия и катализ» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/847102
+- **И689.** ucheba.ru — программа «Биоинженерия и биоинформатика». Неофициальный. https://www.ucheba.ru/program/847103
+- **И690.** ucheba.ru — программа «ХТ редких и редкоземельных металлов». Неофициальный. https://www.ucheba.ru/program/829655
+- **И691.** ucheba.ru — программа 05.03.03 «Геоинформационные системы и комплексы» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/819302
+- **И692.** ucheba.ru — программа 09.03.01 «Аппаратное программирование встраиваемых систем» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/829632
+- **И693.** ucheba.ru — программа 11.03.01 «Радиоинформатика, мониторинг и телеметрия» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/819307
+- **И694.** ucheba.ru — программа 11.03.02 «Инфокоммуникационные системы и сети» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/819311
+- **И695.** ucheba.ru — программа 11.03.02 «Аудиовизуальные системы и технологии медиасвязи» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/819310
+- **И696.** ucheba.ru — программа 11.03.03 «Цифровое проектирование РЭС» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/819312
+- **И697.** ucheba.ru — программа 11.05.01 «Радиоэлектронные комплексы связи, локации и навигации» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775338
+- **И698.** ucheba.ru — программа 01.03.05 «Бизнес-аналитика» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/819330
+- **И699.** ucheba.ru — программа 27.03.05 «Технологическое предпринимательство» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/819332
+- **И700.** ucheba.ru — программа 27.03.05 «Менеджмент в сфере систем вооружений» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/819331
+- **И701.** ucheba.ru — программа 38.03.03 «Управление персоналом организации» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/819336
+- **И702.** ucheba.ru — программа 46.03.02 «Современные технологии управления документами» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/819340
+- **И703.** ucheba.ru — программа «Фуллстек разработка». Неофициальный. https://www.ucheba.ru/program/775311
+- **И704.** ucheba.ru — программа 09.03.02 «Компьютерный дизайн» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775312
+- **И705.** ucheba.ru — программа 09.03.02 «Технологии разработки платформенных бизнес-приложений» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/829620
+- **И706.** ucheba.ru — программа «Квантовое программирование». Неофициальный. https://www.ucheba.ru/program/847113
+- **И707.** ucheba.ru — программа 11.03.04 «Наноэлектроника» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775314
+- **И708.** ucheba.ru — программа 12.03.05 «Лазерная инженерия» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775315
+- **И709.** ucheba.ru — программа 15.03.01 «Цифровые и аддитивные технологии в машиностроении» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775318
+- **И710.** ucheba.ru — программа 27.03.01 «Цифровые измерительные технологии» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775321
+- **И711.** ucheba.ru — программа 27.03.02 «Управление качеством» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/829628
+- **И712.** ucheba.ru — программа «Инновационные технологии беспилотных систем». Неофициальный. https://www.ucheba.ru/program/818501
+- **И713.** ucheba.ru — программа 28.03.01 «Физика и технологии наносистем» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775322
+- **И714.** ucheba.ru — программа 29.03.04 «Технология художественной обработки материалов» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775324
+- **И715.** ucheba.ru — программа 54.03.01 «Дизайн сред смешанной реальности» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775326
+- **И716.** ucheba.ru — программа 12.05.01 «Оптико-электронные информационно-измерительные приборы и системы» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/186561
+- **И717.** ucheba.ru — программа 22.03.01 «Современные и перспективные материалы» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/775319
+- **И718.** ucheba.ru — программа 09.03.01 «Умные сервисы высокотехнологичных производств» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/847116
+- **И719.** ucheba.ru — программа 11.03.03 «Проектирование и технология СВЧ-устройств» (проходные баллы 2024–2026; обращение 14.10.2026). Неофициальный агрегатор. https://www.ucheba.ru/program/847117
+- **И720.** ucheba.ru — аспирантура РТУ МИРЭА. Неофициальный агрегатор. https://www.ucheba.ru/uz/5857/programs/postgraduate
+- **И721.** ucheba.ru — магистратура РТУ МИРЭА (приём 2026). Неофициальный агрегатор. https://www.ucheba.ru/uz/5857/programs/master
+- **И722.** vuzopedia.ru — колледж РТУ МИРЭА (страница с прежним названием «Колледж приборостроения и информационных технологий»). Неофициальный агрегатор. https://vuzopedia.ru/ssuzy/kolledzh-priborostroeniya-i-informatsionnykh-tekhnologiy-mirea
+- **И723.** vuzopedia.ru — Ставропольский филиал РТУ МИРЭА. Неофициальный агрегатор. https://vuzopedia.ru/vuz/6843
+- **И724.** edu-inform.ru — Фрязинский филиал РТУ МИРЭА. Неофициальный справочник. http://edu-inform.ru/msk/university/mirea-f/
+- **И725.** ucheba.ru — Фрязинский филиал (программы 2026). Неофициальный агрегатор. https://www.ucheba.ru/uz/11630/programs
+- **И726.** ucheba.ru — Колледж промышленных технологий (Фрязино). Неофициальный агрегатор. https://www.ucheba.ru/uz/112586/programs
+- **И727.** asafov.ru — профиль М. М. Расулова. Неофициальный, без даты. https://asafov.ru/person/rasulov-mirzo-maksudovich
+- **И728.** zachestnyibiznes.ru — карточка ММОО «Студенческий союз МИРЭА» (реквизиты по URL; страница не открылась). Неофициальный. https://zachestnyibiznes.ru/company/ul/1047746006538_7729433654_MMOO-STUDENChESKIY-SOYuZ-MIREA
+- **И729.** Рамблер, 12.04.2021 — «Спасательный студотряд МИРЭА отметил 20-летие». СМИ, неофициальный. https://news.rambler.ru/education/46205681-spasatelnyy-studotryad-mirea-otmetil-20-letie/
+- **И730.** CTFtime — команда cR4.sh (РТУ МИРЭА). Неофициальный, 14.10.2026. https://ctftime.org/team/224675
+- **И731.** CTFtime — команда kks (РТУ МИРЭА). Неофициальный. https://ctftime.org/team/32621
+- **И732.** esports.ru, 18.03.2026 — РТУ МИРЭА во Всероссийской киберспортивной студенческой лиге. СМИ, неофициальный. https://esports.ru/counter-strike-2/news/mgu-mai-i-rtu-mirea-predstavyat-moskvu-vo-vserossijskoj-kibersportivnoj-studencheskoj-lige/
+- **И733.** 2ГИС — филиалы организации (общежития РТУ МИРЭА). Неофициальный справочник. https://2gis.ru/moscow/branches/70000001098290493
+- **И734.** msk1.ru, 27.10.2025 — материал об общежитиях вузов Москвы (со ссылкой на сайт МИРЭА). СМИ, неофициальный. https://msk1.ru/text/education/2025/10/27/76050806/
+- **И735.** ppt.ru, 02.09.2026 — индексация стипендий с 01.09.2026. СМИ, неофициальный. https://ppt.ru/news/vysshee-obrazovanie/s-1-sentyabrya-2026-goda-vyrosli-razmery-stipendiy
+- **И736.** Гарант, 02.09.2026 — размеры стипендий с 01.09.2026. СМИ, неофициальный. https://www.garant.ru/news/2225353/
+- **И737.** App Store — приложение «Расписание МИРЭА» (разработчик сообщает, что приложение неофициальное). Неофициальный. https://apps.apple.com/ru/app/%D1%80%D0%B0%D1%81%D0%BF%D0%B8%D1%81%D0%B0%D0%BD%D0%B8%D0%B5-%D0%BC%D0%B8%D1%80%D1%8D%D0%B0/id1564161519?l=en-GB
+- **И738.** kudzh.ru — личный сайт С. А. Куджа. Только заголовок в поисковой выдаче. https://kudzh.ru/
+- **И739.** egrul.org — карточка РТУ МИРЭА (выписка 04.06.2026; учредитель, КПП филиалов, 42 связанных юрлица). Сторонний сервис ЕГРЮЛ, неофициальный. https://egrul.org/7729040491
+- **И740.** egrul.org — ООО «ЦТТ МИРЭА» (выписка 07.08.2026). Неофициальный. https://egrul.org/7720675063
+- **И741.** egrul.org — ООО «МИП МР» (последняя запись 07.02.2025). Неофициальный. https://egrul.org/7729714790
+- **И742.** egrul.org — ООО «НИИЦТ» (последняя запись 26.01.2025). Неофициальный. https://egrul.org/5042129647
+- **И743.** egrul.org — ООО «Технологический центр» (выписка 28.07.2026; предстоящее исключение). Неофициальный. https://egrul.org/7729716109
+- **И744.** egrul.org — Фонд целевого капитала на развитие РТУ МИРЭА (выписка 26.01.2025). Неофициальный. https://egrul.org/9729335700
+- **И745.** egrul.org — ММОО «Студенческий союз МИРЭА» (выписка 30.07.2026). Неофициальный. https://egrul.org/7729433654
+- **И746.** egrul.org — ООО МИП «ЛЭДЛАБ МИРЭА» (исключено 15.01.2018). Неофициальный. https://egrul.org/7729736722
+- **И747.** egrul.org — ООО «РСУ МИРЭА» (исключено 26.09.2016). Неофициальный. https://egrul.org/7729412051
+- **И748.** egrul.org — ООО «Быстродел» (исключено 06.08.2013). Неофициальный. https://egrul.org/7743804371
+- **И749.** egrul.org — ООО «Волоконно-оптическая техника» (прекращено 30.07.2013). Неофициальный. https://egrul.org/7706400606
+- **И750.** egrul.org — Ассоциация учебной робототехники и мехатроники «РОБАС» (исключена). Неофициальный. https://egrul.org/7709031940
+- **И751.** egrul.org — НОУ ДПО «Московский институт информатики и управления» (исключено 26.03.2019). Неофициальный. https://egrul.org/7719257826
+- **И752.** egrul.org — Ассоциация «МАКСМ» (решение о предстоящем исключении 11.02.2026). Неофициальный. https://egrul.org/7714401674
+- **И753.** egrul.org — НП «Агентство по развитию инновационного предпринимательства» (решение о предстоящем исключении 06.05.2026). Неофициальный. https://egrul.org/7715399273
+- **И754.** egrul.org — НП «РАЙЗ» (последняя запись 02.04.2026). Неофициальный. https://egrul.org/7721279136
+- **И755.** egrul.org — НП «ОКБ РЭА» (исключено 21.03.2022). Неофициальный. https://egrul.org/7720285391
+- **И756.** egrul.org — НКО Союз «НКЦ «Исток» (исключено 19.01.2023). Неофициальный. https://egrul.org/7720420322
+- **И757.** egrul.org — Ассоциация «Робототехника» (исключена 28.07.2011). Неофициальный. https://egrul.org/5018101979
+- **И758.** egrul.org — АНО «Институт развития предпринимательства» (исключено 02.06.2009). Неофициальный. https://egrul.org/7709577961
+- **И759.** egrul.org — Фонд поддержки образования (исключён). Неофициальный. https://egrul.org/7706184289
+- **И760.** egrul.org — АО «ИТЦ МИТХТ им. М. В. Ломоносова» (изменения 17.08.2026). Неофициальный. https://egrul.org/7729416994
+- **И761.** rusprofile.ru — карточка ООО «ЦТТ МИРЭА» (только заголовок в поисковой выдаче). Неофициальный. https://www.rusprofile.ru/id/3700833
+- **И762.** audit-it.ru — карточка ООО «МИП МР» (только заголовок в поисковой выдаче). Неофициальный. https://www.audit-it.ru/contragent/1127746545937_ooo-mip-mr
+- **И763.** checko.ru — карточка ММОО «Студенческий союз МИРЭА» (устаревший председатель). Неофициальный. https://checko.ru/company/mmoo-studenchesky-soyuz-mireha-1047746006538
+- **И764.** РБК Компании — карточка Фонда целевого капитала на развитие РТУ МИРЭА. Неофициальный. https://companies.rbc.ru/id/1227700834030-fond-tselevogo-kapitala-na-razvitie-rtu-mirea/
+- **И765.** investfuture.ru — о датах ПМЭФ-2026 (03–06.06.2026). СМИ, неофициальный. https://investfuture.ru/articles/pmef-2026-obyedinyaet-liderov-dlya-podpisaniya-klyuchevykh-ekonomicheskikh-soglasheniy-1180849752
+- **И766.** «1С», 07.06.2024 — Центр технологий 1С в РТУ МИРЭА. Сайт компании-партнёра. https://consulting.1c.ru/news/222874.html
+- **И767.** CNews Zoom, ≈ 07.2025 — соглашение РТУ МИРЭА и АНО «Консорциум печатных плат». СМИ, неофициальный. https://zoom.cnews.ru/news/item/648018
+- **И768.** ComNews, 30.06.2025 — соглашение АРПП «Отечественный софт» и РТУ МИРЭА. СМИ, неофициальный. https://www.comnews.ru/content/239926/2025-06-30/2025-w27/1010/associaciya-razrabotchikov-otechestvennyy-soft-i-rtu-mirea-zaymutsya-podgotovkoy-it-kadrov
+- **И769.** CNews, 18.06.2026 — сотрудничество РТУ МИРЭА и НМИЦ АГП им. В. И. Кулакова. СМИ, неофициальный. https://www.cnews.ru/news/line/2026-06-18_sotrudnichestvo_rtu_mirea
+- **И770.** GxP News, 16.05.2024 — отделение киберпротезирования ИЦМР. Отраслевое СМИ, неофициальный. https://gxpnews.net/2024/05/na-baze-rtu-mirea-otkrylos-proizvodstvo-funkczionalnyh-protezov/?amp=1
+- **И771.** GxP News, 07.2026 — соглашение РТУ МИРЭА и ООО «Бионардо» (14.07.2026). Отраслевое СМИ, неофициальный. https://gxpnews.net/2026/07/rtu-mirea-i-czentr-reabilitaczii-i-protezirovaniya-bionardo-obedinyat-usiliya-dlya-importozameshheniya-v-mediczinskoj-otrasli/
+- **И772.** Атоммедиа, 16.04.2025 — пресс-релиз об открытии Центра критической инфраструктуры. СМИ Росатома, неофициальный для вуза. https://atommedia.online/wp-content/uploads/2025/04/centr-ki-16-04-1.docx
+- **И773.** Блог «Гринатома» на Хабре, 30.04.2025 — «Центр критической инфраструктуры». Неофициальный. https://habr.com/ru/companies/greenatom/news/906022
+- **И774.** «Сноб», 25.06.2025 — Ростех, МАИ, РТУ МИРЭА и школа № 58. СМИ, неофициальный. https://snob.ru/news/rostekh-mai-rtu-mirea-i-moskovskaia-shkola-58-budut-vmeste-gotovit-inzhenerov/
+- **И775.** «Лаборатория Касперского» — соглашение с РТУ МИРЭА (только заголовок; дата не установлена). Сайт компании-партнёра. https://os.kaspersky.ru/latest/kaspersky-and-mirea-agreement/
+- **И776.** Википедия — статья «МИРЭА» (членство в ассоциации T.I.M.E., без даты). Неофициальный. https://ru.wikipedia.org/wiki/%D0%9C%D0%98%D0%A0%D0%AD%D0%90
+- **И777.** olimpiada.ru — «Многопрофильная олимпиада РТУ МИРЭА» (сезон 2026/27). Неофициальный справочник. https://olimpiada.ru/activity/5639
+- **И778.** «Учительская газета», 05.10.2026 — перечень олимпиад школьников на 2026/27 г. СМИ, неофициальный. https://ug.ru/minobrnauki-sokratilo-spisok-shkolnyh-olimpiad-na-2026-27-uchebnyj-god-pochti-na-tret/
+- **И779.** ucheba.ru — «Олимпиады РТУ МИРЭА» (НТО, 2026/27). Неофициальный агрегатор. https://www.ucheba.ru/for-abiturients/olympiads/uz-5857

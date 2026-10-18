@@ -142,7 +142,10 @@ def query():
         json_result = dict(result)
         if 'response' in json_result:
             json_result['response'] = markdown.markdown(json_result['response'])
-        return jsonify(json_result)
+        # Урезаем контексты: крупные ответы обрываются VPN на ~16 КБ,
+        # и клиент получает 0 байт вместо данных (см. app/utils.slim_result).
+        from app.utils import slim_result
+        return jsonify(slim_result(json_result))
     else:
         collections = Collection.get_all()
         return render_template(

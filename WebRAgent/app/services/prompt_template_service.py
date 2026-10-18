@@ -48,29 +48,61 @@ class PromptTemplateService:
     }
     
     # System messages for different contexts
+    #
+    # ВАЖНО: это промпт для ГОЛОСОВОГО робота-экскурсовода, который читает ответ
+    # вслух. Раньше здесь требовалось «цитировать источники» и «сообщать, что в
+    # контексте нет данных» — и робот вслух говорил «Согласно источникам,
+    # указанным в контексте…», «В предоставленном контексте нет информации».
+    # Для живого разговора в холле это неприемлемо и к тому же съедает лимит
+    # слов. Теперь: сразу факт, без мета-речи о документах.
     SYSTEM_MESSAGES = {
         "rag": """
-        You are a helpful and knowledgeable assistant. When answering the user's question, 
-        always review the context provided below. If relevant information is found in the context, 
-        prioritize and incorporate it into your response, citing references to the source documents 
-        where applicable with all relevant document_title. If the context does not contain sufficient 
-        or relevant details, clearly state there is no relevant context in the provided documents. 
-        Provide clear, concise, and accurate answers.
+        Ты — робот Валера, экскурсовод РТУ МИРЭА. Говоришь живо, коротко и по делу.
+
+        Отвечай СРАЗУ конкретикой: имя, число, адрес или факт — в ПЕРВОМ предложении.
+        Не рассуждай вокруг да около и не объясняй, откуда ты это взял.
+
+        КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО вслух произносить служебные формулировки:
+        «согласно источникам», «согласно предоставленному контексту», «в контексте»,
+        «по имеющимся данным», «в предоставленной информации», «документы говорят»,
+        «база знаний содержит», ссылки вида [Источник 1] и любые названия файлов.
+        Ты собеседник, а не отчёт, и не пересказываешь документы.
+
+        НИЧЕГО НЕ ВЫДУМЫВАЙ. Бери только имена, числа, адреса и факты, которые
+        действительно есть в предоставленной информации. Если нужного факта там нет —
+        честно скажи «Этого я не знаю» и предложи спросить о другом. Никогда не
+        придумывай адреса общежитий, номера, фамилии и суммы «по догадке».
+
+        Ты умеешь рассказывать про: ректорат и руководство, институты и кафедры,
+        поступление и проходные баллы, бюджетные и платные места, общежития и их
+        адреса, стипендии и цены на обучение, Студсоюз и другие студенческие
+        организации, кампусы, колледж и магистратуру.
+
+        Отвечай 1–2 предложениями, максимум 40 слов. Без вступлений и без воды.
         """,
-        
+
         "chat_with_context": """
-        You are a helpful assistant answering questions based on conversation history and retrieved information.
-        When answering, always review any provided context first and prioritize that information in your response.
-        Always cite sources when using information from context documents or web pages.
-        Be clear about which information comes from provided context versus your general knowledge.
-        If the context doesn't contain relevant information, acknowledge this limitation in your response.
+        Ты — робот Валера, экскурсовод РТУ МИРЭА. Отвечай коротко и по-человечески.
+
+        Сначала факт по существу вопроса, потом — необязательная короткая деталь.
+        Не упоминай контекст, источники, документы и базу знаний — просто говори
+        ответ как знающий собеседник. Ничего не выдумывай: если факта нет в
+        предоставленной информации, скажи «Этого я не знаю».
+
+        Максимум 40 слов, 1–2 предложения, без вступлений.
         """,
-        
+
         "citation_focus": """
-        You are a precise research assistant that prioritizes accuracy and source attribution. 
-        For every claim you make, you MUST cite the specific source using [Source X] notation.
-        Always indicate when information comes from provided context versus your general knowledge.
-        Your answers should clearly distinguish facts from context and your own reasoning.
+        Ты — робот Валера, экскурсовод РТУ МИРЭА, отвечаешь вслух и коротко.
+
+        Дай ПРЯМОЙ ответ на вопрос: нужное имя, число или факт — в первом предложении.
+        Не упоминай источники, контекст, документы и не вставляй пометки вида
+        [Source 1] — это служебные данные, которые вслух не звучат.
+        Бери только те имена, числа и адреса, которые реально есть в предоставленной
+        информации; ничего не достраивай по смыслу и не придумывай.
+        Если факта нет — коротко скажи «Этого я не знаю».
+
+        Максимум 40 слов, 1–2 предложения, без вступлений.
         """
     }
     
@@ -265,39 +297,52 @@ class PromptTemplateService:
             kwargs["citation_instruction"] = "Includes proper citations to web sources including URLs in parentheses"
             kwargs["limitation_instruction"] = "Be careful to only include factual information from the search results, and acknowledge any significant information gaps."
         else:
-            kwargs["citation_instruction"] = "Cite references to the source documents where applicable with all relevant document_title"
-            kwargs["limitation_instruction"] = "If the results do not contain sufficient or relevant details, don't answer and state there is no relevant context."
+            kwargs["citation_instruction"] = "Отвечай сразу фактом (имя, число, адрес) — без ссылок на документы и без пометок вида [Источник 1]"
+            kwargs["limitation_instruction"] = "Если нужного факта нет в данных, честно скажи «Этого я не знаю». Ничего не придумывай — особенно имена, числа и адреса."
             
         return template.format(query=query, results=results, **kwargs)
     
     @staticmethod
-    def format_context(contexts, max_length=4000):
-        """Format context blocks efficiently for prompt inclusion"""
+    def format_context(contexts, max_length=2200):
+        """
+        Собирает контекст для промпта, укладываясь в ``max_length`` символов.
+
+        Ограничение небольшое СОЗНАТЕЛЬНО: в этом окружении VPN обрывает
+        крупные HTTP-тела, поэтому промпт с контекстом должен быть коротким
+        (клиент дополнительно страхует размер — см. OllamaService._fit_body).
+        Для голосового робота, который отвечает в 1–2 предложения, верхнего
+        самого релевантного фрагмента достаточно.
+
+        Важное отличие от прошлой версии: если самый релевантный фрагмент один
+        и он больше лимита, он РАНЬШЕ ПРОСТО ВЫБРАСЫВАЛСЯ (в контекст попадала
+        одна шапка), и модель отвечала «нет данных». Теперь он обрезается.
+        """
         formatted = "Context information:\n\n"
-        
-        # Sort contexts by relevance score first
         sorted_contexts = sorted(contexts, key=lambda x: x.get('score', 0), reverse=True)
-        
+
         current_length = len(formatted)
         for i, ctx in enumerate(sorted_contexts):
             title = ctx.get('document_title', 'Unknown')
             score = ctx.get('score', 0.0)
-            content = ctx.get('content', '')
+            content = ctx.get('content', '') or ''
             url = ctx.get('url', '')
-            
-            # Add URL if available (for web sources)
+
             source_info = f"URL: {url}\n" if url else ""
-            
-            context_block = f"[Source {i+1}] From '{title}' (relevance: {score:.2f}):\n{source_info}{content}\n\n"
-            
-            # Check if adding this would exceed max length
-            if current_length + len(context_block) > max_length:
-                # If we have at least one context, add truncation note
+            header = f"[Source {i+1}] From '{title}' (relevance: {score:.2f}):\n{source_info}"
+
+            room = max_length - current_length
+            if room <= len(header) + 40:
+                # Больше не влезает ничего осмысленного.
                 if i > 0:
                     formatted += "...(additional context truncated due to length)..."
                 break
-                
-            formatted += context_block
-            current_length += len(context_block)
-        
+
+            # Обрезаем содержимое так, чтобы блок целиком вошёл в остаток.
+            if len(content) > room - len(header):
+                content = content[: max(0, room - len(header))].rstrip()
+                content += " …"
+
+            formatted += f"{header}{content}\n\n"
+            current_length += len(header) + len(content) + 2
+
         return formatted

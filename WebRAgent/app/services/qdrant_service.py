@@ -222,6 +222,8 @@ class QdrantService:
                     'paraphrase-albert-small-v2': 768,
                     'multi-qa-mpnet-base-dot-v1': 768,
                     'multi-qa-MiniLM-L6-cos-v1': 384,
+                    'BAAI/bge-m3': 1024,
+                    'intfloat/multilingual-e5-large': 1024,
                 }
                 self.model_dimensions = initial_dimensions
                 self._save_model_dimensions()

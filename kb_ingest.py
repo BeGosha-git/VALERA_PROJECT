@@ -54,7 +54,7 @@ DEFAULT_BASE_URL = os.getenv("RAG_BASE_URL", "http://localhost:5000")
 DEFAULT_USERNAME = os.getenv("RAG_USERNAME", "admin")
 DEFAULT_PASSWORD = os.getenv("RAG_PASSWORD", "change_me_in_production")
 DEFAULT_COLLECTION = os.getenv("RAG_COLLECTION_NAME", "МИРЭА")
-DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+DEFAULT_EMBEDDING_MODEL = os.getenv("KB_EMBEDDING_MODEL") or "paraphrase-multilingual-MiniLM-L12-v2"
 
 # Порядок загрузки: сначала самое полезное для RAG.
 INGEST_PLAN: List[Tuple[str, str]] = [

@@ -381,8 +381,12 @@ class PromptTemplateService:
     
     @staticmethod
     def get_system_message(message_type):
-        """Get a system message by type"""
-        return PromptTemplateService.SYSTEM_MESSAGES.get(message_type, PromptTemplateService.SYSTEM_MESSAGES["rag"])
+        """Get a system message by type (+ опорные факты Валеры)"""
+        from app.services.valera_facts import facts_card, robot_passport
+        text = PromptTemplateService.SYSTEM_MESSAGES.get(message_type, PromptTemplateService.SYSTEM_MESSAGES["rag"])
+        if message_type == "persona":
+            return text + robot_passport() + facts_card()
+        return text + facts_card()
     
     @staticmethod
     def get_decomposition_prompt(query, type="document_search", **kwargs):

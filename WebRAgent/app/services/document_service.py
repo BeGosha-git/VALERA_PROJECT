@@ -643,29 +643,62 @@ def _build_snapshot(qdrant_service: "QdrantService", collection_id: str):
     }
 
 
+_SNAPSHOT_REFRESHING: set = set()   # коллекции, снимок которых уже пересобирается
+
+
+def _store_snapshot(key: str, snap) -> None:
+    with _SNAPSHOT_LOCK:
+        _SNAPSHOT_CACHE[key] = snap
+        # Ограничиваем число коллекций в памяти (самые старые — вон).
+        while len(_SNAPSHOT_CACHE) > _SNAPSHOT_MAX:
+            oldest = min(_SNAPSHOT_CACHE, key=lambda k: _SNAPSHOT_CACHE[k]["ts"])
+            _SNAPSHOT_CACHE.pop(oldest, None)
+
+
+def _refresh_snapshot_bg(qdrant_service: "QdrantService", collection_id: str) -> None:
+    """Пересобирает снимок в фоне; пока он собирается, гости получают старый."""
+    key = str(collection_id)
+    with _SNAPSHOT_LOCK:
+        if key in _SNAPSHOT_REFRESHING:
+            return
+        _SNAPSHOT_REFRESHING.add(key)
+
+    def _work():
+        try:
+            snap = _build_snapshot(qdrant_service, collection_id)
+            if snap:
+                _store_snapshot(key, snap)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Фоновое обновление снимка не удалось: {exc}")
+        finally:
+            with _SNAPSHOT_LOCK:
+                _SNAPSHOT_REFRESHING.discard(key)
+
+    __import__("threading").Thread(target=_work, daemon=True).start()
+
+
 def _get_snapshot(qdrant_service: "QdrantService", collection_id: str):
     """
-    Возвращает снимок коллекции из кэша, пересобирая его при необходимости.
+    Возвращает снимок коллекции из кэша.
 
-    Кэш потокобезопасный: приложение многопоточное (threaded=True), иначе
-    параллельные вопросы пересобирали бы снимок несколько раз.
+    Stale-while-revalidate: если снимок старше TTL, гостю СРАЗУ отдаётся старый,
+    а новый собирается в фоне. Раньше вопрос, попавший на истёкший TTL, ждал
+    полную пересборку (выгрузка всех векторов из Qdrant) — это несколько секунд
+    тишины раз в 10 минут. Синхронно собираем только когда снимка нет вовсе.
     """
     import time as _time
 
     key = str(collection_id)
     with _SNAPSHOT_LOCK:
         snap = _SNAPSHOT_CACHE.get(key)
-        if snap and (_time.time() - snap["ts"]) < _SNAPSHOT_TTL_SEC:
-            return snap
-    # Собираем ВНЕ блокировки: это сетевой запрос, держать лок нельзя.
+    if snap:
+        if (_time.time() - snap["ts"]) >= _SNAPSHOT_TTL_SEC:
+            _refresh_snapshot_bg(qdrant_service, collection_id)
+        return snap
+    # Снимка нет — собираем ВНЕ блокировки (сетевой запрос, лок держать нельзя).
     snap = _build_snapshot(qdrant_service, collection_id)
     if snap:
-        with _SNAPSHOT_LOCK:
-            _SNAPSHOT_CACHE[key] = snap
-            # Ограничиваем число коллекций в памяти (самые старые — вон).
-            while len(_SNAPSHOT_CACHE) > _SNAPSHOT_MAX:
-                oldest = min(_SNAPSHOT_CACHE, key=lambda k: _SNAPSHOT_CACHE[k]["ts"])
-                _SNAPSHOT_CACHE.pop(oldest, None)
+        _store_snapshot(key, snap)
     return snap
 
 
@@ -1398,6 +1431,11 @@ class DocumentService:
         # и бонус за них только шумел — победителями становились случайные
         # FAQ-фрагменты, где слово просто упомянуто.
 
+        # Вес вектора: у английской MiniLM он низкий (на русском она ненадёжна),
+        # у многоязычных моделей (multilingual-*, bge-m3, e5) вектору можно доверять больше.
+        emb_name = (getattr(collection, "embedding_model", "") or "").lower()
+        vec_weight = 0.40 if any(k in emb_name for k in ("multilingual", "bge-m3", "e5")) else 0.20
+
         scored = []
         avg_len = snapshot.get("avg_len") or 1.0
         # Ключевой (самый редкий) термин вопроса — см. _key_term. IDF берём ПО
@@ -1428,7 +1466,7 @@ class DocumentService:
             #  • BM25 по тексту — основа (плотность темы);
             #  • document_title почти всегда общий («faq», имя файла);
             #  • вектор — лёгкая поправка (на русском ненадёжен).
-            score = (0.20 * vec
+            score = (vec_weight * vec
                      + 0.90 * lex
                      + 0.10 * title_lex
                      + 0.60 * head_lex)

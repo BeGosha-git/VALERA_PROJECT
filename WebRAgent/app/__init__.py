@@ -75,13 +75,25 @@ def create_app():
     def _prewarm_embeddings():
         try:
             from app.services.qdrant_service import get_sentence_transformer
-            model_name = 'all-MiniLM-L6-v2'
+            model_name = None
             try:
-                from app.services.model_service import ModelService
-                cfg = ModelService().config
-                model_name = cfg["active"]["models"].get("embedding") or model_name
+                # Сначала — модель, на которой построена коллекция «МИРЭА»:
+                # именно ей кодируются вопросы гостей.
+                from app.models.collection import Collection
+                for col in Collection.get_all():
+                    if (col.name or '').strip().lower() == 'мирэа' and col.embedding_model:
+                        model_name = col.embedding_model
+                        break
             except Exception:
                 pass
+            if not model_name:
+                model_name = 'all-MiniLM-L6-v2'
+                try:
+                    from app.services.model_service import ModelService
+                    cfg = ModelService().config
+                    model_name = cfg["active"]["models"].get("embedding") or model_name
+                except Exception:
+                    pass
             get_sentence_transformer(model_name)
             import logging
             logging.getLogger(__name__).info(

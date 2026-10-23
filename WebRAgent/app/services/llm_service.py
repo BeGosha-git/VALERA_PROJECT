@@ -1,6 +1,8 @@
 import os
 from abc import ABC, abstractmethod
 
+from app.services.valera_facts import facts_card
+
 class LLMService(ABC):
     """Base class for LLM service providers"""
     
@@ -80,7 +82,7 @@ class LLMService(ABC):
         # Раньше здесь было «You are a helpful assistant.» — и когда поиск не
         # нашёл ни одного фрагмента, модель получала АНГЛИЙСКУЮ безликую
         # инструкцию и отвечала как посторонний чат-бот.
-        system_message = self.RAG_SYSTEM_MESSAGE
+        system_message = self.RAG_SYSTEM_MESSAGE + facts_card()
         user_message = prompt
         
         if context:
@@ -137,13 +139,13 @@ class LLMService(ABC):
         
         if system_message_index is not None:
             # Enhance the existing system message
-            messages[system_message_index]['content'] += self.CHAT_CONTEXT_ENHANCEMENT
+            messages[system_message_index]['content'] += self.CHAT_CONTEXT_ENHANCEMENT + facts_card()
         else:
             # Системного сообщения нет — создаём, иначе провайдер получит
             # только реплики и будет вести себя как «модель без промта».
             messages.insert(0, {
                 'role': 'system',
-                'content': self.RAG_SYSTEM_MESSAGE + self.CHAT_CONTEXT_ENHANCEMENT,
+                'content': self.RAG_SYSTEM_MESSAGE + self.CHAT_CONTEXT_ENHANCEMENT + facts_card(),
             })
         
         # Find the most recent user message

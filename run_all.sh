@@ -2,7 +2,7 @@
 # run_all.sh – объединённый запуск WebRAgent (Docker) + Ollama + TTS
 # ============================================================================
 #
-#   ./run_all.sh [talk|voice|voice-fast|web|gui|kb-ingest|reset] [опции]
+#   ./run_all.sh [talk|voice|voice-fast|web|gui|kb-ingest|kb-check|reset] [опции]
 #
 # Режимы:
 #   talk          — (по умолчанию) стек без приложения: поднимает WebRAgent,
@@ -14,6 +14,7 @@
 #                   в браузере (в т.ч. с планшета/телефона), заменяет GUI.
 #   gui           — настольный графический пульт (valera_gui.py)
 #   kb-ingest     — залить базу знаний МИРЭА из архива в WebRAgent
+#   kb-check      — проверить полноту базы знаний в Qdrant (без заливки)
 #   reset         — сбросить состояние: файлы (chat_id/log/настройки) и,
 #                   с --chats, все чаты WebRAgent из MongoDB
 #
@@ -29,6 +30,8 @@
 #   --web-host H    — (только web) адрес веб-пульта; 0.0.0.0 — доступ из сети
 #   --with-full     — (только kb-ingest) залить и полный документ базы знаний
 #   --reset-kb      — (только kb-ingest) пересоздать коллекцию «МИРЭА» с нуля
+#   --no-kb-check   — не проверять полноту базы знаний при старте
+#   --no-kb-fix     — при неполной базе только предупредить, не перезаливать
 #   --chats         — (только reset) удалить все чаты WebRAgent из MongoDB
 #   --dry-run       — (только reset) показать, что будет удалено
 #   --yes           — (только reset) без вопроса-подтверждения
@@ -92,8 +95,89 @@ if [[ "$EXTRA_ARGS" == *"--reset-kb"* ]]; then
     EXTRA_ARGS="${EXTRA_ARGS//--reset-kb/}"
 fi
 
+# Проверка полноты базы знаний перед стартом (kb_check.py).
+#   --no-kb-check — не проверять;  --no-kb-fix — только предупредить, не заливать
+KB_CHECK=1
+KB_FIX=1
+if [[ "$EXTRA_ARGS" == *"--no-kb-check"* ]]; then
+    KB_CHECK=0
+    EXTRA_ARGS="${EXTRA_ARGS//--no-kb-check/}"
+fi
+if [[ "$EXTRA_ARGS" == *"--no-kb-fix"* ]]; then
+    KB_FIX=0
+    EXTRA_ARGS="${EXTRA_ARGS//--no-kb-fix/}"
+fi
+
 # PID своей Ollama (запущенной этим скриптом)
 OLLAMA_PID=""
+
+# ---------------------------------------------------------------------------
+# База знаний: заливка и проверка полноты
+# ---------------------------------------------------------------------------
+
+# Заливает базу МИРЭА в Qdrant изнутри контейнера app (быстрый путь).
+# Первый аргумент "reset" — предварительно пересоздать коллекцию.
+kb_ingest_in_container() {
+    local reset_flag=""
+    [ "$1" = "reset" ] && reset_flag="--reset"
+
+    local app_cid
+    app_cid="$(docker compose -f "$WEBRAGENT_DIR/docker-compose.yml" ps -q app 2>/dev/null || true)"
+    if [ -z "$app_cid" ]; then
+        echo "  ⚠️ Контейнер app не запущен — некуда заливать. Сначала: ./run_all.sh"
+        return 1
+    fi
+
+    echo "  Копирую базу знаний в контейнер..."
+    docker exec "$app_cid" rm -rf /tmp/kb >/dev/null 2>&1 || true
+    docker cp "$SCRIPT_DIR/knowledge_base/rtu_mirea_llm_kb" "$app_cid:/tmp/kb" 2>/dev/null
+    docker cp "$WEBRAGENT_DIR/ingest_local.py" "$app_cid:/tmp/ingest_local.py" 2>/dev/null
+
+    echo "  Заливаю (прямой REST, вся база)..."
+    # Модель эмбеддингов: KB_EMBEDDING_MODEL (по умолчанию — многоязычная
+    # MiniLM; для максимума качества: KB_EMBEDDING_MODEL=BAAI/bge-m3).
+    docker exec -e KB_EMBEDDING_MODEL="${KB_EMBEDDING_MODEL:-}" "$app_cid" \
+        python /tmp/ingest_local.py --kb /tmp/kb --collection "МИРЭА" $reset_flag
+}
+
+# Проверяет, что все файлы базы реально лежат в Qdrant; при неполной базе
+# перезаливает её (если не задан --no-kb-fix). Никогда не роняет запуск.
+kb_verify_and_fix() {
+    [ "$KB_CHECK" = "1" ] || return 0
+    echo ""
+    echo "[База знаний] Проверяю полноту коллекции «МИРЭА»..."
+
+    local rc=2 attempt
+    # Qdrant может подниматься ещё несколько секунд — ждём до ~30 с.
+    for attempt in 1 2 3 4 5 6; do
+        rc=0
+        python3 "$SCRIPT_DIR/kb_check.py" || rc=$?
+        [ "$rc" != "2" ] && break
+        echo "  Qdrant ещё не отвечает, жду 5 с (попытка $attempt/6)..."
+        sleep 5
+    done
+
+    if [ "$rc" = "0" ]; then
+        return 0
+    elif [ "$rc" = "2" ]; then
+        echo "  ⚠️ Проверка базы пропущена: Qdrant недоступен."
+        return 0
+    fi
+
+    if [ "$KB_FIX" != "1" ]; then
+        echo "  ⚠️ База неполная. Исправить: ./run_all.sh kb-ingest --reset-kb"
+        return 0
+    fi
+
+    echo "  ♻️ База неполная — перезаливаю коллекцию с нуля..."
+    if kb_ingest_in_container reset; then
+        python3 "$SCRIPT_DIR/kb_check.py" --quiet || \
+            echo "  ⚠️ После перезаливки база всё ещё неполная — см. ./run_all.sh kb-check"
+    else
+        echo "  ⚠️ Перезаливка не удалась. Повторите: ./run_all.sh kb-ingest --reset-kb"
+    fi
+    return 0
+}
 
 # ---------------------------------------------------------------------------
 # Управление Ollama
@@ -382,6 +466,11 @@ cd "$SCRIPT_DIR"
 echo "Ожидание запуска сервисов (5 секунд)..."
 sleep 5
 
+# Перед стартом приложения убеждаемся, что база знаний залита полностью.
+case "$RUN_MODE" in
+    talk|voice|voice-fast|web|gui) kb_verify_and_fix ;;
+esac
+
 # 5. Запуск приложения
 # Если задан прокси — экспортируем его в окружение (requests в приложении и
 # Ollama подхватят HTTP_PROXY/HTTPS_PROXY автоматически).
@@ -474,25 +563,16 @@ elif [ "$RUN_MODE" = "kb-ingest" ]; then
     echo ""
     echo "[5/5] Заливка базы знаний в контейнере (быстрый путь)..."
     cd "$SCRIPT_DIR"
-    python kb_ingest.py --help >/dev/null 2>&1 || true
-
-    APP_CID="$(docker compose -f "$WEBRAGENT_DIR/docker-compose.yml" ps -q app 2>/dev/null || true)"
-    if [ -z "$APP_CID" ]; then
-        echo "  ⚠️ Контейнер app не запущен — некуда заливать. Сначала: ./run_all.sh"
-        return 1 2>/dev/null || exit 1
+    if [ "$KB_RESET" = "1" ]; then
+        kb_ingest_in_container reset || exit 1
+    else
+        kb_ingest_in_container || exit 1
     fi
-
-    echo "  Копирую базу знаний в контейнер..."
-    docker exec "$APP_CID" rm -rf /tmp/kb >/dev/null 2>&1 || true
-    docker cp "$SCRIPT_DIR/knowledge_base/rtu_mirea_llm_kb" "$APP_CID:/tmp/kb" 2>/dev/null
-    docker cp "$SCRIPT_DIR/WebRAgent/ingest_local.py" "$APP_CID:/tmp/ingest_local.py" 2>/dev/null
-
-    RESET_FLAG=""
-    [ "$KB_RESET" = "1" ] && RESET_FLAG="--reset"
-
-    echo "  Заливаю (прямой REST, вся база)..."
-    docker exec "$APP_CID" python /tmp/ingest_local.py \
-        --kb /tmp/kb --collection "МИРЭА" $RESET_FLAG
+    python3 "$SCRIPT_DIR/kb_check.py" || true
+elif [ "$RUN_MODE" = "kb-check" ]; then
+    # --- Только проверка полноты базы знаний (без заливки) ---
+    cd "$SCRIPT_DIR"
+    python3 "$SCRIPT_DIR/kb_check.py"
 elif [ "$RUN_MODE" = "reset" ]; then
     # --- Сброс состояния Валеры (файлы + чаты WebRAgent) ---
     echo ""

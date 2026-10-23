@@ -83,3 +83,10 @@
 | 77_10_4_voennyy_uchebnyy_tsentr_pervyy_nabor_kadrov.md | 10.4. Военный учебный центр: первый набор кадровых офицеров | 10. Кампусы, контакты, наука и Военный учебный центр |
 | 78_11_ogranicheniya_i_neproverennye_dannye.md | 11. Ограничения и непроверенные данные | — |
 | 79_zaklyuchenie_obschaya_kartina.md | Заключение: общая картина | — |
+| 80_12_1_kak_dobratsya_i_kampusy.md | Как добраться до кампусов (дополнение) | 12.1 |
+| 81_12_2_dni_otkrytyh_dverey_2026_27.md | Дни открытых дверей 2026/27, приём | 12.2 |
+| 82_12_3_rukovodstvo_dopolnenie_oktyabr_2026.md | Руководство — дополнение октябрь 2026 | 12.3 |
+| 83_12_4_obschezhitiya_vuc_stipendii_dopolnenie.md | Общежития, ВУЦ, стипендии — дополнение | 12.4 |
+| 84_12_5_istoriya_i_studencheskaya_zhizn_dlya_ekskursii.md | История и студенческая жизнь для экскурсии | 12.5 |
+| 85_12_6_megalaboratoriya_robototehnika.md | Мегалаборатория, Unitree H1, робототехника | 12.6 |
+| 86_12_7_pasport_valery.md | Паспорт робота Валеры | 12.7 |

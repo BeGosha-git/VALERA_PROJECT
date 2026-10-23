@@ -103,13 +103,21 @@ INGEST_PLAN: List[Tuple[str, str]] = [
     # заголовки разделов, а именно по ним работает ранжирование (см.
     # document_service). Ставятся ВЫШЕ markdown-сборки и CSV.
     ("docx", "glob_docx"),
+    # changelog.md и README.md НЕ заливаем: в changelog столбцы «Было» содержат
+    # ошибочные значения (файл сам просит не использовать его как источник),
+    # README — служебная инструкция, а не знания.
     ("sources.md", "file"),
-    ("README.md", "file"),
-    ("changelog.md", "file"),
     ("data/tables", "glob_csv"),            # 68 таблиц разделов
     ("data", "glob_csv"),                   # 15 сводных CSV таблиц
     ("rtu_mirea_kb_full.md", "file"),       # полный документ (большой) — в конце
 ]
+
+# Модель эмбеддингов. all-MiniLM-L6-v2 — английская и плохо работает с русским,
+# поэтому по умолчанию берём МНОГОЯЗЫЧНУЮ лёгкую модель (384 изм., ~470 МБ).
+# Для максимального качества: KB_EMBEDDING_MODEL=BAAI/bge-m3 (1024 изм., ~2.2 ГБ,
+# заметно тяжелее на CPU). Размерность определяется по самой модели.
+DEFAULT_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
+EMBEDDING_MODEL = os.getenv("KB_EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL
 
 CHUNK_SIZE = 1200
 CHUNK_OVERLAP = 200
@@ -473,6 +481,9 @@ def main() -> int:
     parser.add_argument("--kb", default="/tmp/kb", help="Папка базы знаний в контейнере")
     parser.add_argument("--collection", default="МИРЭА", help="Имя коллекции")
     parser.add_argument("--reset", action="store_true", help="Очистить коллекцию перед заливкой")
+    parser.add_argument("--embedding-model", default=EMBEDDING_MODEL,
+                        help="Модель эмбеддингов (sentence-transformers); "
+                             "по умолчанию KB_EMBEDDING_MODEL или многоязычная MiniLM")
     args = parser.parse_args()
 
     global QDRANT_URL
@@ -485,7 +496,22 @@ def main() -> int:
         return 1
     print(f"📚 Файлов к заливке: {len(files)}")
 
+    model = args.embedding_model
+    provider = "embedding"
+
+    # Размерность берём у самой модели (384 у MiniLM, 1024 у BGE-M3).
+    print(f"🧠 Модель эмбеддингов: {model}")
+    dim = int(get_sentence_transformer(model).get_sentence_embedding_dimension())
+
     collection_id = find_collection(args.collection)
+    if collection_id and not args.reset:
+        # Вектора разных моделей несовместимы: если коллекция построена другой
+        # моделью, дописывать в неё нельзя — пересоздаём.
+        old_model = next((c.embedding_model for c in Collection.get_all()
+                          if c.id == collection_id), None)
+        if old_model and old_model != model:
+            print(f"♻️  Коллекция построена на «{old_model}», нужна «{model}» — пересоздаю.")
+            args.reset = True
     if collection_id and args.reset:
         print(f"♻️  Очищаю коллекцию {collection_id}...")
         rest_delete_collection(collection_id)
@@ -534,15 +560,14 @@ def main() -> int:
         col = Collection(id=collection_id, name=args.collection,
                          description="База знаний РТУ МИРЭА",
                          embedding_provider="embedding",
-                         embedding_model="all-MiniLM-L6-v2",
-                         embedding_dimensions=384)
+                         embedding_model=model,
+                         embedding_dimensions=dim)
         col.save()
-        rest_create_collection(collection_id, dim=384)
+        rest_create_collection(collection_id, dim=dim)
         print(f"📁 Создана коллекция {collection_id}")
     else:
         print(f"📁 Использую коллекцию {collection_id}")
 
-    provider, model = "embedding", "all-MiniLM-L6-v2"
     total_chunks, ok, failed = 0, 0, 0
     t_all = time.time()
     for i, (path, name) in enumerate(files, 1):

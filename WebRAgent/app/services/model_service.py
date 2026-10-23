@@ -11,6 +11,21 @@ from sentence_transformers import SentenceTransformer
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Модели DeepSeek, доступные для выбора на сайте (/admin/models).
+#
+# Список задан ЯВНО, а не запросом к API: DeepSeek не отдаёт полный каталог
+# моделей через /models, а нам нужны понятные человеческие названия.
+#
+#   deepseek-chat     — быстрая модель, подходит для живого диалога голосом;
+#   deepseek-reasoner — «думающая», точнее на сложных вопросах, но медленнее
+#                       (для голосового робота обычно избыточна).
+DEEPSEEK_MODELS = [
+    {"id": "deepseek-chat", "name": "DeepSeek Chat (быстрая)",
+     "type": "llm", "default": True},
+    {"id": "deepseek-reasoner", "name": "DeepSeek Reasoner (точная)",
+     "type": "llm", "default": False},
+]
+
 class ModelService:
     """Service for managing LLM and embedding models"""
     
@@ -32,6 +47,7 @@ class ModelService:
                 "claude_llm": "",
                 "ollama_llm": "",
                 "ollama_embedding": "",
+                "deepseek_llm": "",
                 "embedding": ""
             }
         }
@@ -95,7 +111,19 @@ class ModelService:
                             "models": [],
                             "config": {"host_env": "OLLAMA_HOST"}
                         }
-                        
+
+                    # DeepSeek — облачная модель (быстрее и точнее локальной
+                    # 3B на фактах из базы знаний). Включается, если задан
+                    # ключ DEEPSEEK_API_KEY в .env.
+                    if os.getenv('DEEPSEEK_API_KEY') and 'deepseek' not in config['providers']:
+                        config['providers']['deepseek'] = {
+                            "models": DEEPSEEK_MODELS,
+                            "config": {"api_key_env": "DEEPSEEK_API_KEY"}
+                        }
+                        # Добавляем ключ активной модели, если его ещё нет.
+                        config.setdefault('active', {}).setdefault('models', {})
+                        config['active']['models'].setdefault('deepseek_llm', '')
+
                     return config
             except Exception as e:
                 logger.error(f"Error loading model configuration: {e}")
@@ -119,6 +147,7 @@ class ModelService:
                     "claude_llm": "",
                     "ollama_llm": "",
                     "ollama_embedding": "",
+                    "deepseek_llm": "",
                     "embedding": ""
                 }
             }
@@ -150,7 +179,15 @@ class ModelService:
             # Set as default provider if no others are available
             if not config['active']['llm_provider']:
                 config['active']['llm_provider'] = 'ollama'
-                
+
+        if os.getenv('DEEPSEEK_API_KEY'):
+            config['providers']['deepseek'] = {
+                "models": DEEPSEEK_MODELS,
+                "config": {"api_key_env": "DEEPSEEK_API_KEY"}
+            }
+            if not config['active']['llm_provider']:
+                config['active']['llm_provider'] = 'deepseek'
+
         return config
     
     def _save_config(self):
@@ -211,6 +248,10 @@ class ModelService:
         # Check if Ollama host is no longer available
         if 'ollama' in self.config["providers"] and not os.getenv('OLLAMA_HOST'):
             providers_to_remove.append('ollama')
+
+        # Check if DeepSeek API key is no longer available
+        if 'deepseek' in self.config["providers"] and not os.getenv('DEEPSEEK_API_KEY'):
+            providers_to_remove.append('deepseek')
             
         # Remove unavailable providers
         for provider in providers_to_remove:
@@ -227,6 +268,8 @@ class ModelService:
                 available_providers.append('claude')
             if 'ollama' in self.config["providers"]:
                 available_providers.append('ollama')
+            if 'deepseek' in self.config["providers"]:
+                available_providers.append('deepseek')
                 
             if available_providers:
                 self.config["active"]["llm_provider"] = available_providers[0]
@@ -421,6 +464,21 @@ class ModelService:
                 "reason": f"Could not connect to Ollama server at {ollama_host}"
             })
         
+        # DeepSeek — облачная LLM. Доступность = задан ключ.
+        if os.getenv('DEEPSEEK_API_KEY'):
+            providers.append({
+                "id": "deepseek",
+                "name": "DeepSeek (облако)",
+                "available": True
+            })
+        else:
+            providers.append({
+                "id": "deepseek",
+                "name": "DeepSeek (облако)",
+                "available": False,
+                "reason": "API key not configured. Set DEEPSEEK_API_KEY in environment."
+            })
+
         # Sentence Transformers (always available for embeddings)
         providers.append({
             "id": "embedding",
@@ -530,6 +588,8 @@ class ModelService:
                 self.config["active"]["models"]["claude_llm"] = model_id
             elif provider == "ollama":
                 self.config["active"]["models"]["ollama_llm"] = model_id
+            elif provider == "deepseek":
+                self.config["active"]["models"]["deepseek_llm"] = model_id
         elif model_type == "embedding":
             if provider == "openai":
                 self.config["active"]["models"]["openai_embedding"] = model_id
@@ -551,12 +611,18 @@ class ModelService:
         Set active LLM provider
         
         Args:
-            provider (str): The provider (openai, claude, ollama)
+            provider (str): The provider (openai, claude, ollama, deepseek)
             
         Returns:
             bool: True if provider was set successfully
         """
-        if provider not in ["openai", "claude", "ollama"]:
+        if provider not in ["openai", "claude", "ollama", "deepseek"]:
+            return False
+
+        # Не даём включить провайдер, для которого нет ключа: иначе запросы
+        # будут падать с ошибкой авторизации вместо внятного сообщения.
+        if provider == "deepseek" and not os.getenv("DEEPSEEK_API_KEY"):
+            logger.warning("Нельзя включить DeepSeek: DEEPSEEK_API_KEY не задан")
             return False
         
         # Update active provider

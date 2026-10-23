@@ -142,7 +142,7 @@
                                 <label class="form-label">Switch Provider:</label>
                                 <div class="provider-selection">
                                     {% for provider in providers %}
-                                        {% if provider.id in ['openai', 'claude', 'ollama'] %}
+                                        {% if provider.id in ['openai', 'claude', 'ollama', 'deepseek'] %}
                                         <div class="provider-badge {% if active_config.llm_provider == provider.id %}active{% endif %} {% if not provider.available %}unavailable{% endif %}" 
                                              data-provider="{{ provider.id }}" data-available="{{ provider.available|lower }}">
                                             {% if provider.id == 'openai' %}
@@ -151,8 +151,13 @@
                                             <i class="bi bi-robot provider-icon"></i>
                                             {% elif provider.id == 'ollama' %}
                                             <i class="bi bi-hdd-network provider-icon"></i>
+                                            {% elif provider.id == 'deepseek' %}
+                                            <i class="bi bi-cloud provider-icon"></i>
                                             {% endif %}
                                             {{ provider.name }}
+                                            {% if not provider.available %}
+                                            <small class="d-block text-muted" style="font-size:.7rem">нет ключа</small>
+                                            {% endif %}
                                         </div>
                                         {% endif %}
                                     {% endfor %}
@@ -183,6 +188,11 @@
                                 <li class="list-group-item d-flex justify-content-between align-items-center">
                                     <span>Ollama LLM:</span>
                                     <span class="fw-medium" id="ollama-llm-display">{{ active_config.models.ollama_llm }}</span>
+                                </li>
+                                {% elif active_config.llm_provider == 'deepseek' %}
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    <span>DeepSeek LLM:</span>
+                                    <span class="fw-medium" id="deepseek-llm-display">{{ active_config.models.deepseek_llm }}</span>
                                 </li>
                                 {% endif %}
                                 <li class="list-group-item d-flex justify-content-between align-items-center">
@@ -252,7 +262,10 @@
                         </div>
                         
                         <!-- Embedding Models -->
-                        {% if provider.id != 'claude' %}
+                        {# У DeepSeek и Claude только чат-модели — эмбеддинги
+                           считает локальная Sentence Transformers, поэтому
+                           блок эмбеддингов для них не показываем вовсе. #}
+                        {% if provider.id not in ['claude', 'deepseek'] %}
                         <div class="model-group" id="{{ provider.id }}-embedding-models">
                             <div class="model-group-title">
                                 <i class="bi bi-boxes me-2"></i>
@@ -311,7 +324,7 @@ document.addEventListener('DOMContentLoaded', function() {
         tab.addEventListener('click', function(e) {
             const provider = this.id.replace('-tab', '');
             loadModels(provider, 'llm');
-            if (provider !== 'claude') {
+            if (provider !== 'claude' && provider !== 'deepseek') {
                 loadModels(provider, 'embedding');
             }
         });
@@ -322,7 +335,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (firstActiveTab) {
         const provider = firstActiveTab.id.replace('-tab', '');
         loadModels(provider, 'llm');
-        if (provider !== 'claude') {
+        if (provider !== 'claude' && provider !== 'deepseek') {
             loadModels(provider, 'embedding');
         }
     }
@@ -369,6 +382,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         if (provider === 'openai') activeModelId = activeConfig.models.openai_llm;
                         else if (provider === 'claude') activeModelId = activeConfig.models.claude_llm;
                         else if (provider === 'ollama') activeModelId = activeConfig.models.ollama_llm;
+                        else if (provider === 'deepseek') activeModelId = activeConfig.models.deepseek_llm;
                     } else if (modelType === 'embedding') {
                         if (provider === 'openai') activeModelId = activeConfig.models.openai_embedding;
                         else if (provider === 'ollama') activeModelId = activeConfig.models.ollama_embedding;
@@ -496,6 +510,17 @@ document.addEventListener('DOMContentLoaded', function() {
                             }
                         }
                     }
+                    else if (provider === 'deepseek') {
+                        activeConfig.models.deepseek_llm = modelId;
+                        if (activeConfig.llm_provider === 'deepseek') {
+                            const displayElement = document.getElementById('deepseek-llm-display');
+                            if (displayElement) displayElement.textContent = modelId;
+
+                            if (!displayElement) {
+                                updateActiveModelsDisplay();
+                            }
+                        }
+                    }
                 } else if (modelType === 'embedding') {
                     // For embedding models
                     if (provider === 'embedding') {
@@ -543,6 +568,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 <li class="list-group-item d-flex justify-content-between align-items-center">
                     <span>Ollama LLM:</span>
                     <span class="fw-medium" id="ollama-llm-display">${activeConfig.models.ollama_llm}</span>
+                </li>
+            `;
+        } else if (activeConfig.llm_provider === 'deepseek') {
+            modelDisplayHTML += `
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <span>DeepSeek LLM:</span>
+                    <span class="fw-medium" id="deepseek-llm-display">${activeConfig.models.deepseek_llm}</span>
                 </li>
             `;
         }
@@ -621,7 +653,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (activeTab) {
                     const provider = activeTab.id.replace('-tab', '');
                     loadModels(provider, 'llm');
-                    if (provider !== 'claude') {
+                    if (provider !== 'claude' && provider !== 'deepseek') {
                         loadModels(provider, 'embedding');
                     }
                 }

@@ -155,6 +155,90 @@ def query():
             selected_collection=collection_id
         )
 
+@main_bp.route('/direct', methods=['POST'])
+@login_required
+def direct_answer():
+    """
+    Отвечает на вопрос БЕЗ поиска по базе знаний — только моделью.
+
+    Зачем это нужно. Вопросы «ты кто», «как тебя зовут», «Лера, ты работаешь?»
+    не про вуз: в базе знаний про них ничего нет. Раньше они уходили в RAG,
+    поиск подсовывал случайные чанки, и модель честно отвечала «Этого я не
+    знаю» — а на вопрос про имя могла найти постороннего человека (например,
+    телеведущую Валерию Кудрявцеву). Для робота-экскурсовода это выглядит
+    как поломка.
+
+    Теперь такие вопросы идут сюда: системная инструкция задаёт личность
+    (робот Валера, экскурсовод РТУ МИРЭА), контекст базы НЕ подмешивается,
+    поэтому модель не пытается «найти» ответ в документах.
+
+    Используется активный провайдер (локальный Ollama или облачный DeepSeek),
+    поэтому переключение модели на сайте работает и здесь.
+    """
+    payload = request.get_json(silent=True) or {}
+    question = (payload.get("question") or "").strip()
+    if not question:
+        return jsonify({"error": "Missing question"}), 400
+
+    try:
+        max_tokens = int(payload.get("max_tokens") or 120)
+    except (TypeError, ValueError):
+        max_tokens = 120
+
+    # Необязательный КОНТЕКСТ РАЗГОВОРА — предыдущие реплики гостя и робота.
+    # Без него модель не понимает уточнений («а сколько?», «а где?») и
+    # отвечает «не разобрал». Голосовой ассистент передаёт последние обмены.
+    history = payload.get("history") or []
+    if not isinstance(history, list):
+        history = []
+    clean_history = []
+    for msg in history[-8:]:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        content = (msg.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            clean_history.append({"role": role, "content": content[:400]})
+
+    # Подсказка для ПОВТОРНОЙ попытки: модель сказала «не разобрал» на
+    # понятную фразу, и мы просим ответить по существу.
+    hint = (payload.get("hint") or "").strip()
+
+    from app.services.llm_service import LLMFactory
+    from app.services.prompt_template_service import PromptTemplateService
+
+    try:
+        llm = LLMFactory.create_llm_service()
+        user_content = f"{question}\n\n{hint}" if hint else question
+        if clean_history:
+            messages = [{
+                "role": "system",
+                "content": PromptTemplateService.get_system_message("persona"),
+            }]
+            messages.extend(clean_history)
+            messages.append({"role": "user", "content": user_content})
+            answer = llm._generate_chat_completion(messages, max_tokens)
+        else:
+            answer = llm._generate_completion(
+                PromptTemplateService.get_system_message("persona"),
+                user_content,
+                max_tokens,
+            )
+    except Exception as exc:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).error("Ошибка прямого ответа: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify({
+        "response": (answer or "").strip(),
+        "contexts": [],
+        "model_info": {
+            "provider": llm.get_provider_name(),
+            "model": llm.get_model_name(),
+        },
+    })
+
+
 @main_bp.route('/collections')
 @login_required
 def list_collections():

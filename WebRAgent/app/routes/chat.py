@@ -113,20 +113,15 @@ def chat_query(chat_id):
     
     # Get previous chat context
     chat_context = chat.get_context()
-    
-    # Format the query with context
+
+    # Системный промт здесь НЕ добавляем.
+    #
+    # Раньше тут вставлялось английское «This is a follow-up question in an
+    # ongoing conversation…», и RAGService видел «системное сообщение уже есть»
+    # → промт Валеры не подставлялся ВООБЩЕ. DeepSeek работал без системного
+    # промта: рассуждал о смысле фраз, путал имена, не знал, что он робот.
+    # Теперь единственный источник системного промта — RAGService.
     formatted_query = query_text
-    if chat_context and len(chat_context) > 0:
-        # Create a system message to inform the LLM about previous context
-        system_context = """This is a follow-up question in an ongoing conversation. 
-        Consider the following conversation history when answering the new query."""
-        
-        # Add system instruction to the context for better results
-        if not any(msg['role'] == 'system' for msg in chat_context):
-            chat_context.insert(0, {
-                'role': 'system',
-                'content': system_context
-            })
     
     # Process query with appropriate service based on options
     try:

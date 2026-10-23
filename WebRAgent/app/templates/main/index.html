@@ -90,6 +90,35 @@
                 <!-- Enhanced Query Form -->
                 <div class="query-form mb-4">
                     <form id="query-form" method="POST" action="{{ url_for('main.query') }}">
+                        <!-- Быстрый переключатель модели ИИ -->
+                        <!--
+                          Зачем на главной: чтобы переключить «локальная модель ↔
+                          DeepSeek» можно было в один клик, не заходя в админку.
+                          Локальная (Ollama) — быстрая и бесплатная, но на фактах
+                          путается. DeepSeek — облачная: точнее и не требует GPU.
+                        -->
+                        <div class="card shadow-sm mb-3">
+                            <div class="card-body py-2 px-3">
+                                <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                                    <div class="d-flex align-items-center gap-2">
+                                        <i class="bi bi-cpu text-primary"></i>
+                                        <span class="fw-medium small">Модель ИИ:</span>
+                                        <span id="ai-model-badge" class="badge bg-secondary">…</span>
+                                    </div>
+                                    <div class="btn-group btn-group-sm" role="group" aria-label="Выбор модели">
+                                        <button type="button" class="btn btn-outline-secondary ai-provider-btn"
+                                                data-provider="ollama" title="Локальная модель через Ollama">
+                                            <i class="bi bi-hdd-network me-1"></i>Локальная
+                                        </button>
+                                        <button type="button" class="btn btn-outline-primary ai-provider-btn"
+                                                data-provider="deepseek" title="Облачная модель DeepSeek (точнее)">
+                                            <i class="bi bi-cloud me-1"></i>DeepSeek
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Search Options Container -->
                         <div class="card shadow-sm mb-3">
                             <div class="card-header-custom">
@@ -515,8 +544,79 @@
 <script src="{{ url_for('static', filename='js/rag.js') }}"></script>
 <script>
     document.addEventListener('DOMContentLoaded', function() {
-        // All JavaScript functionality is handled in rag.js
-        // No additional inline JavaScript needed
+        // ---------------------------------------------------------------
+        // Быстрый переключатель модели ИИ на главной странице.
+        //
+        // Работает через те же админские API, что и страница /admin/models:
+        //   GET  /admin/api/models/active       — что включено сейчас
+        //   POST /admin/api/models/set-provider — включить провайдера
+        //
+        // Переключение мгновенное: WebRAgent создаёт LLM-сервис на каждый
+        // запрос и читает активную конфигурацию, перезапуск не нужен.
+        // ---------------------------------------------------------------
+        const badge = document.getElementById('ai-model-badge');
+        const buttons = document.querySelectorAll('.ai-provider-btn');
+
+        const LABELS = {
+            ollama: {text: 'Локальная (Ollama)', css: 'bg-secondary'},
+            deepseek: {text: 'DeepSeek (облако)', css: 'bg-primary'},
+            openai: {text: 'OpenAI', css: 'bg-info'},
+            claude: {text: 'Claude', css: 'bg-warning'},
+        };
+
+        function paint(provider, model) {
+            if (!badge) return;
+            const info = LABELS[provider] || {text: provider, css: 'bg-secondary'};
+            badge.className = 'badge ' + info.css;
+            badge.textContent = model ? (info.text + ' · ' + model) : info.text;
+            buttons.forEach(b => {
+                const on = b.dataset.provider === provider;
+                b.classList.toggle('active', on);
+                b.classList.toggle('btn-primary', on && b.dataset.provider === 'deepseek');
+                b.classList.toggle('btn-secondary', on && b.dataset.provider === 'ollama');
+            });
+        }
+
+        function refresh() {
+            fetch('/admin/api/models/active')
+                .then(r => r.json())
+                .then(d => {
+                    const p = (d.llm_provider || '').toLowerCase();
+                    const m = d.models || {};
+                    const model = p === 'deepseek' ? m.deepseek_llm
+                                : p === 'ollama' ? m.ollama_llm
+                                : p === 'openai' ? m.openai_llm
+                                : p === 'claude' ? m.claude_llm : '';
+                    paint(p, model);
+                })
+                .catch(() => {
+                    if (badge) { badge.textContent = 'недоступно'; }
+                });
+        }
+
+        buttons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const provider = btn.dataset.provider;
+                btn.disabled = true;
+                fetch('/admin/api/models/set-provider', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({provider: provider})
+                })
+                .then(r => r.json())
+                .then(d => {
+                    if (d.success) {
+                        refresh();
+                    } else {
+                        alert('Не удалось переключить модель: ' + (d.error || 'неизвестная ошибка'));
+                    }
+                })
+                .catch(e => alert('Ошибка сети: ' + e))
+                .finally(() => { btn.disabled = false; });
+            });
+        });
+
+        refresh();
     });
 </script>
 {% endblock %}

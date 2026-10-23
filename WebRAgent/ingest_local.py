@@ -99,6 +99,10 @@ INGEST_PLAN: List[Tuple[str, str]] = [
     ("data/all_tables.jsonl", "file"),      # строки таблиц как JSON
     ("rtu_mirea_key_facts.md", "file"),     # выжимка главных фактов
     ("rtu_mirea_faq.md", "file"),
+    # ДОКУМЕНТЫ .docx с ПРАВИЛЬНОЙ структурой (Heading-стили): из них получаются
+    # заголовки разделов, а именно по ним работает ранжирование (см.
+    # document_service). Ставятся ВЫШЕ markdown-сборки и CSV.
+    ("docx", "glob_docx"),
     ("sources.md", "file"),
     ("README.md", "file"),
     ("changelog.md", "file"),
@@ -175,6 +179,97 @@ def _jsonl_to_text(path: str) -> str:
     return "\n".join(out)
 
 
+def _docx_to_text(path: str) -> str:
+    """
+    Превращает .docx в markdown-подобный текст с СОХРАНЕНИЕМ СТРУКТУРЫ.
+
+    Почему не просто ``"\n".join(p.text)``: в этих документах тема раздела
+    задаётся стилями («Heading 1», «Heading 2», «Title»). Именно по заголовку
+    ранжирование понимает, о чём чанк («9.1. Общежития: шесть корпусов»).
+    Если заголовки превратить в обычный текст, поиск теряет главный признак
+    и раздаёт нерелевантные фрагменты.
+
+    ВАЖНО: обходим ``document.element.body``, а не ``document.paragraphs``:
+    атрибут ``paragraphs`` не содержит таблиц и НЕ сохраняет порядок — таблица
+    отдельно, текст отдельно. Здесь же всё идёт в том порядке, в котором стоит
+    в документе.
+    """
+    try:
+        from docx import Document
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ⚠️ python-docx недоступен ({exc}) — пропускаю {path}")
+        return ""
+
+    def style_level(name: str) -> int:
+        """Уровень заголовка по имени стиля: 1..6, 0 — не заголовок."""
+        low = (name or "").lower()
+        if low.startswith("title"):
+            return 1
+        if low.startswith("heading"):
+            digits = "".join(ch for ch in low if ch.isdigit())
+            try:
+                return max(1, min(6, int(digits))) if digits else 1
+            except ValueError:
+                return 1
+        return 0
+
+    try:
+        doc = Document(path)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ⚠️ Не удалось открыть {path}: {exc}")
+        return ""
+
+    title = os.path.basename(path)
+    out: List[str] = [f"# Документ: {title}"]
+
+    for child in doc.element.body.iterchildren():
+        tag = child.tag.split("}")[-1]
+
+        if tag == "p":
+            para = Paragraph(child, doc)
+            text = (para.text or "").strip()
+            if not text:
+                continue
+            level = style_level(getattr(para.style, "name", ""))
+            if level:
+                # Заголовок — отдельной строкой с решётками, чтобы чанкер
+                # начинал с него новый фрагмент и он попал в заголовок чанка.
+                out.append(f"{'#' * level} {text}")
+            else:
+                out.append(text)
+            # ПУСТАЯ СТРОКА между блоками — обязательно.
+            # Чанкер делит текст по `\n\s*\n` (граница абзаца). Если склеить все
+            # блоки одиночным `\n`, весь документ на 750 тыс. символов станет
+            # ОДНИМ «абзацем» и превратится в единственный чанк — база получит
+            # один бесполезный фрагмент вместо сотен разделов (именно так
+            # и случилось: из DOCX пришёл 1 чанк вместо сотен).
+            out.append("")
+
+        elif tag == "tbl":
+            table = Table(child, doc)
+            rows = []
+            for row in table.rows:
+                cells = [(c.text or "").strip().replace("\n", " ")
+                         for c in row.cells]
+                if any(cells):
+                    rows.append(" | ".join(cells))
+            if not rows:
+                continue
+            # Первая строка — шапка столбцов, вторая — разделитель markdown.
+            header = rows[0]
+            out.append(f"# Таблица: {title}")
+            out.append(header)
+            out.append(" | ".join("---" for _ in header.split(" | ")))
+            out.extend(rows[1:])
+            # Пустая строка — граница абзаца для чанкера (см. пояснение выше).
+            out.append("")
+
+
+    return "\n".join(out)
+
+
 def read_as_text(path: str) -> str:
     """Читает файл любого поддерживаемого формата как текст для эмбеддинга."""
     low = path.lower()
@@ -182,6 +277,8 @@ def read_as_text(path: str) -> str:
         return _csv_to_text(path)
     if low.endswith(".jsonl"):
         return _jsonl_to_text(path)
+    if low.endswith(".docx"):
+        return _docx_to_text(path)
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as fh:
             return fh.read()
@@ -197,16 +294,32 @@ def collect_files(kb_root: str) -> List[Tuple[str, str]]:
     seen = set()
     for rel, kind in INGEST_PLAN:
         path = os.path.join(kb_root, rel)
-        if kind in ("glob", "glob_csv"):
+        if kind in ("glob", "glob_csv", "glob_docx"):
             if not os.path.isdir(path):
                 continue
-            pats = ["*.md"] if kind == "glob" else ["*.csv"]
+            pats = {"glob": ["*.md"], "glob_csv": ["*.csv"],
+                    "glob_docx": ["*.docx"]}[kind]
+            found = []
             for pat in pats:
                 for fp in sorted(globmod.glob(os.path.join(path, pat))):
-                    if fp in seen:
-                        continue
-                    seen.add(fp)
-                    files.append((fp, os.path.relpath(fp, kb_root)))
+                    if fp not in seen:
+                        found.append(fp)
+            # ДЕДУПЛИКАЦИЯ ТОМОВ.
+            # «РТУ_МИРЭА_база_знаний_расширенная.docx» — это ПОЛНАЯ база,
+            # включающая разделы 1–24 из всех трёх томов. Если залить и её,
+            # и тома, каждый факт окажется в базе 2–3 раза: на поиск придут
+            # почти одинаковые чанки, и ранжирование будет выбирать между
+            # копиями вместо разных источников. Поэтому при наличии
+            # «расширенной» версии заливаем ТОЛЬКО её.
+            if kind == "glob_docx" and len(found) > 1:
+                merged = [f for f in found if "расширен" in os.path.basename(f).lower()]
+                if merged:
+                    print(f"  ℹ️ Найдена объединённая база — тома пропущены "
+                          f"({len(found) - len(merged)} шт.)")
+                    found = merged
+            for fp in found:
+                seen.add(fp)
+                files.append((fp, os.path.relpath(fp, kb_root)))
         elif os.path.exists(path):
             if path in seen:
                 continue
@@ -377,6 +490,41 @@ def main() -> int:
         print(f"♻️  Очищаю коллекцию {collection_id}...")
         rest_delete_collection(collection_id)
         collection_id = None
+
+    if args.reset:
+        # Удаляем и МЕТАДАННЫЕ старых коллекций с тем же именем.
+        #
+        # Без этого после каждой перезаливки в списке коллекций остаются
+        # «мёртвые» записи: сами данные в Qdrant уже удалены, а JSON-описания
+        # живут. Ассистент ищет коллекцию ПО ИМЕНИ и мог взять такую запись —
+        # тогда поиск возвращает пустоту («найдено 0»), хотя база залита.
+        # Проверено на практике: накопилось три записи «МИРЭА», живая — одна.
+        live = set()
+        try:
+            import requests as _rq
+
+            resp = _rq.get(f"{QDRANT_URL}/collections", timeout=10)
+            if resp.status_code == 200:
+                for item in (resp.json().get("result", {}).get("collections") or []):
+                    live.add(item.get("name"))
+        except Exception as exc:  # noqa: BLE001
+            print(f"  ⚠️ Не удалось получить список коллекций Qdrant: {exc}")
+
+        removed = 0
+        for col in Collection.get_all():
+            if col.id in live:
+                continue
+            try:
+                from app.models.document import Document
+
+                for doc in list(Document.get_all(collection_id=col.id)):
+                    doc.delete()
+            except Exception:  # noqa: BLE001
+                pass
+            col.delete()
+            removed += 1
+        if removed:
+            print(f"  🧹 Удалено мёртвых записей коллекций: {removed}")
 
     ds = DocumentService()
     qdrant = ds.qdrant_service  # нужен только для chunk_text/совместимости

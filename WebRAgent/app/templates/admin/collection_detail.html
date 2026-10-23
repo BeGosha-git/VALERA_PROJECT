@@ -91,7 +91,7 @@
                             <span class="small">Created: {{ collection.created_at }}</span>
                             <span class="mx-2">•</span>
                             <i class="bi bi-files me-1"></i>
-                            <span class="small">Documents: <span class="fw-medium">{{ documents|length }}</span></span>
+                            <span class="small">Documents: <span class="fw-medium">{{ total_documents|default(documents|length) }}</span></span>
                         </div>
                         
                         <!-- Display embedding model information -->
@@ -121,7 +121,7 @@
         <div class="card-header-custom">
             <h2 class="h5 mb-0 fw-bold"><i class="bi bi-files me-2"></i>Documents</h2>
             {% if documents %}
-            <span class="badge bg-primary rounded-pill">{{ documents|length }}</span>
+            <span class="badge bg-primary rounded-pill">{{ total_documents|default(documents|length) }}</span>
             {% endif %}
         </div>
         <div class="card-body">
@@ -200,6 +200,28 @@
                     </tbody>
                 </table>
             </div>
+            {% if pages and pages > 1 %}
+            <nav class="mt-3" aria-label="Documents pagination">
+                <ul class="pagination pagination-sm justify-content-center mb-1">
+                    <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+                        <a class="page-link" href="{{ url_for('admin.collection_detail', collection_id=collection.id, page=page-1) }}">&laquo;</a>
+                    </li>
+                    {% set start_p = 1 if page < 4 else page - 2 %}
+                    {% set end_p = pages if page + 2 > pages else page + 2 %}
+                    {% for p in range(start_p, end_p + 1) %}
+                    <li class="page-item {% if p == page %}active{% endif %}">
+                        <a class="page-link" href="{{ url_for('admin.collection_detail', collection_id=collection.id, page=p) }}">{{ p }}</a>
+                    </li>
+                    {% endfor %}
+                    <li class="page-item {% if page >= pages %}disabled{% endif %}">
+                        <a class="page-link" href="{{ url_for('admin.collection_detail', collection_id=collection.id, page=page+1) }}">&raquo;</a>
+                    </li>
+                </ul>
+                <p class="text-center text-muted small mb-0">
+                    Page {{ page }} of {{ pages }} · {{ page_size }} per page · {{ total_documents }} total
+                </p>
+            </nav>
+            {% endif %}
             {% else %}
             <div class="empty-state">
                 <div class="empty-state-icon">

@@ -214,7 +214,50 @@ def create_app(runtime=None, runner=None):
     def index():
         # Отдаём страницу как обычный HTML (не через Jinja): в CSS/JS есть
         # фигурные скобки, которые шаблонизатор принял бы за свои директивы.
-        return _html_response(INDEX_HTML)
+        # Комментарии вырезаем — страница вплотную подходит к лимиту 16 КБ.
+        return _html_response(_compact_html(INDEX_HTML))
+
+    # ------------------------------------------------------------------
+    # ПРАВИЛА ДЛЯ ГОСТЕЙ — отдельная страница для второго экрана
+    # ------------------------------------------------------------------
+    @app.get("/rules")
+    def rules():
+        """
+        Памятка для гостей + живой ответ робота.
+
+        Зачем отдельная страница: её ставят на второй экран/планшет рядом с
+        роботом, чтобы гость видел, КАК говорить с Валерой, и сразу читал
+        ответ. Пульт (/) для этого не годится — там настройки и графики.
+        """
+        return _html_response(_compact_html(RULES_HTML))
+
+    @app.get("/api/live")
+    def api_live():
+        """
+        Минимум данных для страницы правил: статус, услышанное и ответ.
+
+        Отдельный эндпоинт, а не ``/api/state``: страница правил опрашивается
+        каждые полсекунды, а полный ``/api/state`` тащит ещё и буферы волн
+        (~5 КБ gzip). Здесь ответ в разы меньше, и экран обновляется без
+        задержек.
+        """
+        levels = rt.get_levels()
+        mic = 0.0
+        if levels:
+            try:
+                mic = float(levels[-1][1])
+            except (TypeError, ValueError, IndexError):
+                mic = 0.0
+        asst = asst_runner.status()
+        return jsonify({
+            "status": rt.get_status(),
+            "heard": rt.last_transcript or "",
+            "answer": rt.last_answer or "",
+            "running": bool(asst.get("running")),
+            "error": asst.get("error"),
+            "mic": round(mic, 4),
+            "uptime": int(asst.get("uptime_sec") or 0),
+        })
 
     # ------------------------------------------------------------------
     # Состояние: настройки, метрики, события
@@ -277,6 +320,119 @@ def create_app(runtime=None, runner=None):
             return jsonify({"ok": True, "model": model})
         except Exception as exc:  # noqa: BLE001
             return jsonify({"ok": False, "error": str(exc)}), 500
+
+    # ------------------------------------------------------------------
+    # Выбор LLM-провайдера: локальная (Ollama) ↔ облачная (DeepSeek)
+    # ------------------------------------------------------------------
+    # Ответ на вопрос ищет и формулирует WebRAgent, поэтому провайдер
+    # переключается ИМЕННО там (в его конфиге моделей), а не в
+    # valera_config.json. Пульт выступает посредником: логинится в WebRAgent и
+    # дёргает его админский API.
+    def _rag_session():
+        """
+        Возвращает (base_url, requests.Session) с выполненным входом в WebRAgent.
+
+        Возвращает ``(None, None)``, если вход не удался — вызывающий код
+        отдаст понятную ошибку вместо падения.
+        """
+        import requests as _rq
+
+        base = str(rt.get("rag", "base_url", default="http://localhost:5000")).rstrip("/")
+        user = rt.get("rag", "username", default="admin")
+        pwd = rt.get("rag", "password", default="change_me_in_production")
+        session = _rq.Session()
+        try:
+            session.post(f"{base}/auth/login",
+                         data={"username": user, "password": pwd},
+                         timeout=10)
+            return base, session
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Не удалось войти в WebRAgent: %s", exc)
+            return None, None
+
+    @app.get("/api/llm-provider")
+    def api_llm_provider():
+        """
+        Текущий провайдер LLM в WebRAgent + какие провайдеры доступны.
+
+        Доступность считаем по ключу: DeepSeek без DEEPSEEK_API_KEY включить
+        нельзя, и лучше показать это на сайте, чем получить ошибку при ответе.
+        """
+        base, session = _rag_session()
+        if not base:
+            return jsonify({
+                "provider": None, "model": None,
+                "available": {"ollama": False, "deepseek": False},
+                "error": "WebRAgent недоступен",
+            })
+
+        provider, model, available = None, None, {"ollama": False, "deepseek": False}
+        try:
+            resp = session.get(f"{base}/admin/api/models/active", timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                provider = (data.get("llm_provider") or "").lower() or None
+                models = data.get("models") or {}
+                if provider:
+                    model = models.get(f"{provider}_llm") or models.get("embedding")
+            resp = session.get(f"{base}/admin/api/models/providers", timeout=10)
+            if resp.status_code == 200:
+                for p in resp.json().get("providers", []):
+                    pid = p.get("id")
+                    if pid in available:
+                        available[pid] = bool(p.get("available"))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Не удалось получить провайдера LLM: %s", exc)
+
+        return jsonify({
+            "provider": provider, "model": model, "available": available,
+        })
+
+    @app.post("/api/llm-provider")
+    def api_llm_provider_set():
+        """
+        Переключает провайдера LLM в WebRAgent.
+
+        Тело: ``{"provider": "ollama" | "deepseek"}``.
+        Изменение применяется к следующему же ответу — WebRAgent создаёт
+        LLM-сервис на каждый запрос и читает активную конфигурацию.
+        """
+        payload = request.get_json(silent=True) or {}
+        provider = str(payload.get("provider") or "").strip().lower()
+        if provider not in ("ollama", "deepseek"):
+            return jsonify({"ok": False, "error": "Неизвестный провайдер"}), 400
+
+        base, session = _rag_session()
+        if not base:
+            return jsonify({"ok": False, "error": "WebRAgent недоступен"}), 503
+
+        try:
+            resp = session.post(
+                f"{base}/admin/api/models/set-provider",
+                json={"provider": provider}, timeout=15,
+            )
+            data = resp.json() if resp.content else {}
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+        if not data.get("success"):
+            return jsonify({
+                "ok": False,
+                "error": data.get("error") or "Не удалось переключить провайдера",
+            }), 400
+
+        # Сбрасываем кэш провайдера в ассистенте, чтобы он сразу увидел смену
+        # (иначе до минуты продолжал бы считать модель локальной и пересказывать
+        # ответ через 3B — а это портит факты облачной модели).
+        try:
+            assistant = getattr(asst_runner, "assistant", None)
+            if assistant is not None:
+                assistant._provider_cache = None
+        except Exception:  # noqa: BLE001
+            pass
+
+        log.info("LLM-провайдер переключён на %s", provider)
+        return jsonify({"ok": True, "provider": provider})
 
     @app.get("/api/devices")
     def api_devices():
@@ -453,7 +609,7 @@ def create_app(runtime=None, runner=None):
 # ---------------------------------------------------------------------------
 # Вспомогательные: прореживание данных для графиков
 # ---------------------------------------------------------------------------
-def _downsample_levels(levels, max_points: int = 240):
+def _downsample_levels(levels, max_points: int = 160):
     """Прореживает историю уровней, чтобы JSON не был огромным."""
     if not levels:
         return []
@@ -464,7 +620,7 @@ def _downsample_levels(levels, max_points: int = 240):
     return out
 
 
-def _downsample_waves(waves, max_points: int = 260):
+def _downsample_waves(waves, max_points: int = 200):
     """
     Прореживает буферы живой волны (осциллограф).
 
@@ -482,9 +638,20 @@ def _downsample_waves(waves, max_points: int = 260):
     return {"raw": _thin(raw), "gated": _thin(gated)}
 
 
-def _recent_events(events, limit: int = 60):
+def _recent_events(events, limit: int = 25, max_chars: int = 70):
+    """
+    Последние события триггеров для лога на странице.
+
+    ``limit`` и ``max_chars`` держим маленькими специально: VPN на loopback
+    обрезает ответы крупнее ~16 КБ, а ``/api/state`` опрашивается раз в
+    секунду. Когда событий было 60 и текст не обрезался, ответ доходил до
+    19 КБ — браузер висел в ожидании, и пульт «не грузился».
+    """
     out = []
     for ts, level, text in events[-limit:]:
+        text = (text or "").strip()
+        if len(text) > max_chars:
+            text = text[:max_chars].rstrip() + "…"
         out.append({
             "time": time.strftime("%H:%M:%S", time.localtime(ts)),
             "level": level,
@@ -509,6 +676,35 @@ def _html_response(html: str):
     from flask import Response
 
     return Response(html.encode("utf-8"), mimetype="text/html")
+
+
+def _compact_html(html: str) -> str:
+    """
+    Убирает HTML-комментарии перед отдачей страницы.
+
+    Зачем: в этом окружении VPN на loopback обрывает ответы крупнее ~16 КБ.
+    Пульт вместе с встроенной дизайн-системой и JS занимает почти весь лимит,
+    а комментарии — это несколько килобайт служебного текста, который нужен
+    разработчику, но не браузеру. Сжатие снимает часть объёма, но запас в
+    пару сотен байт слишком мал: любая следующая правка снова упёрлась бы в
+    лимит и «пульт перестал грузиться».
+
+    Комментарии в CSS/JS не трогаем — вырезаем только ``<!-- ... -->``,
+    которых внутри стилей и скриптов нет. Дополнительно чистим
+    ``/* ... */`` ВНУТРИ <style>: именно там их больше всего, и они самые
+    длинные (пояснения к дизайн-системе).
+    """
+    import re as _re
+
+    out = _re.sub(r"<!--.*?-->", "", html, flags=_re.S)
+
+    def _strip_css(match):
+        inner = _re.sub(r"/\*.*?\*/", "", match.group(1), flags=_re.S)
+        # Схлопываем пустые строки, оставшиеся от комментариев.
+        inner = _re.sub(r"\n{3,}", "\n\n", inner)
+        return f"<style>{inner}</style>"
+
+    return _re.sub(r"<style>(.*?)</style>", _strip_css, out, flags=_re.S)
 
 
 # ===========================================================================
@@ -633,12 +829,15 @@ header{
 
 .pill{
   display:inline-flex;align-items:center;gap:var(--sp-1);
-  padding:9px 15px;border-radius:100px;
+  padding:9px 15px;border-radius:100px;text-decoration:none;
   background:var(--surface-2);border:1px solid var(--line);
   font-size:13px;font-weight:600;color:var(--fg-2);
   transition:border-color .2s,background .2s;
 }
 .pill:hover{border-color:var(--line-strong);background:var(--surface-3)}
+/* Ссылка-«таблетка» на страницу правил — тот же вид, что у обычных pill. */
+a.pill{cursor:pointer}
+a.pill:hover{color:var(--fg)}
 .dot{
   width:9px;height:9px;border-radius:50%;background:var(--fg-3);
   transition:all .25s;flex:0 0 auto;
@@ -917,6 +1116,9 @@ tbody tr:last-child td{border-bottom:none}
     <span class="pill" id="chatPill" title="Активный чат (контекст диалога)">
       <span id="chatTxt">чат: —</span>
     </span>
+    <a class="pill" href="/rules" target="_blank" title="Памятка для гостей на второй экран">
+      📋 Правила для гостей
+    </a>
     <button class="pri" id="btnStart">▶ Запустить</button>
     <button class="dgr" id="btnStop" disabled>■ Остановить</button>
   </header>
@@ -968,7 +1170,24 @@ tbody tr:last-child td{border-bottom:none}
 
         <div class="card">
           <h2>Модель ИИ <span class="tag" id="modelTag">Ollama</span></h2>
-          <label class="f">Языковая модель для ответов</label>
+
+          <!-- Выбор провайдера: локальная (Ollama) ↔ облачная (DeepSeek) -->
+          <label class="f">Движок ответов</label>
+          <div class="row" style="margin-bottom:var(--sp-2)">
+            <select id="selProvider">
+              <option value="ollama">Локальная — Ollama (быстро, без интернета)</option>
+              <option value="deepseek">DeepSeek — облако (точнее, нужен интернет)</option>
+            </select>
+            <button class="pri" id="btnSaveProvider">Применить</button>
+          </div>
+          <small class="muted">Локальная модель бесплатна и работает без сети, но
+            на фактах путается (например, имена). <b>DeepSeek</b> отвечает точнее
+            по базе знаний, но требует интернет и стоит копейки за запрос.
+            Смена применяется к следующему ответу.</small>
+
+          <hr style="border:none;border-top:1px solid var(--border);margin:var(--sp-3) 0">
+
+          <label class="f">Локальная модель Ollama</label>
           <div class="row">
             <select id="selModel"></select>
             <button class="pri" id="btnSaveModel">Применить</button>
@@ -1349,7 +1568,12 @@ async function tick(){
     // модель ИИ: показываем реальную из конфига; список моделей подгружаем один раз
     if(cfg.llm && cfg.llm.model){
       const cur = cfg.llm.model;
-      $('modelTag').textContent = cur;
+      // Тег в заголовке зависит от активного ДВИЖКА. Раньше здесь всегда
+      // подставлялась локальная модель из valera_config.json, и при включённом
+      // DeepSeek заголовок продолжал врать («Модель ИИ true_valera:latest»).
+      if(activeProvider !== 'deepseek'){
+        $('modelTag').textContent = cur;
+      }
       const sel = $('selModel');
       if(sel && [...sel.options].some(o=>o.value===cur)) sel.value = cur;
     }
@@ -1407,18 +1631,65 @@ $('btnRefreshDev').onclick = loadDevices;
 
 // ---------- модель ИИ ----------
 let modelsLoaded = false;
+// Активный движок ответов ('ollama' | 'deepseek'). Хранится здесь, чтобы
+// циклический опрос /api/state не перетирал заголовок локальной моделью.
+let activeProvider = 'ollama';
+
+// Выбор движка ответов: локальная Ollama ↔ облачный DeepSeek.
+// Провайдер живёт в WebRAgent (он формирует ответ), поэтому пульт просто
+// переключает его через прокси-эндпоинт /api/llm-provider.
+async function loadProvider(){
+  const d = await api('/api/llm-provider');
+  const cur = (d.provider || 'ollama').toLowerCase();
+  activeProvider = cur;
+  $('selProvider').value = cur;
+  $('modelTag').textContent = cur === 'deepseek'
+    ? ('DeepSeek · ' + (d.model || 'deepseek-chat'))
+    : ('Ollama · ' + (d.model || ''));
+
+  // Если ключа DeepSeek нет — честно говорим об этом прямо в списке.
+  const opt = $('selProvider').querySelector('option[value="deepseek"]');
+  if(opt){
+    const ok = d.available && d.available.deepseek;
+    opt.disabled = !ok;
+    opt.textContent = ok
+      ? 'DeepSeek — облако (точнее, нужен интернет)'
+      : 'DeepSeek — нет ключа DEEPSEEK_API_KEY';
+  }
+  if(d.error){
+    $('modelStatus').textContent = '⚠ ' + d.error;
+    setTimeout(()=>$('modelStatus').textContent='', 4000);
+  }
+}
+
+$('btnSaveProvider').onclick = async () => {
+  const provider = $('selProvider').value;
+  $('modelStatus').textContent = '⏳ переключаю…';
+  const r = await api('/api/llm-provider', {
+    method:'POST', body: JSON.stringify({provider: provider})
+  });
+  if(r.ok){
+    $('modelStatus').textContent = '✓ движок: ' + provider;
+    await loadProvider();
+  } else {
+    $('modelStatus').textContent = '✗ ' + (r.error || 'не удалось');
+  }
+  setTimeout(()=>{ if($('modelStatus').textContent.startsWith('✓')) $('modelStatus').textContent=''; }, 3500);
+};
+
 async function loadModels(){
   const d = await api('/api/models');
   const list = d.models || [];
   $('selModel').innerHTML = list.map(m =>
     `<option value="${m.name}" ${m.name===d.current?'selected':''}>${escapeHtml(m.name)} — ${m.size_gb} ГБ</option>`).join('')
     || `<option value="${d.current}">${escapeHtml(d.current)} (список недоступен)</option>`;
-  $('modelTag').textContent = d.current || 'Ollama';
   if(!list.some(m=>m.name===d.current)){
     $('selModel').insertAdjacentHTML('afterbegin',
       `<option value="${d.current}" selected>${escapeHtml(d.current)} (текущая)</option>`);
   }
   modelsLoaded = true;
+  // Тег «Ollama» в заголовке теперь показывает реальный провайдер.
+  loadProvider();
 }
 $('btnSaveModel').onclick = async () => {
   await api('/api/settings', {method:'POST', body: JSON.stringify({'llm.model': $('selModel').value})});
@@ -1554,6 +1825,467 @@ loadDevices(); loadTriggers();
 const od = $('oldDays'); od.addEventListener('change', loadChats);
 tick(); setInterval(tick, 1000);
 window.addEventListener('resize', ()=>{ /* перерисуется на следующем кадре */ });
+</script>
+</body>
+</html>
+"""
+
+
+RULES_HTML = r"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Валера — как со мной говорить</title>
+<!--
+  ПАМЯТКА ДЛЯ ГОСТЕЙ (страница /rules)
+  Её ставят на второй экран рядом с роботом, поэтому:
+   1) крупный шрифт — читается с 2-3 метров;
+   2) минимум текста — три правила и всё;
+   3) живой ответ робота + анимация генерации, чтобы было видно,
+      что Валера услышал и что он сейчас думает.
+  Шрифты локальные (как и на пульте): на выставке может не быть интернета.
+-->
+<style>
+:root{
+  --bg:#0a0f16; --surface-1:#111925; --surface-2:#16202e; --surface-3:#1d2937;
+  --surface-4:#243244; --line:#26374a; --line-strong:#35495f;
+  --fg:#f4f7fb; --fg-2:#a9bacd; --fg-3:#6f8098;
+  --accent:#2dd4bf; --accent-strong:#14b8a6; --accent-soft:rgba(45,212,191,.14);
+  --violet:#8b7cf6; --violet-soft:rgba(139,124,246,.14);
+  --ok:#4ade80; --ok-soft:rgba(74,222,128,.14);
+  --warn:#fbbf24; --warn-soft:rgba(251,191,36,.14);
+  --err:#fb7185;
+  --r-lg:22px; --r-md:15px; --r-sm:10px;
+  --sp-1:6px; --sp-2:10px; --sp-3:14px; --sp-4:20px; --sp-5:28px; --sp-6:38px;
+  --shadow:0 22px 50px -30px rgba(0,0,0,.95);
+  --glow:0 0 0 1px rgba(45,212,191,.22), 0 16px 44px -20px rgba(45,212,191,.5);
+  --sans:'Lato','Open Sans','Ubuntu','Noto Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --mono:'Ubuntu Mono','DejaVu Sans Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  min-height:100vh;color:var(--fg);font-family:var(--sans);
+  font-size:17px;line-height:1.5;letter-spacing:-.012em;
+  background:
+    radial-gradient(900px 520px at 4% -12%, rgba(45,212,191,.12), transparent 60%),
+    radial-gradient(820px 480px at 104% -8%, rgba(139,124,246,.13), transparent 58%),
+    radial-gradient(700px 420px at 50% 116%, rgba(45,212,191,.06), transparent 62%),
+    var(--bg);
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:rgba(45,212,191,.3);color:#04191b}
+.wrap{max-width:1560px;margin:0 auto;padding:var(--sp-4) var(--sp-4) 48px}
+
+/* ---------- шапка ---------- */
+header{
+  display:flex;align-items:center;gap:var(--sp-3);flex-wrap:wrap;
+  padding-bottom:var(--sp-3);margin-bottom:var(--sp-4);
+  border-bottom:1px solid var(--line);
+}
+.brand{display:flex;align-items:center;gap:var(--sp-3);margin-right:auto}
+.logo{
+  width:60px;height:60px;border-radius:var(--r-md);flex:0 0 auto;
+  position:relative;display:grid;place-items:center;
+  font-size:25px;font-weight:800;color:#04191b;
+  background:linear-gradient(145deg,var(--accent),var(--violet));
+  box-shadow:var(--glow);
+}
+h1{font-size:30px;font-weight:800;letter-spacing:-.9px;line-height:1.1}
+.brand p{color:var(--fg-2);font-size:14px;font-weight:500;margin-top:2px}
+.pill{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:11px 18px;border-radius:100px;text-decoration:none;
+  background:var(--surface-2);border:1px solid var(--line);
+  font-size:14.5px;font-weight:700;color:var(--fg-2);
+  transition:border-color .2s,background .2s;
+}
+.pill:hover{border-color:var(--line-strong);background:var(--surface-3)}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--fg-3);flex:0 0 auto;transition:all .25s}
+.dot.on{background:var(--ok);box-shadow:0 0 0 4px var(--ok-soft);animation:breathe 2.2s ease-in-out infinite}
+.dot.think{background:var(--warn);box-shadow:0 0 0 4px var(--warn-soft);animation:breathe 1s ease-in-out infinite}
+.dot.err{background:var(--err);box-shadow:0 0 0 4px rgba(251,113,133,.18)}
+@keyframes breathe{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.8)}}
+
+/* ---------- сетка ---------- */
+.grid{display:grid;gap:var(--sp-3);grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);align-items:start}
+@media(max-width:1080px){.grid{grid-template-columns:1fr}}
+.stack{display:grid;gap:var(--sp-3)}
+
+/* ---------- карточки ---------- */
+.card{
+  background:linear-gradient(170deg,var(--surface-2),var(--surface-1));
+  border:1px solid var(--line);border-radius:var(--r-lg);
+  padding:var(--sp-5);box-shadow:var(--shadow);
+}
+.card h2{
+  font-size:13px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;
+  color:var(--fg-2);display:flex;align-items:center;gap:var(--sp-2);
+  margin-bottom:var(--sp-4);
+}
+.card h2::before{
+  content:'';width:5px;height:16px;border-radius:3px;flex:0 0 auto;
+  background:linear-gradient(180deg,var(--accent),var(--violet));
+}
+
+/* ---------- правила ---------- */
+.rule{
+  display:flex;align-items:center;gap:var(--sp-4);
+  padding:var(--sp-4);border-radius:var(--r-md);
+  background:var(--surface-1);border:1px solid var(--line);
+  transition:border-color .2s,transform .2s,background .2s;
+}
+.rule:hover{border-color:var(--line-strong);transform:translateX(3px);background:var(--surface-2)}
+.rule + .rule{margin-top:var(--sp-2)}
+.num{
+  width:66px;height:66px;flex:0 0 auto;border-radius:var(--r-sm);
+  display:grid;place-items:center;
+  font-family:var(--mono);font-size:31px;font-weight:800;color:#04191b;
+  background:linear-gradient(145deg,var(--accent),var(--violet));
+  box-shadow:0 12px 28px -16px var(--accent);
+}
+.rule .r-txt{font-size:21px;font-weight:700;line-height:1.35;letter-spacing:-.3px}
+.rule .r-sub{font-size:14px;font-weight:500;color:var(--fg-3);margin-top:3px}
+.ico{font-size:26px;flex:0 0 auto;opacity:.85}
+
+/* ---------- живой ответ ---------- */
+.status-line{
+  display:flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap;
+  margin-bottom:var(--sp-3);
+}
+.badge{
+  display:inline-flex;align-items:center;gap:8px;
+  font-size:12.5px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;
+  padding:7px 14px;border-radius:100px;border:1px solid transparent;
+  background:var(--surface-3);color:var(--fg-2);
+}
+.badge.listen{background:var(--ok-soft);color:var(--ok);border-color:rgba(74,222,128,.32)}
+.badge.think{background:var(--warn-soft);color:var(--warn);border-color:rgba(251,191,36,.32)}
+.badge.speak{background:var(--accent-soft);color:var(--accent);border-color:rgba(45,212,191,.32)}
+.badge.idle{background:var(--surface-3);color:var(--fg-3);border-color:var(--line)}
+.badge.err{background:rgba(251,113,133,.14);color:var(--err);border-color:rgba(251,113,133,.32)}
+.micbar{
+  flex:1;min-width:120px;height:7px;border-radius:100px;
+  background:var(--surface-4);overflow:hidden;
+}
+.micbar i{
+  display:block;height:100%;width:0%;border-radius:100px;
+  background:linear-gradient(90deg,var(--accent),var(--violet));
+  transition:width .12s linear;
+}
+
+.answer-box{
+  position:relative;min-height:220px;
+  background:linear-gradient(180deg,#0b1119,#0e1520);
+  border:1px solid var(--line);border-radius:var(--r-md);
+  padding:var(--sp-4) var(--sp-4) var(--sp-5);
+  overflow:hidden;
+}
+.answer-box.thinking{border-color:rgba(251,191,36,.38);box-shadow:0 0 0 1px rgba(251,191,36,.14)}
+.answer-box.speaking{border-color:rgba(45,212,191,.38);box-shadow:0 0 0 1px rgba(45,212,191,.16)}
+.answer-lbl{
+  font-size:11.5px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;
+  color:var(--fg-3);margin-bottom:var(--sp-2);
+}
+#answer{
+  font-size:27px;font-weight:600;line-height:1.42;letter-spacing:-.5px;
+  min-height:78px;word-break:break-word;
+}
+#answer.placeholder{color:var(--fg-3);font-weight:500;font-size:20px}
+.caret{
+  display:inline-block;width:3px;height:26px;margin-left:3px;
+  vertical-align:-3px;border-radius:2px;background:var(--accent);
+  animation:blink .9s steps(1) infinite;
+}
+@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+
+/* ---------- анимация генерации ---------- */
+.gen{
+  display:none;align-items:center;gap:var(--sp-2);
+  margin-top:var(--sp-3);font-size:14px;font-weight:700;color:var(--warn);
+}
+.gen.on{display:flex}
+.dots{display:inline-flex;gap:5px}
+.dots i{
+  width:9px;height:9px;border-radius:50%;background:var(--warn);
+  animation:jump 1.15s ease-in-out infinite;
+}
+.dots i:nth-child(2){animation-delay:.16s}
+.dots i:nth-child(3){animation-delay:.32s}
+@keyframes jump{0%,70%,100%{transform:translateY(0);opacity:.45}35%{transform:translateY(-7px);opacity:1}}
+
+/* бегущая полоса «модель печатает ответ» */
+.sweep{
+  position:absolute;left:0;right:0;bottom:0;height:4px;
+  background:rgba(251,191,36,.14);display:none;overflow:hidden;
+}
+.answer-box.thinking .sweep{display:block}
+.sweep::after{
+  content:'';position:absolute;top:0;left:-40%;width:40%;height:100%;
+  background:linear-gradient(90deg,transparent,var(--warn),var(--accent),transparent);
+  animation:run 1.25s linear infinite;
+}
+@keyframes run{0%{left:-40%}100%{left:100%}}
+
+/* эквалайзер «робот говорит» */
+.wave{display:none;align-items:flex-end;gap:3px;height:22px}
+.answer-box.speaking .wave{display:inline-flex}
+.wave i{
+  width:4px;border-radius:3px;background:var(--accent);
+  animation:eq .9s ease-in-out infinite;
+}
+.wave i:nth-child(1){height:8px;animation-delay:0s}
+.wave i:nth-child(2){height:16px;animation-delay:.12s}
+.wave i:nth-child(3){height:22px;animation-delay:.24s}
+.wave i:nth-child(4){height:14px;animation-delay:.36s}
+.wave i:nth-child(5){height:9px;animation-delay:.48s}
+@keyframes eq{0%,100%{transform:scaleY(.45)}50%{transform:scaleY(1)}}
+
+/* ---------- подсказка ---------- */
+.hint{
+  margin-top:var(--sp-3);padding:var(--sp-3) var(--sp-4);
+  border-radius:var(--r-md);border:1px dashed var(--line-strong);
+  background:rgba(139,124,246,.07);
+  font-size:14.5px;font-weight:600;color:var(--fg-2);line-height:1.55;
+}
+.hint b{color:var(--violet)}
+
+footer{
+  margin-top:var(--sp-4);padding-top:var(--sp-3);
+  border-top:1px solid var(--line);
+  display:flex;gap:var(--sp-3);flex-wrap:wrap;align-items:center;
+  font-size:13px;color:var(--fg-3);font-weight:600;
+}
+footer a{color:var(--accent);text-decoration:none;font-weight:700}
+footer a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <div class="logo">V</div>
+      <div>
+        <h1>Как со мной говорить</h1>
+        <p>Валера · робот-экскурсовод РТУ МИРЭА</p>
+      </div>
+    </div>
+    <span class="pill"><span class="dot" id="dot"></span><span id="stateTxt">проверяю…</span></span>
+  </header>
+
+  <div class="grid">
+
+    <!-- ================= ПРАВИЛА ================= -->
+    <div class="stack">
+      <div class="card">
+        <h2>Три простых правила</h2>
+
+        <div class="rule">
+          <div class="num">1</div>
+          <div>
+            <div class="r-txt">Говори на расстоянии 10–15 см от микрофона</div>
+            <div class="r-sub">Ближе — звук искажается, дальше — Валера не разберёт слова</div>
+          </div>
+          <div class="ico">🎤</div>
+        </div>
+
+        <div class="rule">
+          <div class="num">2</div>
+          <div>
+            <div class="r-txt">Дождись, пока робот ответит</div>
+            <div class="r-sub">Он думает 2–4 секунды — не перебивай и не повторяй вопрос сразу</div>
+          </div>
+          <div class="ico">⏳</div>
+        </div>
+
+        <div class="rule">
+          <div class="num">3</div>
+          <div>
+            <div class="r-txt">Задавай вопрос без больших пауз</div>
+            <div class="r-sub">Длинная пауза — и Валера решит, что ты уже закончил говорить</div>
+          </div>
+          <div class="ico">💬</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= ЖИВОЙ ОТВЕТ ================= -->
+    <div class="stack">
+      <div class="card">
+        <h2>Что сейчас происходит</h2>
+
+        <div class="status-line">
+          <span class="badge idle" id="badge">ожидание</span>
+          <div class="micbar" title="Уровень микрофона"><i id="micFill"></i></div>
+        </div>
+
+        <div class="answer-box" id="answerBox">
+          <div class="answer-lbl">Ответ Валеры</div>
+          <div id="answer" class="placeholder">Поздоровайся — и я отвечу</div>
+
+          <div class="gen" id="gen">
+            <span class="dots"><i></i><i></i><i></i></span>
+            <span id="genTxt">генерирую ответ…</span>
+          </div>
+
+          <div class="wave" id="wave"><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="sweep"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <footer>
+    <span id="uptime">робот остановлен</span>
+    <span>·</span>
+    <a href="/" target="_blank">открыть пульт оператора</a>
+  </footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// ---------------------------------------------------------------------------
+// Состояние экрана
+// ---------------------------------------------------------------------------
+// answerStage: 0 — ответ не начат, 1 — печатается, 2 — показан полностью.
+let shownAnswer = '';
+let typedChars = 0;
+let typeTimer = null;
+let currentStatus = '';
+
+// Статус робота → режим экрана.
+// Статусы приходят из voice_assistant.py строками («Отвечаю…»,
+// «Поиск в базе МИРЭА…»), поэтому определяем режим по подстрокам.
+function modeOf(status, running) {
+  const s = (status || '').toLowerCase();
+  if (s.indexOf('ошибка') >= 0) return 'err';
+  if (s.indexOf('голосом') >= 0) return 'speak';
+  if (s.indexOf('отвеча') >= 0 || s.indexOf('поиск') >= 0 ||
+      s.indexOf('распозна') >= 0 || s.indexOf('загрузка') >= 0 ||
+      s.indexOf('агентн') >= 0) return 'think';
+  if (!running) return 'idle';
+  if (s.indexOf('слушаю') >= 0 || s.indexOf('тишина') >= 0 ||
+      s.indexOf('услышал') >= 0) return 'listen';
+  return 'idle';
+}
+
+const MODE_TEXT = {
+  idle:  'ожидание',
+  listen:'слушаю тебя',
+  think: 'думаю',
+  speak: 'отвечаю',
+  err:   'ошибка'
+};
+
+// ---------------------------------------------------------------------------
+// Печать ответа «по буквам» — эффект генерации
+// ---------------------------------------------------------------------------
+function startTyping(text) {
+  if (typeTimer) { clearInterval(typeTimer); typeTimer = null; }
+  shownAnswer = text;
+  typedChars = 0;
+  const el = $('answer');
+  el.classList.remove('placeholder');
+  el.textContent = '';
+  // Курсор «печатающей машинки»: видно, что текст появляется прямо сейчас,
+  // а не просто перерисовался экран.
+  const caret = document.createElement('span');
+  caret.className = 'caret';
+  el.appendChild(caret);
+
+  typeTimer = setInterval(() => {
+    // 3 символа за кадр: длинный ответ появляется ~2 секунды, и это
+    // выглядит как живая печать, а не как мгновенная подмена текста.
+    typedChars = Math.min(shownAnswer.length, typedChars + 3);
+    el.textContent = shownAnswer.slice(0, typedChars);
+    if (typedChars >= shownAnswer.length) {
+      clearInterval(typeTimer);
+      typeTimer = null;          // курсор убираем — ответ готов
+    } else {
+      el.appendChild(caret);     // держим курсор в конце текста
+    }
+  }, 26);
+}
+
+// ---------------------------------------------------------------------------
+// Отрисовка
+// ---------------------------------------------------------------------------
+function paint(d) {
+  const mode = modeOf(d.status, d.running);
+  if (d.status !== currentStatus) currentStatus = d.status || '';
+
+  // Точка и подпись в шапке
+  const dot = $('dot');
+  dot.className = 'dot' + (mode === 'err' ? ' err'
+      : mode === 'idle' ? ''
+      : mode === 'think' ? ' think' : ' on');
+  $('stateTxt').textContent = d.running ? (MODE_TEXT[mode] || 'работаю')
+                                        : 'робот остановлен';
+  if (d.error) $('stateTxt').textContent = 'ошибка';
+
+  // Бейдж режима
+  const badge = $('badge');
+  badge.className = 'badge ' + mode;
+  badge.textContent = d.running ? (MODE_TEXT[mode] || 'работаю') : 'выключен';
+
+  // Уровень микрофона. mic — это RMS сигнала (0..1), у обычной речи ~0.15.
+  // Корень делает тихие звуки заметными: 0.01 → 22%, 0.05 → 50%, 0.15 → 87%.
+  const raw = Math.max(0, d.mic || 0);
+  const lvl = Math.min(1, Math.sqrt(raw / 0.2));
+  $('micFill').style.width = (lvl * 100).toFixed(0) + '%';
+
+  // Рамка ответа + анимация
+  const box = $('answerBox');
+  box.classList.toggle('thinking', mode === 'think');
+  box.classList.toggle('speaking', mode === 'speak');
+
+  const gen = $('gen');
+  if (mode === 'think') {
+    gen.classList.add('on');
+    const s = (d.status || '').toLowerCase();
+    $('genTxt').textContent = s.indexOf('поиск') >= 0
+      ? 'ищу в базе знаний…'
+      : s.indexOf('распозна') >= 0 ? 'распознаю речь…'
+      : 'генерирую ответ…';
+  } else {
+    gen.classList.remove('on');
+  }
+
+  // Ответ: печатаем заново только если он реально изменился.
+  const ans = (d.answer || '').trim();
+  if (ans && ans !== shownAnswer) {
+    startTyping(ans);
+  } else if (!ans && !shownAnswer) {
+    $('answer').classList.add('placeholder');
+  }
+
+  // Время работы
+  const up = d.uptime || 0;
+  const mm = Math.floor(up / 60), ss = up % 60;
+  $('uptime').textContent = d.running
+    ? 'робот работает · ' + mm + ' мин ' + String(ss).padStart(2, '0') + ' с'
+    : 'робот остановлен';
+}
+
+// ---------------------------------------------------------------------------
+// Опрос (дважды в секунду — анимация должна быть отзывчивой)
+// ---------------------------------------------------------------------------
+async function tick() {
+  try {
+    const r = await fetch('/api/live', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    paint(await r.json());
+  } catch (e) {
+    $('stateTxt').textContent = 'нет связи';
+    $('dot').className = 'dot err';
+  }
+}
+
+tick();
+setInterval(tick, 500);
 </script>
 </body>
 </html>

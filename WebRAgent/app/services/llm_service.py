@@ -10,18 +10,35 @@ class LLMService(ABC):
     # Промпт для голосового робота: сначала факт, без мета-речи о «контексте» и
     # без цитирования источников (ответ читается вслух).
     RAG_SYSTEM_MESSAGE = (
-        "Ты — робот Валера, экскурсовод РТУ МИРЭА. Отвечай коротко и по делу. "
+        "Ты — Валера, робот-экскурсовод РТУ МИРЭА. Ты живой собеседник, а не "
+        "справочная служба: говори просто, тепло и по-человечески, обычными "
+        "словами, короткими фразами, с живой интонацией. "
         "Дай конкретику (имя, число, адрес) в первом предложении. "
         "Не упоминай источники, контекст, документы и базу знаний, не вставляй "
         "пометки вида [Source 1] — это служебные данные, они вслух не звучат. "
         "Ничего не выдумывай: используй только факты из предоставленной информации. "
+        "НЕ АНАЛИЗИРУЙ ГОСТЯ И ЕГО ПОВЕДЕНИЕ: никаких «суть ситуации», «ваша "
+        "реплика — коммуникативный сигнал», «вы мягко указываете», «роли "
+        "перепутались». Не описывай намерения и эмоции собеседника. "
+        "Не делай разбор фраз и их значения: не объясняй смысл реплики гостя, "
+        "не анализируй отдельные слова, не пересказывай вопрос — сразу отвечай. "
+        "Если смысл реплики не ясен — НЕ говори «не разобрал»: в словах гостя "
+        "почти всегда есть смысл. Отвечай на то, что понял, или задай один "
+        "короткий уточняющий вопрос. «Не разобрал» — только для набора звуков. "
+        "Учитывай предыдущие реплики разговора. "
+        "НЕ ОБРАЩАЙСЯ К ГОСТЮ ПО ИМЕНИ: только «ты»/«вы», без имён и титулов. "
         "Если нужного факта нет — скажи «Этого я не знаю». Максимум 40 слов."
     )
     
     CHAT_CONTEXT_ENHANCEMENT = (
         "\nОтвечай с опорой на предоставленную информацию: сначала главный факт "
         "по вопросу. Не упоминай контекст и источники вслух. Ничего не "
-        "придумывай — если данных нет, честно скажи «Этого я не знаю»."
+        "придумывай — если данных нет, честно скажи «Этого я не знаю». "
+        "Не делай разбор фраз и их значения и не анализируй поведение гостя — "
+        "сразу отвечай по существу. Если смысл не ясен, отвечай на то, что "
+        "понял, или задай короткий уточняющий вопрос, но НЕ говори «не разобрал». "
+        "Не обращайся к гостю по имени — только «ты»/«вы», без имён и титулов. "
+        "Говори живо, тепло, по-человечески, обычными словами — как в разговоре."
     )
     
     def format_user_message_with_context(self, prompt, context):
@@ -59,11 +76,14 @@ class LLMService(ABC):
         Returns:
             str: The generated response
         """
-        system_message = "You are a helpful assistant."
+        # Даже без контекста системный промт — промт Валеры.
+        # Раньше здесь было «You are a helpful assistant.» — и когда поиск не
+        # нашёл ни одного фрагмента, модель получала АНГЛИЙСКУЮ безликую
+        # инструкцию и отвечала как посторонний чат-бот.
+        system_message = self.RAG_SYSTEM_MESSAGE
         user_message = prompt
         
         if context:
-            system_message = self.RAG_SYSTEM_MESSAGE
             user_message = self.format_user_message_with_context(prompt, context)
         
         try:
@@ -118,6 +138,13 @@ class LLMService(ABC):
         if system_message_index is not None:
             # Enhance the existing system message
             messages[system_message_index]['content'] += self.CHAT_CONTEXT_ENHANCEMENT
+        else:
+            # Системного сообщения нет — создаём, иначе провайдер получит
+            # только реплики и будет вести себя как «модель без промта».
+            messages.insert(0, {
+                'role': 'system',
+                'content': self.RAG_SYSTEM_MESSAGE + self.CHAT_CONTEXT_ENHANCEMENT,
+            })
         
         # Find the most recent user message
         user_message_index = None
@@ -127,9 +154,17 @@ class LLMService(ABC):
                 break
         
         if user_message_index is not None:
-            # Add context to the most recent user message
+            # Add context to the most recent user message.
+            #
+            # Метки на РУССКОМ и без двоеточий-ярлыков: английские «Context:» и
+            # «Question:» модель копировала в ответ и вслух говорила «Согласно
+            # предоставленному контексту». Формат совпадает с
+            # format_user_message_with_context, чтобы поведение было одинаковым
+            # в обоих путях.
             user_content = messages[user_message_index]['content']
-            messages[user_message_index]['content'] = f"Context:\n{context}\n\nQuestion: {user_content}"
+            messages[user_message_index]['content'] = (
+                self.format_user_message_with_context(user_content, context)
+            )
     
     @abstractmethod
     def _generate_completion(self, system_message, user_message, max_tokens):
@@ -189,5 +224,10 @@ class LLMFactory:
         elif provider == 'claude':
             from app.services.claude_service import ClaudeService
             return ClaudeService()
+        elif provider == 'deepseek':
+            # Облачная модель DeepSeek: заметно точнее локальной 3B на фактах
+            # из базы знаний, при этом работает без GPU.
+            from app.services.deepseek_service import DeepSeekService
+            return DeepSeekService()
         else:
             raise ValueError(f"Unsupported LLM provider: {provider}")

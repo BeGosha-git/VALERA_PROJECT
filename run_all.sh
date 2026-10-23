@@ -306,7 +306,11 @@ elif [ "$KEEP_OLLAMA" = "1" ]; then
         echo "  ✓ Ollama уже отвечает на :11434"
     else
         echo "  ⚠️ Ollama не отвечает, но --keep-ollama указан. Запускаю свою..."
-        OLLAMA_HOST=0.0.0.0:11434 ollama serve &
+        OLLAMA_HOST=0.0.0.0:11434 \
+        OLLAMA_MAX_LOADED_MODELS=1 \
+        OLLAMA_NUM_PARALLEL=1 \
+        OLLAMA_KEEP_ALIVE=30m \
+            ollama serve &
         OLLAMA_PID=$!
         echo "  ollama serve запущен (PID $OLLAMA_PID)"
     fi
@@ -320,7 +324,21 @@ else
     # него по 172.17.0.1 (docker bridge). А через localhost запросы с большим
     # контекстом обрываются VPN — отсюда 500 на /api/generate и «зависший»
     # поиск по базе знаний.
-    OLLAMA_HOST=0.0.0.0:11434 ollama serve &
+    #
+    # OLLAMA_MAX_LOADED_MODELS=1 — ОДНА модель в памяти.
+    # Без этого Ollama держала одновременно true_valera (5.3 ГБ) и
+    # true_valera_fast (2.3 ГБ), и на каждый запрос «другой» модели
+    # перезагружала раннер. В этот момент /tokenize отвечал ошибкой
+    # `context canceled`, а клиент висел до таймаута (400–500 в логе, 45–60 с
+    # тишины для гостя). С одной моделью перезагрузок нет.
+    # OLLAMA_NUM_PARALLEL=1 — один запрос за раз: голосовому роботу больше не
+    # нужно, а лишние слоты только делят контекст и память.
+    # OLLAMA_KEEP_ALIVE=30m — модель не выгружается между вопросами.
+    OLLAMA_HOST=0.0.0.0:11434 \
+    OLLAMA_MAX_LOADED_MODELS=1 \
+    OLLAMA_NUM_PARALLEL=1 \
+    OLLAMA_KEEP_ALIVE=30m \
+        ollama serve &
     OLLAMA_PID=$!
     echo "  ollama serve запущен (PID $OLLAMA_PID, слушает 0.0.0.0:11434)"
 fi

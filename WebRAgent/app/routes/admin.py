@@ -160,14 +160,43 @@ def collections():
 @admin_bp.route('/collections/<collection_id>')
 @admin_required
 def collection_detail(collection_id):
-    """View collection details"""
+    """
+    Показывает коллекцию и СПИСОК ЕЁ ДОКУМЕНТОВ с пагинацией.
+
+    Пагинация обязательна. В этом окружении VPN обрывает HTTP-ответы крупнее
+    ~16 КБ, поэтому страница со ВСЕМИ документами не открывалась вообще:
+    после полной заливки базы (171 файл) ответ весил 397 КБ без сжатия и
+    18.5 КБ даже gzip'ом — браузер получал ноль байт и висел до таймаута.
+    Теперь на страницу выводятся только PAGE_SIZE документов.
+    """
     collection = Collection.get(collection_id)
     if not collection:
         flash('Collection not found', 'error')
         return redirect(url_for('admin.collections'))
-    
-    documents = Document.get_all(collection_id=collection_id)
-    return render_template('admin/collection_detail.html', collection=collection, documents=documents)
+
+    all_documents = Document.get_all(collection_id=collection_id)
+    total = len(all_documents)
+
+    # Сколько документов показывать на одной странице.
+    PAGE_SIZE = 40
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+    except (TypeError, ValueError):
+        page = 1
+    pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = min(page, pages)
+    start = (page - 1) * PAGE_SIZE
+    documents = all_documents[start:start + PAGE_SIZE]
+
+    return render_template(
+        'admin/collection_detail.html',
+        collection=collection,
+        documents=documents,
+        total_documents=total,
+        page=page,
+        pages=pages,
+        page_size=PAGE_SIZE,
+    )
 
 @admin_bp.route('/collections/<collection_id>/delete', methods=['POST'])
 @admin_required

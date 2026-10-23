@@ -64,10 +64,29 @@ class RAGService:
                 # stop scanning further — we only dedupe an exact trailing duplicate.
                 break
 
-            if not any(msg['role'] == 'system' for msg in current_exchange):
+            # ГАРАНТИРУЕМ правильный системный промт.
+            #
+            # Раньше здесь стояло `if not any(role == 'system')`. Но chat.py уже
+            # вставляет СВОЙ системный месседж («This is a follow-up question in
+            # an ongoing conversation…», на английском), поэтому условие не
+            # срабатывало — и промт Валеры НЕ ДОБАВЛЯЛСЯ ВООБЩЕ. DeepSeek
+            # получал только английскую отписку и вёл себя как «модель без
+            # системного промта»: рассуждал о смысле фраз, путал имена и не
+            # знал, что он робот-экскурсовод.
+            #
+            # Теперь мы НЕ проверяем наличие, а ПРИНУДИТЕЛЬНО заменяем все
+            # системные сообщения на канонический промт Валеры.
+            valera_system = PromptTemplateService.get_system_message("rag")
+            replaced = False
+            for msg in current_exchange:
+                if msg.get('role') == 'system':
+                    msg['content'] = valera_system
+                    replaced = True
+            # Системного сообщения не было — ставим первым.
+            if not replaced:
                 current_exchange.insert(0, {
                     'role': 'system',
-                    'content': PromptTemplateService.get_system_message("citation_focus")
+                    'content': valera_system
                 })
 
             # Ensure the current query is always the single last user message

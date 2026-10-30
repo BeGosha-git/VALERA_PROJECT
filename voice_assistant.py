@@ -805,6 +805,21 @@ def normalize_mirea(text: str) -> str:
     return re.sub(pattern, "МИРЭА", text, flags=re.IGNORECASE)
 
 
+_TECH_ASR_FIXES = {
+    # Ошибки распознавания речи в технических словах
+    "гейхаб": "гитхаб", "гидхаб": "гитхаб", "гитхап": "гитхаб", "гидхап": "гитхаб",
+    "гейтхаб": "гитхаб", "шидхап": "гитхаб", "гитхаб": "гитхаб",
+}
+
+
+def normalize_tech_terms(text: str) -> str:
+    """Исправляет типичные ослышки технических слов («гейхаб» → «гитхаб»)."""
+    import re as _re
+
+    pattern = _re.compile(r"\b(" + "|".join(_TECH_ASR_FIXES) + r")\b", _re.IGNORECASE)
+    return pattern.sub(lambda m: _TECH_ASR_FIXES[m.group(1).lower()], text)
+
+
 def normalize_studsouz(text: str) -> str:
     """
     Приводит варианты «Студсоюз» (в том числе ошибки распознавания речи)
@@ -1837,6 +1852,79 @@ def strip_meta_speech(text: str) -> str:
     return out
 
 
+# ---------------------------------------------------------------------------
+# «РТУ МИРЭА» НЕ ЧЕРЕЗ СЛОВО И НИКАКОГО «СТОЮ В ХОЛЛЕ»
+# ---------------------------------------------------------------------------
+# Модель любила через слово повторять название вуза и вставлять «стою в холле»,
+# «жду гостей», «я Валера, робот-экскурсовод» в ответ на любой вопрос. Промпт
+# просит этого не делать, но 8B-модель слушается не всегда, поэтому чистим кодом.
+_VUZ_NAME_RE = re.compile(
+    r"(?i)(?:\b(в|во|из|от|про|об|о|для|со|с|к)\s+)?[«\"]?(?:РТУ\s+)?МИРЭА[»\"]?(?![\w-])"
+)
+_HALL_SENT_RE = re.compile(
+    r"(?i)[^.!?…]*\b(?:стою\s+(?:тут\s+|здесь\s+|прямо\s+)?в\s+холле|жду\s+гостей|стою\s+в\s+холле)\b[^.!?…]*[.!?…]*\s*"
+)
+_INTRO_SENT_RE = re.compile(r"(?i)^\s*(?:привет[!,. ]*|здравствуйте[!,. ]*)?\s*я\s+валера[^.!?…]*робот[^.!?…]*[.!?…]+\s*")
+_ans_ctx = {"vuz_in_question": False, "prev_named": False, "intro_ok": False}
+
+_VUZ_REPL = {
+    "в": "у нас", "во": "у нас", "из": "у нас", "от": "от нас",
+    "про": "про наш университет", "о": "о нашем университете", "об": "о нашем университете",
+    "для": "для нашего университета", "со": "с нашим университетом", "с": "с нашим университетом",
+    "к": "к нашему университету",
+}
+
+
+def set_answer_context(question: str, intro_ok: bool = False) -> None:
+    """Запоминает, что известно про реплику: назван ли вуз гостем и уместно ли представление."""
+    _ans_ctx["vuz_in_question"] = bool(_VUZ_NAME_RE.search(question or ""))
+    _ans_ctx["intro_ok"] = intro_ok
+
+
+def note_answer_given(answer: str) -> None:
+    """После ответа: был ли в нём назван вуз (тогда следующий ответ уже не называет)."""
+    _ans_ctx["prev_named"] = bool(_VUZ_NAME_RE.search(finalize_answer(answer) or ""))
+
+
+def limit_vuz_mentions(text: str) -> str:
+    """Оставляет название вуза не чаще одного раза — и ни разу, если оно уже звучало."""
+    if not text:
+        return text
+    allowed = 0 if (_ans_ctx["vuz_in_question"] or _ans_ctx["prev_named"]) else 1
+    seen = 0
+
+    def _sub(m: "re.Match") -> str:
+        nonlocal seen
+        seen += 1
+        if seen <= allowed:
+            return m.group(0)
+        prep = (m.group(1) or "").lower()
+        before = text[:m.start()].rstrip()
+        at_start = (not before) or before[-1] in ".!?…"
+        if prep:
+            rep = _VUZ_REPL.get(prep, "у нас")
+            return rep[:1].upper() + rep[1:] if at_start else rep
+        if re.search(r"(?i)(?:экскурсовод|ассистент|робот)$", before):
+            return ""
+        if at_start:
+            return "Наш университет"
+        return "нашего университета"
+
+    out = _VUZ_NAME_RE.sub(_sub, text)
+    return re.sub(r"\s{2,}", " ", re.sub(r"\s+([,.!?;:])", r"\1", out)).strip()
+
+
+def strip_hall_talk(text: str) -> str:
+    """Убирает «стою в холле», «жду гостей» и непрошеное «Я Валера, робот-экскурсовод…»."""
+    if not text:
+        return text
+    if _ans_ctx["intro_ok"]:      # гость сам спросил «кто ты / где ты» — это уместно
+        return text
+    out = _HALL_SENT_RE.sub("", text).strip()
+    out = _INTRO_SENT_RE.sub("", out).strip()
+    return out or "Слушаю Вас."
+
+
 def finalize_answer(text: str, max_words: Optional[int] = None) -> str:
     """
     Приводит ответ к финальному виду для озвучки: вырезает служебную речь
@@ -1847,9 +1935,9 @@ def finalize_answer(text: str, max_words: Optional[int] = None) -> str:
     max_words = max_words or current_answer_words()
     return limit_words(
         strip_filler(
-            clean_english(fix_vuz_name(fix_name(
+            clean_english(limit_vuz_mentions(strip_hall_talk(fix_vuz_name(fix_name(
                 answer_guard(strip_meta_speech(strip_analysis(text)))
-            )))
+            )))))
         ),
         max_words,
     )
@@ -2651,6 +2739,7 @@ class VoiceAssistant:
         self._conversation_history.append({"role": "user", "content": question})
         self._conversation_history.append({"role": "assistant", "content": answer})
         self._conversation_history = self._conversation_history[-20:]  # 10 обменов
+        note_answer_given(answer)
         if persist:
             # В долговременную память — с id чата и темой (вуз/не вуз).
             self.memory.add(question, answer, chat_id=self._chat_id, mirea=self._last_mirea,
@@ -3094,15 +3183,16 @@ class VoiceAssistant:
             # уходил искать посторонних людей). Проверяем тему уже по
             # нормализованному тексту — тогда опечатки распознавания
             # («статсоюз», «стуцсоюз») тоже уходят в базу вуза.
-            query_text = normalize_studsouz(
+            query_text = normalize_tech_terms(normalize_studsouz(
                 normalize_name(normalize_mirea(clean_text))
-            )
+            ))
             kb_hit = kb_match(query_text)
             mirea_related = kb_hit is not None
             self._last_mirea = mirea_related
             self._last_effective = query_text
             # Потолок длины ответа — по вопросу (факт — коротко, «расскажи» — развёрнуто).
             budget = set_answer_budget(query_text)
+            set_answer_context(query_text, intro_ok=is_self_question(query_text))
             print(f"📏 Длина ответа: до {budget} слов")
             if query_text != clean_text:
                 print(f"🔄 Нормализация: {query_text}")

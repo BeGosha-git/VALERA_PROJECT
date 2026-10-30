@@ -56,10 +56,9 @@ from valera_runtime import (
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_PORT = 8137  # «невзрачный» порт по умолчанию
 
-# Предел размера ответа для этого окружения: на loopback ответы больше ~16 КБ
-# обрезаются (VPN перехватывает соединение), из-за чего страница «зависает».
-# Всё, что отдаём браузеру, должно после gzip укладываться в этот лимит.
-VPN_SAFE_LIMIT = 16 * 1024
+# Раньше при старом VPN ответы больше ~16 КБ на loopback обрезались, и пульт
+# следил за размером. Новый VPN проверен (30.10.2026): 3 МБ по loopback и по LAN
+# доходят целиком, предупреждение и лимит сняты. gzip оставлен — он просто ускоряет.
 
 
 # ===========================================================================
@@ -192,16 +191,6 @@ def create_app(runtime=None, runner=None):
             response.headers["Content-Encoding"] = "gzip"
             response.headers["Content-Length"] = str(len(compressed))
             response.headers["Vary"] = "Accept-Encoding"
-            # Страховка: в этом окружении ответы >16 КБ на loopback обрезаются
-            # (заголовки приходят, тело — нет) → страница «зависает». Если
-            # сжатый ответ всё ещё больше лимита — громко предупреждаем, чтобы
-            # это не превратилось в неуловимый баг снова.
-            if len(compressed) > VPN_SAFE_LIMIT:
-                log.warning(
-                    "Ответ %s сжат до %d байт — больше лимита %d. На loopback "
-                    "такой ответ может обрезаться (VPN). Уменьшите payload.",
-                    request.path, len(compressed), VPN_SAFE_LIMIT,
-                )
         except Exception:  # noqa: BLE001
             # Сжатие — оптимизация; если что-то пошло не так, отдаём как есть
             pass
@@ -320,6 +309,56 @@ def create_app(runtime=None, runner=None):
             return jsonify({"ok": True, "model": model})
         except Exception as exc:  # noqa: BLE001
             return jsonify({"ok": False, "error": str(exc)}), 500
+
+    # ------------------------------------------------------------------
+    # Голос озвучки: XTTS-v2 (основной) ↔ Silero (запасной)
+    # ------------------------------------------------------------------
+    SILERO_VOICES = ["aidar", "baya", "kseniya", "xenia", "eugene"]
+
+    @app.get("/api/tts")
+    def api_tts():
+        """Текущий движок озвучки, доступные голоса и состояние сервиса XTTS."""
+        from tts_backends import get_xtts_client
+
+        xtts = get_xtts_client()
+        up = xtts.is_up()
+        return jsonify({
+            "backend": rt.get("tts", "backend", default="xtts"),
+            "xtts_up": up,
+            "xtts_speakers": xtts.speakers() if up else [],
+            "xtts_speaker": rt.get("tts", "xtts_speaker", default="Damien Black"),
+            "speed": rt.get("tts", "speed", default=1.0),
+            "silero_speakers": SILERO_VOICES,
+            "silero_speaker": rt.get("tts", "speaker", default="eugene"),
+        })
+
+    @app.post("/api/tts/preview")
+    def api_tts_preview():
+        """Озвучивает пробную фразу выбранным голосом XTTS и отдаёт WAV для браузера."""
+        import io
+        import wave
+
+        from flask import Response
+        from tts_backends import get_xtts_client
+
+        payload = request.get_json(silent=True) or {}
+        text = (payload.get("text") or "Привет! Я Валера, робот-экскурсовод.").strip()[:200]
+        speaker = payload.get("speaker") or rt.get("tts", "xtts_speaker", default="Damien Black")
+        rate = 24000
+        try:
+            speed = float(payload.get("speed") or rt.get("tts", "speed", default=1.0))
+        except (TypeError, ValueError):
+            speed = 1.0
+        pcm = get_xtts_client().synthesize(text, speaker=speaker, sample_rate=rate, speed=speed)
+        if not pcm:
+            return jsonify({"ok": False, "error": "сервис XTTS не отвечает"}), 503
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(rate)
+            wf.writeframes(pcm)
+        return Response(buf.getvalue(), mimetype="audio/wav")
 
     # ------------------------------------------------------------------
     # Выбор LLM-провайдера: локальная (Ollama) ↔ облачная (DeepSeek)
@@ -638,7 +677,7 @@ def _downsample_waves(waves, max_points: int = 200):
     return {"raw": _thin(raw), "gated": _thin(gated)}
 
 
-def _recent_events(events, limit: int = 25, max_chars: int = 70):
+def _recent_events(events, limit: int = 60, max_chars: int = 200):
     """
     Последние события триггеров для лога на странице.
 
@@ -1202,6 +1241,28 @@ tbody tr:last-child td{border-bottom:none}
         </div>
 
         <div class="card">
+          <h2>Голос озвучки <span class="tag" id="ttsTag">XTTS</span></h2>
+          <label class="f">Движок</label>
+          <div class="row" style="margin-bottom:var(--sp-2)">
+            <select id="selTtsBackend">
+              <option value="xtts">XTTS-v2 — живой голос (основной, на видеокарте)</option>
+              <option value="silero">Silero — быстрый запасной</option>
+            </select>
+          </div>
+          <label class="f">Голос</label>
+          <div class="row">
+            <select id="selTtsVoice"></select>
+            <button class="pri" id="btnSaveTts">Применить</button>
+            <button class="sm" id="btnPreviewTts">▶ Прослушать</button>
+          </div>
+          <label class="f" style="margin-top:var(--sp-2)">Скорость речи (XTTS):
+            <b id="ttsSpeedVal">1.00</b>×</label>
+          <input type="range" id="ttsSpeed" min="0.5" max="1.5" step="0.05" value="1.0" style="width:100%">
+          <small class="muted" id="ttsInfo"></small>
+          <span class="muted" id="ttsStatus"></span>
+        </div>
+
+        <div class="card">
           <h2>Телеметрия</h2>
           <div class="metrics" id="metrics"></div>
         </div>
@@ -1703,6 +1764,60 @@ $('btnWarmModel').onclick = async () => {
   $('modelStatus').textContent = r.ok ? ('✓ готова: ' + r.model) : ('✗ ' + (r.error||''));
 };
 
+// ---------- голос озвучки ----------
+let ttsInfo = null;
+function fillTtsVoices(){
+  if(!ttsInfo) return;
+  const be = $('selTtsBackend').value;
+  const list = be==='xtts' ? ttsInfo.xtts_speakers : ttsInfo.silero_speakers;
+  const cur  = be==='xtts' ? ttsInfo.xtts_speaker  : ttsInfo.silero_speaker;
+  let opts = list.map(v => `<option value="${escapeHtml(v)}" ${v===cur?'selected':''}>${escapeHtml(v)}</option>`).join('');
+  if(cur && !list.includes(cur)) opts = `<option value="${escapeHtml(cur)}" selected>${escapeHtml(cur)} (текущий)</option>` + opts;
+  $('selTtsVoice').innerHTML = opts || '<option value="">нет голосов</option>';
+  $('btnPreviewTts').disabled = (be!=='xtts' || !ttsInfo.xtts_up);
+  $('ttsInfo').textContent = be==='xtts'
+    ? (ttsInfo.xtts_up ? 'Сервис XTTS работает. Если он упадёт, Валера сам заговорит голосом Silero.'
+                       : 'Сервис XTTS не запущен — пока говорит Silero. Запустите ./run_all.sh web.')
+    : 'Говорит Silero (CPU). XTTS не используется, скорость на Silero не действует.';
+}
+async function loadTts(){
+  ttsInfo = await api('/api/tts');
+  $('selTtsBackend').value = ttsInfo.backend;
+  $('ttsTag').textContent = ttsInfo.backend==='xtts' ? (ttsInfo.xtts_up ? 'XTTS' : 'XTTS · не запущен') : 'Silero';
+  fillTtsVoices();
+  if(!ttsDragging){
+    $('ttsSpeed').value = ttsInfo.speed; $('ttsSpeedVal').textContent = (+ttsInfo.speed).toFixed(2);
+  }
+}
+let ttsDragging = false;
+$('ttsSpeed').addEventListener('input', () => { ttsDragging = true; $('ttsSpeedVal').textContent = (+$('ttsSpeed').value).toFixed(2); });
+$('ttsSpeed').addEventListener('change', async () => {
+  try{ await api('/api/settings', {method:'POST', body: JSON.stringify({'tts.speed': +$('ttsSpeed').value})}); }catch(e){}
+  ttsDragging = false;
+  $('ttsStatus').textContent = '✓ скорость ' + (+$('ttsSpeed').value).toFixed(2) + '×';
+  setTimeout(()=>$('ttsStatus').textContent='', 2500);
+});
+$('selTtsBackend').onchange = fillTtsVoices;
+$('btnSaveTts').onclick = async () => {
+  const be = $('selTtsBackend').value, v = $('selTtsVoice').value;
+  await api('/api/settings', {method:'POST', body: JSON.stringify(
+    be==='xtts' ? {'tts.backend':'xtts','tts.xtts_speaker':v} : {'tts.backend':'silero','tts.speaker':v})});
+  $('ttsStatus').textContent = '✓ применено: ' + v;
+  setTimeout(()=>$('ttsStatus').textContent='', 3000);
+  loadTts();
+};
+$('btnPreviewTts').onclick = async () => {
+  $('ttsStatus').textContent = '⏳ синтез…';
+  try{
+    const r = await fetch('/api/tts/preview', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({speaker: $('selTtsVoice').value, speed: +$('ttsSpeed').value})});
+    if(!r.ok) throw new Error((await r.json()).error || r.status);
+    const url = URL.createObjectURL(await r.blob());
+    const a = new Audio(url); a.onended = () => URL.revokeObjectURL(url); await a.play();
+    $('ttsStatus').textContent = '';
+  }catch(e){ $('ttsStatus').textContent = '✗ ' + e.message; }
+};
+
 // ---------- триггеры ----------
 let triggers = [];
 async function loadTriggers(){
@@ -1821,7 +1936,7 @@ document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
 
 // старт
 buildFeatureToggles();
-loadDevices(); loadTriggers();
+loadDevices(); loadTriggers(); loadTts();
 const od = $('oldDays'); od.addEventListener('change', loadChats);
 tick(); setInterval(tick, 1000);
 window.addEventListener('resize', ()=>{ /* перерисуется на следующем кадре */ });

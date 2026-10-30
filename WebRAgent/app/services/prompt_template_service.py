@@ -423,13 +423,12 @@ class PromptTemplateService:
         return template.format(query=query, results=results, **kwargs)
     
     @staticmethod
-    def format_context(contexts, max_length=2200):
+    def format_context(contexts, max_length=4500):
         """
         Собирает контекст для промпта, укладываясь в ``max_length`` символов.
 
-        Ограничение небольшое СОЗНАТЕЛЬНО: в этом окружении VPN обрывает
-        крупные HTTP-тела, поэтому промпт с контекстом должен быть коротким
-        (клиент дополнительно страхует размер — см. OllamaService._fit_body).
+        Лимит 4500 символов выбран под num_ctx 4096 локальной модели
+        (VPN-ограничение на размер тела снято 30.10.2026).
         Для голосового робота, который отвечает в 1–2 предложения, верхнего
         самого релевантного фрагмента достаточно.
 

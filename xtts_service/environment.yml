@@ -1,0 +1,15 @@
+# Справочный файл. Окружение создаёт xtts_service/setup_env.sh (его вызывает run_all.sh):
+# torch берётся из tts_env, чтобы не качать несколько гигабайт заново.
+name: xtts_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - "transformers>=4.52,<5"
+    - "coqui-tts[codec]>=0.26"
+    - fastapi
+    - "uvicorn[standard]"
+    - pydantic
+    - num2words

@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 # ensure_ascii=True, то есть КАЖДАЯ русская буква превращается в `\u0444` —
 # 6 байт вместо 2. Тело раздувается В ТРИ РАЗА. Поэтому отправляем свой JSON
 # с ensure_ascii=False.
-_MAX_BODY_BYTES = int(os.getenv("OLLAMA_MAX_BODY_BYTES", "4500"))
+# Лимит поднят 30.10.2026: новый VPN большие ответы не режет (проверено на 3 МБ).
+_MAX_BODY_BYTES = int(os.getenv("OLLAMA_MAX_BODY_BYTES", "65536"))
 
 class OllamaService(LLMService):
     """Service for interacting with Ollama API"""

@@ -30,6 +30,7 @@ from bs4 import BeautifulSoup
 # Пути к подпроектам (файл лежит в корне проекта)
 
 from russian_text_to_speech.NeuralSpeaker import NeuralSpeaker
+from tts_backends import get_xtts_client
 from kairos_asr import KairosASR
                                                                                                               
 # Рантайм-состояние проекта: общие настройки, буферы для GUI и триггеры
@@ -1812,12 +1813,14 @@ LOCAL_LLM_COOLDOWN = float(os.getenv("LOCAL_LLM_COOLDOWN", "120"))
 # Причина — включённый в llama-server prompt cache с чекпоинтами
 # (`context checkpoints enabled, min spacing = 8192` при n_ctx 4096).
 # Поэтому промт ОБРЕЗАЕМ: лучше короткий живой ответ, чем вечная тишина.
-LOCAL_LLM_MAX_PROMPT = int(os.getenv("LOCAL_LLM_MAX_PROMPT", "480"))
+# Лимит поднят 30.10.2026: проверено, что true_valera отвечает на промпт в 3000
+# символов за ~0,6 с; страховка от зависания остаётся (LOCAL_LLM_TIMEOUT + карантин).
+LOCAL_LLM_MAX_PROMPT = int(os.getenv("LOCAL_LLM_MAX_PROMPT", "4000"))
 
 # Сколько символов черновика кладём в промт пересказа. Держим маленьким,
 # чтобы весь промт уложился в LOCAL_LLM_MAX_PROMPT: модель виснет на
 # длинных промптах, а обрезка середины съела бы инструкцию.
-LOCAL_LLM_DRAFT_CHARS = int(os.getenv("LOCAL_LLM_DRAFT_CHARS", "260"))
+LOCAL_LLM_DRAFT_CHARS = int(os.getenv("LOCAL_LLM_DRAFT_CHARS", "1500"))
 
 _local_llm_down_until = 0.0
 
@@ -2849,6 +2852,18 @@ class VoiceAssistant:
         на какое устройство их отправить. Повторяем ту же предподготовку
         текста (транслит + числа прописью), что и оригинальный ``speak()``.
         """
+        # Основной голос — XTTS-v2 (отдельный сервис на GPU). Если он не поднят
+        # или упал, клиент вернёт None и ниже сработает запасной Silero.
+        if self.runtime.get("tts", "backend", default="xtts") == "xtts":
+            pcm = get_xtts_client().synthesize(
+                text,
+                speaker=self.runtime.get("tts", "xtts_speaker", default="Damien Black"),
+                sample_rate=TTS_SAMPLE_RATE,
+                speed=float(self.runtime.get("tts", "speed", default=1.0) or 1.0),
+            )
+            if pcm:
+                return leading_silence_bytes(TTS_SAMPLE_RATE) + pcm
+
         try:
             import re as _re
 

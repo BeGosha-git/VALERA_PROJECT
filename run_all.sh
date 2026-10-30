@@ -59,6 +59,10 @@ WEBRAGENT_DIR="$SCRIPT_DIR/WebRAgent"
 TTS_DIR="$SCRIPT_DIR/russian_text_to_speech"
 MIC_DIR="$SCRIPT_DIR/mic_to_text"
 CONDA_ENV_NAME="tts_env"
+XTTS_DIR="$SCRIPT_DIR/xtts_service"
+XTTS_ENV_NAME="xtts_env"
+XTTS_PORT="${XTTS_PORT:-8151}"
+XTTS_PID=""
 MIC_ENV_NAME="mic_to_text_env"
 MODELFILE_PATH="$SCRIPT_DIR/Modelfile"
 #OLLAMA_MODEL_NAME="valera_live:latest"
@@ -322,6 +326,62 @@ ensure_model() {
 }
 
 # ---------------------------------------------------------------------------
+# XTTS-v2 — основной голос (отдельный процесс на GPU, прогретый)
+# ---------------------------------------------------------------------------
+# Если что-то не готово (нет согласия с лицензией, env, сервис не поднялся) —
+# стек работает дальше, а Валера говорит запасным голосом Silero.
+# TTS_BACKEND=silero ./run_all.sh web  — не запускать XTTS вообще.
+start_xtts() {
+    [ "${TTS_BACKEND:-xtts}" = "silero" ] && { echo "[XTTS] TTS_BACKEND=silero — пропускаю."; return 0; }
+
+    # Уже запущен (например, вручную) — используем его.
+    if curl -s -m 2 --noproxy '*' "http://127.0.0.1:$XTTS_PORT/health" 2>/dev/null | grep -q '"ok"'; then
+        echo "[XTTS] Сервис уже работает на :$XTTS_PORT — использую его."
+        return 0
+    fi
+
+    if ! conda env list | grep -q "^$XTTS_ENV_NAME "; then
+        echo "[XTTS] Создаю окружение $XTTS_ENV_NAME (один раз; torch берётся из tts_env, качается только coqui-tts)..."
+        bash "$XTTS_DIR/setup_env.sh" || { echo "  ⚠️ Не удалось создать окружение — Silero."; return 0; }
+    fi
+
+    # Карта: XTTS_GPU, иначе — с наибольшим свободным объёмом видеопамяти.
+    export CUDA_DEVICE_ORDER=PCI_BUS_ID
+    local gpu="${XTTS_GPU:-}"
+    if [ -z "$gpu" ] && command -v nvidia-smi >/dev/null 2>&1; then
+        gpu="$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits 2>/dev/null \
+               | sort -t, -k2 -nr | head -1 | cut -d, -f1 | tr -d ' ')"
+    fi
+    echo "[XTTS] Запускаю сервис на GPU ${gpu:-0}, порт $XTTS_PORT (первый запуск качает модель ~1,8 ГБ)..."
+
+    # Выбор карты через CUDA_VISIBLE_DEVICES: процесс видит только её (cuda:0).
+    ( conda activate "$XTTS_ENV_NAME" && \
+      CUDA_VISIBLE_DEVICES="${gpu:-0}" COQUI_TOS_AGREED=1 XTTS_PORT="$XTTS_PORT" \
+      exec python "$XTTS_DIR/server.py" ) &
+    XTTS_PID=$!
+
+    # Ждём готовности (загрузка + прогрев), до ~3 минут.
+    local i
+    for i in $(seq 1 90); do
+        if curl -s -m 2 "http://127.0.0.1:$XTTS_PORT/health" 2>/dev/null | grep -q '"ok"'; then
+            echo "  ✓ XTTS готов (PID $XTTS_PID)"
+            return 0
+        fi
+        kill -0 "$XTTS_PID" 2>/dev/null || { echo "  ⚠️ Сервис XTTS завершился — Silero."; XTTS_PID=""; return 0; }
+        sleep 2
+    done
+    echo "  ⚠️ XTTS не ответил за 3 минуты — пока Silero (сервис продолжит загрузку)."
+}
+
+stop_xtts() {
+    if [ -n "$XTTS_PID" ] && kill -0 "$XTTS_PID" 2>/dev/null; then
+        echo "Остановка XTTS (PID $XTTS_PID)..."
+        kill "$XTTS_PID" 2>/dev/null || true
+    fi
+    pkill -f "xtts_service/server.py" >/dev/null 2>&1 || true
+}
+
+# ---------------------------------------------------------------------------
 # Функция очистки при завершении
 # ---------------------------------------------------------------------------
 cleanup() {
@@ -329,6 +389,7 @@ cleanup() {
     echo "=== Остановка всех сервисов ==="
     # Приложение (веб-пульт/GUI) — ПЕРВЫМ, он держит порт и микрофон
     stop_app
+    stop_xtts
     if [ -f "$WEBRAGENT_DIR/docker-compose.yml" ]; then
         docker compose -f "$WEBRAGENT_DIR/docker-compose.yml" down 2>/dev/null || true
     fi
@@ -393,7 +454,7 @@ elif [ "$KEEP_OLLAMA" = "1" ]; then
         OLLAMA_HOST=0.0.0.0:11434 \
         OLLAMA_MAX_LOADED_MODELS=1 \
         OLLAMA_NUM_PARALLEL=1 \
-        OLLAMA_KEEP_ALIVE=30m \
+        OLLAMA_KEEP_ALIVE=-1 \
             ollama serve &
         OLLAMA_PID=$!
         echo "  ollama serve запущен (PID $OLLAMA_PID)"
@@ -417,11 +478,11 @@ else
     # тишины для гостя). С одной моделью перезагрузок нет.
     # OLLAMA_NUM_PARALLEL=1 — один запрос за раз: голосовому роботу больше не
     # нужно, а лишние слоты только делят контекст и память.
-    # OLLAMA_KEEP_ALIVE=30m — модель не выгружается между вопросами.
+    # OLLAMA_KEEP_ALIVE=-1 — модель не выгружается между вопросами.
     OLLAMA_HOST=0.0.0.0:11434 \
     OLLAMA_MAX_LOADED_MODELS=1 \
     OLLAMA_NUM_PARALLEL=1 \
-    OLLAMA_KEEP_ALIVE=30m \
+    OLLAMA_KEEP_ALIVE=-1 \
         ollama serve &
     OLLAMA_PID=$!
     echo "  ollama serve запущен (PID $OLLAMA_PID, слушает 0.0.0.0:11434)"
@@ -469,6 +530,11 @@ sleep 5
 # Перед стартом приложения убеждаемся, что база знаний залита полностью.
 case "$RUN_MODE" in
     talk|voice|voice-fast|web|gui) kb_verify_and_fix ;;
+esac
+
+# Основной голос — XTTS-v2 (нужен только режимам, где робот говорит).
+case "$RUN_MODE" in
+    talk|voice|voice-fast|web|gui) start_xtts ;;
 esac
 
 # 5. Запуск приложения

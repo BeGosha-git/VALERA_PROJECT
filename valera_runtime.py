@@ -110,6 +110,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_gain": 8.0,
     },
     "tts": {
+        # Основной голос: "xtts" (XTTS-v2, сервис на GPU) или "silero".
+        # Если XTTS недоступен, ассистент сам говорит голосом Silero.
+        "backend": "xtts",
+        "xtts_speaker": "Damien Black",
+        # Скорость речи XTTS: 0.5 (медленно) … 1.5 (быстро), 1.0 — как есть.
+        "speed": 1.0,
+        # Голос Silero (запасной): aidar, baya, kseniya, xenia, eugene
         "speaker": "eugene",
         "enabled": True,
     },
@@ -772,7 +779,7 @@ class RuntimeState:
         # обрезаются (VPN на loopback). 2000 точек × 3 кривые давали ~130 КБ
         # JSON и ~57 КБ после gzip — сайт «зависал». 600 точек хватает,
         # чтобы форма сигнала читалась, и влезает в лимит.
-        target_points = 600
+        target_points = 2000  # лимит снят 30.10.2026 (был 600 из-за старого VPN)
         step = max(1, len(raw) // target_points)
         payload = {
             "ts": time.time(),

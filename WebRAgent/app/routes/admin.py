@@ -178,7 +178,7 @@ def collection_detail(collection_id):
     total = len(all_documents)
 
     # Сколько документов показывать на одной странице.
-    PAGE_SIZE = 40
+    PAGE_SIZE = 200
     try:
         page = max(1, int(request.args.get('page', 1)))
     except (TypeError, ValueError):

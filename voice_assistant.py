@@ -31,7 +31,7 @@ from bs4 import BeautifulSoup
 
 from russian_text_to_speech.NeuralSpeaker import NeuralSpeaker
 from tts_backends import get_xtts_client
-from valera_memory import ConversationMemory, CONTINUE_RE, recall_kind
+from valera_memory import ConversationMemory, CONTINUE_RE, recall_kind, style_hint
 from kairos_asr import KairosASR
                                                                                                               
 # Рантайм-состояние проекта: общие настройки, буферы для GUI и триггеры
@@ -923,7 +923,7 @@ FORBIDDEN_TOPIC_PATTERNS = [
 
 # Вежливый отказ без нотаций — робот не спорит и не оценивает.
 FORBIDDEN_REFUSAL = (
-    "Эту тему я не обсуждаю. Спроси что-нибудь другое — с радостью отвечу."
+    "Эту тему я не обсуждаю. Спросите, пожалуйста, что-нибудь другое — с радостью отвечу."
 )
 
 # Короткие естественные ответы на поддакивания (используются только если
@@ -931,7 +931,7 @@ FORBIDDEN_REFUSAL = (
 BACKCHANNEL_REPLIES = [
     "Так, слушаю.",
     "Хорошо.",
-    "Ага, продолжаю.",
+    "Да, продолжаю.",
     "Да, я здесь.",
     "Понял, слушаю дальше.",
 ]
@@ -1509,7 +1509,7 @@ _ANALYSIS_MARKERS = (
 # Живая реакция на непонятную/битую фразу. Это НЕ «я не знаю» (то про факты),
 # а честное «не разобрал» — обычно причина в распознавании речи.
 UNRECOGNIZED_REPLY = (
-    "Прости, я не разобрал, что ты сказал. Повтори, пожалуйста?"
+    "Простите, я не разобрал, что Вы сказали. Повторите, пожалуйста?"
 )
 
 
@@ -1573,8 +1573,8 @@ def strip_analysis(text: str) -> str:
 _UNRECOGNIZED_RE = re.compile(
     r"(?i)(?:"
     r"не\s+(?:разобрал|расслышал)"
-    r"|повтори,?\s+пожалуйста"
-    r"|не\s+понял,?\s+что\s+ты"
+    r"|повтори(?:те)?,?\s+пожалуйста"
+    r"|не\s+понял,?\s+что\s+(?:ты|вы)"
     r")"
 )
 
@@ -1612,10 +1612,10 @@ def is_gibberish(text: str) -> bool:
 
 # Уточняющие вопросы: их говорим вместо «не разобрал», когда слова понятны.
 CLARIFY_MIREA = (
-    "Уточни, пожалуйста: тебя интересует поступление, институты, "
+    "Уточните, пожалуйста: Вас интересует поступление, институты, "
     "общежития или что-то ещё?"
 )
-CLARIFY_GENERIC = "Уточни, пожалуйста — я не совсем понял, что ты имеешь в виду."
+CLARIFY_GENERIC = "Уточните, пожалуйста — я не совсем понял, что Вы имеете в виду."
 
 
 def clarify_reply(mirea_related: bool = False) -> str:
@@ -2514,6 +2514,10 @@ class VoiceAssistant:
         # Последние 4 обмена (8 сообщений) — достаточно, чтобы понять
         # уточнение, и не раздувает запрос.
         history = list(self._conversation_history[-12:])
+        # Подстройка под собеседника: длина, настроение, обращение (но всегда на «Вы»).
+        style = style_hint(question)
+        if style:
+            hint = f"{hint}\n{style}" if hint else style
         if self.rag is not None:
             answer = self.rag.direct_answer(question, history=history, hint=hint)
             if answer:
@@ -3039,7 +3043,7 @@ class VoiceAssistant:
                 print(f"🧠 Вопрос о прошлом ({kind}) — достаю из памяти: {len(mem_rows)} обмен(ов).")
                 self.runtime.set_status("Вспоминаю…")
                 if not mem_rows:
-                    answer = "Мы пока ни о чём не говорили — это наш первый разговор. Спроси что-нибудь!"
+                    answer = "Мы пока ни о чём не говорили — это наш первый разговор. Спросите что-нибудь!"
                 else:
                     ctx = ConversationMemory.format_context(mem_rows)
                     if kind == "repeat":
@@ -3052,7 +3056,7 @@ class VoiceAssistant:
                     answer = self._direct_llm(query_text, hint=hint)
                     if not answer:
                         answer = mem_rows[-1]["a"] if kind == "repeat" else \
-                            "Хм, не получилось вспомнить. Спроси ещё раз."
+                            "Хм, не получилось вспомнить. Спросите ещё раз."
                 answer = finalize_answer(answer)
                 log_question(
                     raw_text=text, query_text=query_text, mirea=False, web_search=False,

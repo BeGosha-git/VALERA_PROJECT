@@ -31,6 +31,7 @@ from bs4 import BeautifulSoup
 
 from russian_text_to_speech.NeuralSpeaker import NeuralSpeaker
 from tts_backends import get_xtts_client
+from valera_memory import ConversationMemory, CONTINUE_RE, recall_kind
 from kairos_asr import KairosASR
                                                                                                               
 # Рантайм-состояние проекта: общие настройки, буферы для GUI и триггеры
@@ -2147,6 +2148,9 @@ class VoiceAssistant:
 
         # Локальная история (резерв) — держим последние 10 обменов
         self._conversation_history: list = []
+        # Долговременная память: обмены переживают смену чата и перезапуск.
+        self.memory = ConversationMemory()
+        self._last_mirea = False
         # Откуда пришёл последний ответ: "chat" (серверный чат с контекстом),
         # "query" (прямой запрос) или "direct" (быстрый ответ через LLM).
         self._last_query_source: str = ""
@@ -2509,7 +2513,7 @@ class VoiceAssistant:
         """
         # Последние 4 обмена (8 сообщений) — достаточно, чтобы понять
         # уточнение, и не раздувает запрос.
-        history = list(self._conversation_history[-8:])
+        history = list(self._conversation_history[-12:])
         if self.rag is not None:
             answer = self.rag.direct_answer(question, history=history, hint=hint)
             if answer:
@@ -2560,7 +2564,7 @@ class VoiceAssistant:
         # Модель упёрлась — отвечаем сами, без канцелярита.
         return UNRECOGNIZED_REPLY if gibberish else clarify_reply(mirea_related)
 
-    def _remember_exchange(self, question: str, answer: str) -> None:
+    def _remember_exchange(self, question: str, answer: str, persist: bool = True) -> None:
         """
         Дописывает обмен в ЛОКАЛЬНУЮ историю (последние 10 обменов).
 
@@ -2576,6 +2580,9 @@ class VoiceAssistant:
         self._conversation_history.append({"role": "user", "content": question})
         self._conversation_history.append({"role": "assistant", "content": answer})
         self._conversation_history = self._conversation_history[-20:]  # 10 обменов
+        if persist:
+            # В долговременную память — с id чата и темой (вуз/не вуз).
+            self.memory.add(question, answer, chat_id=self._chat_id, mirea=self._last_mirea)
 
     def _rag_query(
         self,
@@ -3020,8 +3027,60 @@ class VoiceAssistant:
             )
             kb_hit = kb_match(query_text)
             mirea_related = kb_hit is not None
+            self._last_mirea = mirea_related
             if query_text != clean_text:
                 print(f"🔄 Нормализация: {query_text}")
+
+            # --- Память: «что было раньше», «о чём говорили», «повтори» -----------
+            # Достаём прошлые обмены (в том числе из прошлых чатов) и просим модель
+            # ответить по ним — без поиска по базе знаний.
+            if recall_kind(query_text) and not is_self_question(query_text):
+                kind, mem_rows = self.memory.recall(query_text, current_chat=self._chat_id)
+                print(f"🧠 Вопрос о прошлом ({kind}) — достаю из памяти: {len(mem_rows)} обмен(ов).")
+                self.runtime.set_status("Вспоминаю…")
+                if not mem_rows:
+                    answer = "Мы пока ни о чём не говорили — это наш первый разговор. Спроси что-нибудь!"
+                else:
+                    ctx = ConversationMemory.format_context(mem_rows)
+                    if kind == "repeat":
+                        hint = ("Гость просит повторить. Вот твой последний ответ — повтори его своими "
+                                "словами, коротко:\n" + ctx)
+                    else:
+                        hint = ("Гость спрашивает, что было раньше в разговорах. Вот записи из твоей "
+                                "памяти (от старых к новым):\n" + ctx + "\nОтветь коротко по этим записям, "
+                                "ничего не выдумывай; если нужного там нет — скажи, что не помнишь.")
+                    answer = self._direct_llm(query_text, hint=hint)
+                    if not answer:
+                        answer = mem_rows[-1]["a"] if kind == "repeat" else \
+                            "Хм, не получилось вспомнить. Спроси ещё раз."
+                answer = finalize_answer(answer)
+                log_question(
+                    raw_text=text, query_text=query_text, mirea=False, web_search=False,
+                    answer=answer, chat_id=self._chat_id, source="memory",
+                )
+                self._remember_exchange(query_text, answer, persist=(kind != "repeat"))
+                self.runtime.set_transcript(clean_text, answer)
+                self._speak(answer)
+                print("✅ Готово. Слушаю дальше...\n")
+                self.runtime.set_status("Слушаю…")
+                return
+
+            # --- Уточнения: «а сколько стоит?», «подробнее», «а там метро есть?» ---
+            # Такая реплика сама по себе ничего не говорит базе знаний, поэтому
+            # для поиска дополняем её прошлым вопросом и сохраняем тему (вуз).
+            rag_text = query_text
+            fu_base = None if is_self_question(query_text) else self.memory.followup_base(query_text)
+            if fu_base is not None:
+                if CONTINUE_RE.search(query_text):
+                    rag_text = (f"{fu_base['q']}. Продолжи и дополни ответ новыми фактами, не повторяя "
+                                f"уже сказанное: «{fu_base['a'][:160]}»")
+                else:
+                    rag_text = f"{fu_base['q']}. {query_text}"
+                if fu_base.get("mirea") and not mirea_related:
+                    mirea_related = True
+                    kb_hit = "уточнение"
+                    self._last_mirea = True
+                print(f"🔗 Уточнение к «{fu_base['q'][:60]}» → поиск: {rag_text[:120]}")
 
             # --- Вопросы О САМОМ РОБОТЕ («ты кто», «как зовут», «Лера, ты
             # работаешь?») ---------------------------------------------------
@@ -3129,7 +3188,7 @@ class VoiceAssistant:
                         print(f"📚 Поиск по коллекции (МИРЭА): {collection_id}")
                         self.runtime.set_status("Поиск в базе МИРЭА…")
                         rag_result = self._rag_query(
-                            query_text=query_text,
+                            query_text=rag_text,
                             collection_id=collection_id,
                             use_web_search=False,
                             use_agent_search=False,
@@ -3139,7 +3198,7 @@ class VoiceAssistant:
                         print("⚠️ Нет коллекций — ищу в интернете.")
                         self.runtime.set_status("Поиск в интернете…")
                         rag_result = self._rag_query(
-                            query_text=query_text,
+                            query_text=rag_text,
                             use_web_search=True,
                             use_agent_search=False,
                             max_results=3,
@@ -3160,7 +3219,7 @@ class VoiceAssistant:
                     else:
                         self.runtime.set_status("Поиск в интернете…")
                     rag_result = self._rag_query(
-                        query_text=query_text,
+                        query_text=rag_text,
                         use_web_search=True,
                         use_agent_search=use_agent,
                         max_results=5,

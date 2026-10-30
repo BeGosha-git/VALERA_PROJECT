@@ -43,6 +43,11 @@ RECALL_RE = re.compile(
     r"|в\s+прошлый\s+раз|прошл\w+\s+(?:раз|разговор|чат|беседа|вопрос)"
     r"|\bран(?:ьше|ее)\b|\bвчера\b|\bдо\s+этого\b|\bперед\s+этим\b"
     r"|\bнапомни\b|\bпомнишь\b|\bчто\s+(?:у\s+нас\s+)?было\b|\bпредыдущ\w+"
+    r"|\bчто\s+(?:мы|я|ты|вы)\s+(?:\w+\s+){0,2}(?:говорили|обсуждали|спрашивал\w*|говорил\w*|просил\w*|"
+    r"рассказывал\w*|отвечал\w*|сказал\w*)"
+    r"|\bпро\s+что\s+(?:мы|я)\s+(?:\w+\s+){0,2}(?:говорили|спрашивал\w*|обсуждали)"
+    r"|\bо\s+ч[её]м\s+(?:мы|я)\s+(?:\w+\s+){0,2}(?:говорили|спрашивал\w*|обсуждали)"
+    r"|\bна\s+чём\s+(?:мы\s+)?остановились|\bмо[йё]\s+(?:предыдущий|последний)\s+вопрос"
     r")"
 )
 # «Повтори / ещё раз» — вернуть последний ответ.
@@ -56,6 +61,13 @@ CONTINUE_RE = re.compile(
 ELLIPSIS_START_RE = re.compile(
     r"(?i)^\s*(?:ну\s+|то\s+есть\s+|а\s+|и\s+)(?:если|как|где|когда|сколько|почему|зачем|какой|какая|какие|"
     r"что|кто|куда|можно|есть|нужно|надо|там|он|она|они|это|тогда)\b"
+)
+# Междометия и поддакивания — не вопросы и не продолжение темы.
+FILLER_RE = re.compile(r"(?i)^\s*(?:ну\s+)?(?:да|нет|ага|угу|ладно|ок|окей|хорошо|понятно|ясно|ну|так|ясно\s+понятно)[\s.!?,]*$")
+# Явно новая тема: «расскажи про X», «что такое X», «как работает X».
+NEWTOPIC_RE = re.compile(
+    r"(?i)^\s*(?:ну\s+|а\s+)?(?:(?:расскажи\w*|покажи\w*|объясни\w*|опиши\w*)\s+(?:мне\s+)?(?:про|о|об)\b"
+    r"|что\s+такое\b|кто\s+так(?:ой|ая)\b|что\s+за\b|как\s+работает\b)"
 )
 PRONOUN_RE = re.compile(r"(?i)\b(?:это|этот|эта|эти|этого|этом|там|туда|оттуда|он|она|они|его|её|ее|их|тот|то)\b")
 
@@ -163,11 +175,13 @@ class ConversationMemory:
             pass
 
     def add(self, question: str, answer: str, chat_id: Optional[str] = None,
-            mirea: bool = False) -> None:
+            mirea: bool = False, eq: Optional[str] = None) -> None:
         if not question or not answer:
             return
         row = {"ts": time.time(), "chat": chat_id, "q": question.strip()[:400],
                "a": answer.strip()[:600], "mirea": bool(mirea)}
+        if eq and eq.strip() != question.strip():
+            row["eq"] = eq.strip()[:300]   # «эффективный» вопрос с учётом контекста
         with self._lock:
             self.rows.append(row)
             self.rows = self.rows[-MAX_ROWS:]
@@ -182,18 +196,31 @@ class ConversationMemory:
         with self._lock:
             return self.rows[-1] if self.rows else None
 
-    def followup_base(self, text: str) -> Optional[Dict]:
+    def followup_base(self, text: str, has_own_topic: bool = False) -> Optional[Dict]:
         """
         Предыдущий обмен, если ``text`` — уточнение («а сколько стоит?», «подробнее»,
-        «а там есть метро?»). Иначе None.
+        «а там есть метро?», «а какие баллы примерно?»). Иначе None.
+
+        ``has_own_topic`` — в самой реплике есть слово-тема (МИРЭА, общежитие…): тогда
+        это скорее новый вопрос, и продолжением он считается только при явных признаках
+        (союз «а…», местоимение, «подробнее»).
         """
         prev = self.last()
         if not prev or time.time() - prev["ts"] > FOLLOWUP_WINDOW_SEC:
             return None
+        if GREET_RE.search(text) or THANKS_RE.search(text) or FILLER_RE.match(text):
+            return None
         words = text.split()
-        if CONTINUE_RE.search(text) and len(words) <= 6:
+        n = len(words)
+        if NEWTOPIC_RE.match(text):
+            return None
+        if CONTINUE_RE.search(text) and n <= 6:
             return prev
-        if len(words) <= 6 and (ELLIPSIS_START_RE.search(text) or PRONOUN_RE.search(text)):
+        if n <= 8 and (ELLIPSIS_START_RE.search(text) or PRONOUN_RE.search(text)):
+            return prev
+        # Совсем короткая реплика сама по себе тему не задаёт («сколько мест?», «а стоимость?»),
+        # как и реплика без слов-тем — это продолжение разговора, а не новый вопрос.
+        if n <= 4 or (not has_own_topic and n <= 6):
             return prev
         return None
 
@@ -210,6 +237,11 @@ class ConversationMemory:
             return kind, []
         if kind == "repeat":
             return kind, rows[-1:]
+        if re.search(r"(?i)\b(?:только\s+что|сейчас|до\s+этого|перед\s+этим|минуту\s+назад)\b", text):
+            now = time.time()
+            recent = [r for r in rows if now - r["ts"] <= FOLLOWUP_WINDOW_SEC]
+            if recent:
+                return kind, recent[-limit:]
         topic = set(_stems(RECALL_RE.sub(" ", text)))
         if topic:
             now = time.time()

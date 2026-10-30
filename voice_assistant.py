@@ -2214,6 +2214,7 @@ class VoiceAssistant:
         # Долговременная память: обмены переживают смену чата и перезапуск.
         self.memory = ConversationMemory()
         self._last_mirea = False
+        self._last_effective = ""
         # Откуда пришёл последний ответ: "chat" (серверный чат с контекстом),
         # "query" (прямой запрос) или "direct" (быстрый ответ через LLM).
         self._last_query_source: str = ""
@@ -2649,7 +2650,8 @@ class VoiceAssistant:
         self._conversation_history = self._conversation_history[-20:]  # 10 обменов
         if persist:
             # В долговременную память — с id чата и темой (вуз/не вуз).
-            self.memory.add(question, answer, chat_id=self._chat_id, mirea=self._last_mirea)
+            self.memory.add(question, answer, chat_id=self._chat_id, mirea=self._last_mirea,
+                            eq=self._last_effective or None)
 
     def _rag_query(
         self,
@@ -3095,6 +3097,7 @@ class VoiceAssistant:
             kb_hit = kb_match(query_text)
             mirea_related = kb_hit is not None
             self._last_mirea = mirea_related
+            self._last_effective = query_text
             # Потолок длины ответа — по вопросу (факт — коротко, «расскажи» — развёрнуто).
             budget = set_answer_budget(query_text)
             print(f"📏 Длина ответа: до {budget} слов")
@@ -3139,13 +3142,18 @@ class VoiceAssistant:
             # Такая реплика сама по себе ничего не говорит базе знаний, поэтому
             # для поиска дополняем её прошлым вопросом и сохраняем тему (вуз).
             rag_text = query_text
-            fu_base = None if is_self_question(query_text) else self.memory.followup_base(query_text)
+            fu_base = None if is_self_question(query_text) else self.memory.followup_base(
+                query_text, has_own_topic=(kb_hit is not None))
             if fu_base is not None:
+                # База — «эффективный» вопрос прошлого обмена: так тема тянется по цепочке
+                # («магистратура» → «баллы» → «а стоимость?»), а не теряется на втором шаге.
+                base_q = (fu_base.get("eq") or fu_base["q"])[:240]
                 if CONTINUE_RE.search(query_text):
-                    rag_text = (f"{fu_base['q']}. Продолжи и дополни ответ новыми фактами, не повторяя "
+                    rag_text = (f"{base_q}. Продолжи и дополни ответ новыми фактами, не повторяя "
                                 f"уже сказанное: «{fu_base['a'][:160]}»")
                 else:
-                    rag_text = f"{fu_base['q']}. {query_text}"
+                    rag_text = f"{base_q}. {query_text}"
+                self._last_effective = rag_text
                 if fu_base.get("mirea") and not mirea_related:
                     mirea_related = True
                     kb_hit = "уточнение"

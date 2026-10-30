@@ -189,18 +189,9 @@ class OllamaService(LLMService):
         return (resp.json().get("message") or {}).get("content", "") or \
             'No response received'
 
-    _THINK_CACHE = {}
-
     def _can_think(self):
-        """Умеет ли модель «думать» (по /api/show → capabilities; имя не подходит: true_valera — это Gemma 4)."""
-        key = self.model
-        if key not in OllamaService._THINK_CACHE:
-            try:
-                r = requests.post(f"{self.base_url}/show", json={"model": self.model}, timeout=5)
-                OllamaService._THINK_CACHE[key] = "thinking" in (r.json().get("capabilities") or [])
-            except Exception:  # noqa: BLE001
-                return False
-        return OllamaService._THINK_CACHE[key]
+        """Всегда True: think=false безвреден для моделей без размышлений, а Gemma/Qwen без него отдают пустой ответ."""
+        return True
 
     def _iter_stream(self, data):
         """Читает NDJSON-поток /api/chat и отдаёт кусочки текста."""

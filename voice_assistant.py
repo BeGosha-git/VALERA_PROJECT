@@ -2085,26 +2085,16 @@ def _mark_local_llm_down(reason: str = "") -> None:
     )
 
 
-_think_cache: dict = {}
-
-
-def ollama_think_off(model: str) -> dict:
+def ollama_think_off(model: str = "") -> dict:
     """
-    Для «думающих» моделей отключаем режим размышлений: голосовому роботу нужен быстрый
-    ответ, а не цепочка рассуждений (иначе токены уходят в «мысли» и ответ пустой или медленный).
+    Всегда просим Ollama НЕ «думать» (think=false).
 
-    Способность модели думать читаем у самой Ollama (/api/show → capabilities), потому что по
-    имени её не угадать: наша «true_valera» — это Gemma 4 под другим именем. Результат кэшируется.
+    Gemma 4 / Qwen 3 по умолчанию тратят весь лимит токенов на «размышления» и отдают пустой
+    content — робот молчит («Ollama не ответила (пустой ответ)»). Моделям без режима размышлений
+    параметр безвреден (проверено на llama3.2), поэтому шлём его всем и не гадаем по имени модели
+    (наша true_valera — это Gemma 4 под другим именем).
     """
-    if not model:
-        return {}
-    if model not in _think_cache:
-        try:
-            r = requests.post(f"{OLLAMA_URL}/api/show", json={"model": model}, timeout=5)
-            _think_cache[model] = "thinking" in (r.json().get("capabilities") or [])
-        except Exception:  # noqa: BLE001
-            return {}          # не удалось узнать — не кэшируем, спросим в следующий раз
-    return {"think": False} if _think_cache[model] else {}
+    return {"think": False}
 
 
 def _ollama_chat(

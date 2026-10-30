@@ -31,6 +31,7 @@ from bs4 import BeautifulSoup
 
 from russian_text_to_speech.NeuralSpeaker import NeuralSpeaker
 from tts_backends import get_xtts_client
+from asr_fix import fix_asr
 from valera_memory import ConversationMemory, CONTINUE_RE, GREET_RE, THANKS_RE, recall_kind, style_hint
 from kairos_asr import KairosASR
                                                                                                               
@@ -3212,9 +3213,9 @@ class VoiceAssistant:
             # уходил искать посторонних людей). Проверяем тему уже по
             # нормализованному тексту — тогда опечатки распознавания
             # («статсоюз», «стуцсоюз») тоже уходят в базу вуза.
-            query_text = normalize_tech_terms(normalize_studsouz(
+            query_text = fix_asr(normalize_tech_terms(normalize_studsouz(
                 normalize_name(normalize_mirea(clean_text))
-            ))
+            )))
             kb_hit = kb_match(query_text)
             mirea_related = kb_hit is not None
             self._last_mirea = mirea_related

@@ -712,7 +712,7 @@ def _maybe_rerank(query, scored, limit):
     ``scored`` — [(оценка, item)] по убыванию гибридной оценки. Берём первых N, просим сервис оценить
     пары «вопрос — фрагмент» и смешиваем: итог = alpha * оценка_реранкера + (1 - alpha) * гибридная
     (нормированная). Сервис недоступен — молча возвращаем исходный порядок (30 с не стучимся).
-    Отключить: RAG_RERANK=0. Подбор alpha: RERANK_ALPHA (по умолчанию 0.7), см. eval_retrieval.py.
+    Отключить: RAG_RERANK=0. Подбор alpha: RERANK_ALPHA (по умолчанию 0.5), см. eval_retrieval.py.
     """
     global _RERANK_DOWN_UNTIL
     import time as _t
@@ -731,7 +731,9 @@ def _maybe_rerank(query, scored, limit):
     except Exception:  # noqa: BLE001
         _RERANK_DOWN_UNTIL = _t.time() + 30
         return scored
-    alpha = float(os.getenv("RERANK_ALPHA", "0.7"))
+    # Подобрано по eval_retrieval.py (139 вопросов FAQ): без реранкера ответ есть в тексте топ-3 у 59,7 %,
+    # с alpha=0,5 — у 72,7 % (топ-1: 22→36 %). Цена: +≈0,27 с на поиск.
+    alpha = float(os.getenv("RERANK_ALPHA", "0.5"))
     hs = [s for s, _ in head]
     lo, hi = min(hs), max(hs)
     span = (hi - lo) or 1.0

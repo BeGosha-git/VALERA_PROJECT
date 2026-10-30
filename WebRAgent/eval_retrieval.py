@@ -38,6 +38,24 @@ def is_gold(title: str, gold: str) -> bool:
     return any(sec == g or sec.startswith(g + ".") for g in re.findall(r"\d+(?:\.\d+)*", gold))
 
 
+def key_tokens(answer: str):
+    """Опорные токены эталонного ответа: числа от 2 цифр и слова от 6 букв (в нижнем регистре)."""
+    nums = re.findall(r"\d[\d\s]*\d", re.sub(r"\[И[^\]]*\]", "", answer))
+    words = re.findall(r"[а-яёa-z]{6,}", answer.lower())
+    return {n.replace(" ", "") for n in nums} | set(words[:25])
+
+
+def answer_covered(texts, answer: str, share: float = 0.6) -> bool:
+    """Есть ли в найденных текстах не менее ``share`` опорных токенов эталонного ответа."""
+    toks = key_tokens(answer)
+    if not toks:
+        return False
+    blob = " ".join(texts).lower().replace(" ", "")
+    low = " ".join(texts).lower()
+    found = sum(1 for t in toks if t in low or t in blob)
+    return found / len(toks) >= share
+
+
 def main():
     path = sys.argv[1] if len(sys.argv) > 1 else "/tmp/faq.jsonl"
     limit = int(os.getenv("EVAL_LIMIT", "10"))
@@ -51,11 +69,16 @@ def main():
     ds = DocumentService()
     hits = {1: 0, 3: 0, 5: 0}
     mrr, total, t0, misses = 0.0, 0, time.time(), []
+    cover = {1: 0, 3: 0}
     for r in rows:
         res = ds.search_documents(cid, r["вопрос"], limit=limit).get("results", [])
         # Подставленные «лучшие записи FAQ» (document_title == 'faq') в оценку не берём: тестовые вопросы
         # взяты из того же FAQ, и это было бы подсказкой самому себе. Оцениваем только поиск по фрагментам.
-        titles = [x.get("document_title", "") for x in res if "faq" not in x.get("document_title", "").lower()]
+        res = [x for x in res if "faq" not in x.get("document_title", "").lower()]
+        titles = [x.get("document_title", "") for x in res]
+        for k in cover:
+            if answer_covered([x.get("content", "") for x in res[:k]], r["ответ"]):
+                cover[k] += 1
         rank = next((i + 1 for i, t in enumerate(titles) if is_gold(t, r["раздел"])), None)
         total += 1
         if rank:
@@ -68,6 +91,7 @@ def main():
     dt = time.time() - t0
     print(f"вопросов: {total}  | top1 {hits[1]/total:.1%}  top3 {hits[3]/total:.1%}  top5 {hits[5]/total:.1%}  MRR {mrr/total:.3f}  "
           f"| {dt/total*1000:.0f} мс/вопрос  | RAG_VEC_WEIGHT={os.getenv('RAG_VEC_WEIGHT', 'по умолчанию')} RAG_RERANK={os.getenv('RAG_RERANK', '0')}")
+    print(f"   ответ найден в тексте топ-1: {cover[1]/total:.1%} | топ-3: {cover[3]/total:.1%}  (любой документ, не только эталонный фрагмент)")
     if os.getenv("EVAL_SHOW_MISSES"):
         for q, g, got in misses[:25]:
             print("  ✗", q[:70], "| нужен раздел", g, "| получили", got)

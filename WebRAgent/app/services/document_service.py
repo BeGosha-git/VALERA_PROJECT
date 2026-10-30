@@ -702,6 +702,44 @@ def _get_snapshot(qdrant_service: "QdrantService", collection_id: str):
     return snap
 
 
+_RERANK_DOWN_UNTIL = 0.0
+
+
+def _maybe_rerank(query, scored, limit):
+    """
+    Переранжирование лучших кандидатов cross-encoder'ом (сервис rerank_service на GPU).
+
+    ``scored`` — [(оценка, item)] по убыванию гибридной оценки. Берём первых N, просим сервис оценить
+    пары «вопрос — фрагмент» и смешиваем: итог = alpha * оценка_реранкера + (1 - alpha) * гибридная
+    (нормированная). Сервис недоступен — молча возвращаем исходный порядок (30 с не стучимся).
+    Отключить: RAG_RERANK=0. Подбор alpha: RERANK_ALPHA (по умолчанию 0.7), см. eval_retrieval.py.
+    """
+    global _RERANK_DOWN_UNTIL
+    import time as _t
+
+    if os.getenv("RAG_RERANK", "1") == "0" or _t.time() < _RERANK_DOWN_UNTIL or len(scored) < 2:
+        return scored
+    n = min(len(scored), max(limit * 3, int(os.getenv("RERANK_TOP", "10"))))
+    head, tail = scored[:n], scored[n:]
+    try:
+        import requests as _rq
+
+        url = os.getenv("RERANK_URL", "http://172.17.0.1:8152")
+        r = _rq.post(f"{url}/rerank", json={"query": query, "passages": [it["content"] for _, it in head]},
+                     timeout=float(os.getenv("RERANK_TIMEOUT", "4")))
+        rr = r.json()["scores"]
+    except Exception:  # noqa: BLE001
+        _RERANK_DOWN_UNTIL = _t.time() + 30
+        return scored
+    alpha = float(os.getenv("RERANK_ALPHA", "0.7"))
+    hs = [s for s, _ in head]
+    lo, hi = min(hs), max(hs)
+    span = (hi - lo) or 1.0
+    mixed = [(alpha * rr[i] + (1 - alpha) * (hs[i] - lo) / span, head[i][1]) for i in range(len(head))]
+    mixed.sort(key=lambda x: x[0], reverse=True)
+    # возвращаем в шкале исходных оценок (дальше код использует score только для вывода)
+    return [(m, it) for m, it in mixed] + tail
+
 class DocumentService:
     """Service for processing and managing documents"""
     
@@ -1434,7 +1472,10 @@ class DocumentService:
         # Вес вектора: у английской MiniLM он низкий (на русском она ненадёжна),
         # у многоязычных моделей (multilingual-*, bge-m3, e5) вектору можно доверять больше.
         emb_name = (getattr(collection, "embedding_model", "") or "").lower()
-        vec_weight = 0.40 if any(k in emb_name for k in ("multilingual", "bge-m3", "e5")) else 0.20
+        # Подобрано по eval_retrieval.py на FAQ (139 вопросов): вес 0,2→0,4→0,7 дал top-1 44,6→44,6→48,2 %, MRR 0,477→0,478→0,522.
+        vec_weight = 0.70 if any(k in emb_name for k in ("multilingual", "bge-m3", "e5")) else 0.20
+        if os.getenv("RAG_VEC_WEIGHT"):          # подбор веса по тестовому набору (eval_retrieval.py)
+            vec_weight = float(os.getenv("RAG_VEC_WEIGHT"))
 
         scored = []
         avg_len = snapshot.get("avg_len") or 1.0
@@ -1546,6 +1587,7 @@ class DocumentService:
             scored.append((score, item))
 
         scored.sort(key=lambda x: x[0], reverse=True)
+        scored = _maybe_rerank(query, scored, limit)
         results = scored[:limit]
 
         # Format search results

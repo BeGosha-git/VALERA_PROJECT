@@ -392,6 +392,41 @@ stop_xtts() {
 }
 
 # ---------------------------------------------------------------------------
+# Переранжирование поиска (rerank_service, BAAI/bge-reranker-v2-m3) — на карте XTTS
+# ---------------------------------------------------------------------------
+RERANK_PORT="${RERANK_PORT:-8152}"
+RERANK_PID=""
+start_rerank() {
+    [ "${RAG_RERANK:-1}" = "0" ] && { echo "[Rerank] RAG_RERANK=0 — пропускаю."; return 0; }
+    if curl -s -m 2 --noproxy '*' "http://127.0.0.1:$RERANK_PORT/health" 2>/dev/null | grep -q '"ok"'; then
+        echo "[Rerank] Сервис уже работает на :$RERANK_PORT."; return 0
+    fi
+    local model_dir="${RERANK_MODEL_DIR:-$HOME/.cache/valera/bge-reranker-v2-m3}"
+    if [ ! -f "$model_dir/model.safetensors" ]; then
+        echo "[Rerank] Модели нет ($model_dir). Скачать: bash rerank_service/download_model.sh — пока поиск без переранжирования."
+        return 0
+    fi
+    conda env list | grep -q "^$XTTS_ENV_NAME " || { echo "[Rerank] Нет окружения $XTTS_ENV_NAME — пропускаю."; return 0; }
+    export CUDA_DEVICE_ORDER=PCI_BUS_ID
+    local gpu="${RERANK_GPU:-${XTTS_GPU:-0}}"
+    echo "[Rerank] Запускаю на GPU $gpu, порт $RERANK_PORT..."
+    ( conda activate "$XTTS_ENV_NAME" && \
+      CUDA_VISIBLE_DEVICES="$gpu" RERANK_PORT="$RERANK_PORT" NO_PROXY="*" exec python "$SCRIPT_DIR/rerank_service/server.py" ) &
+    RERANK_PID=$!
+    local i
+    for i in $(seq 1 40); do
+        curl -s -m 2 --noproxy '*' "http://127.0.0.1:$RERANK_PORT/health" 2>/dev/null | grep -q '"ok"' && { echo "  ✓ Реранкер готов (PID $RERANK_PID)"; return 0; }
+        kill -0 "$RERANK_PID" 2>/dev/null || { echo "  ⚠️ Реранкер завершился — поиск без него."; RERANK_PID=""; return 0; }
+        sleep 2
+    done
+    echo "  ⚠️ Реранкер не ответил за 80 с — поиск пока без него."
+}
+stop_rerank() {
+    [ -n "$RERANK_PID" ] && kill "$RERANK_PID" 2>/dev/null || true
+    pkill -f "rerank_service/server.py" >/dev/null 2>&1 || true
+}
+
+# ---------------------------------------------------------------------------
 # Функция очистки при завершении
 # ---------------------------------------------------------------------------
 cleanup() {
@@ -400,6 +435,7 @@ cleanup() {
     # Приложение (веб-пульт/GUI) — ПЕРВЫМ, он держит порт и микрофон
     stop_app
     stop_xtts
+    stop_rerank
     if [ -f "$WEBRAGENT_DIR/docker-compose.yml" ]; then
         docker compose -f "$WEBRAGENT_DIR/docker-compose.yml" down 2>/dev/null || true
     fi
@@ -547,7 +583,7 @@ esac
 
 # Основной голос — XTTS-v2 (нужен только режимам, где робот говорит).
 case "$RUN_MODE" in
-    talk|voice|voice-fast|web|gui) start_xtts ;;
+    talk|voice|voice-fast|web|gui) start_xtts; start_rerank ;;
 esac
 
 # 5. Запуск приложения

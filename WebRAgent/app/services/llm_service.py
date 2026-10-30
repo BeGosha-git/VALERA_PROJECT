@@ -122,6 +122,22 @@ class LLMService(ABC):
             print(f"Error generating chat response: {e}")
             return f"Error generating response: {str(e)}"
     
+    def stream_chat_response(self, messages, context=None, max_tokens=1000):
+        """
+        Потоковый ответ: генератор кусочков текста по мере генерации.
+
+        Нужен голосовому роботу: первое предложение озвучивается, пока модель
+        ещё пишет остальное. Провайдеры без стриминга отдают весь ответ одним куском.
+        """
+        formatted_messages = list(messages)
+        if context:
+            self._enhance_messages_with_context(formatted_messages, context)
+        yield from self._stream_chat_completion(formatted_messages, max_tokens)
+
+    def _stream_chat_completion(self, messages, max_tokens):
+        """По умолчанию — без стриминга: один кусок целого ответа."""
+        yield self._generate_chat_completion(messages, max_tokens)
+
     def _enhance_messages_with_context(self, messages, context):
         """
         Enhance messages with context - common implementations

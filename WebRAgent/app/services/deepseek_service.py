@@ -129,6 +129,25 @@ class DeepSeekService(LLMService):
         )
         return (response.choices[0].message.content or "").strip()
 
+    def _stream_chat_completion(self, messages, max_tokens):
+        """Потоковая генерация (OpenAI-совместимый stream=True)."""
+        stream = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=max(max_tokens, 64),
+            temperature=self._temperature_for("", messages),
+            top_p=TOP_P,
+            presence_penalty=PRESENCE_PENALTY,
+            frequency_penalty=FREQUENCY_PENALTY,
+            stream=True,
+        )
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            piece = getattr(chunk.choices[0].delta, "content", None)
+            if piece:
+                yield piece
+
     def _generate_chat_completion(self, messages, max_tokens):
         """
         Ответ с учётом истории диалога.

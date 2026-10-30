@@ -176,10 +176,13 @@ def chat_query(chat_id):
         
         chat.add_message('assistant', assistant_response, metadata)
         
-        # If this is the first exchange, generate a title for the chat
+        # Первый обмен — генерируем название чата. Раньше это был ЕЩЁ ОДИН синхронный вызов LLM
+        # перед ответом (гость ждал лишние секунды); теперь — в фоне.
         if chat.message_count <= 2:
-            llm_service = LLMFactory.create_llm_service()
-            chat.generate_title(llm_service)
+            import threading
+            threading.Thread(
+                target=lambda: chat.generate_title(LLMFactory.create_llm_service()), daemon=True
+            ).start()
             
         # Process the response
         import markdown
@@ -209,6 +212,67 @@ def chat_query(chat_id):
             'error': 'Failed to process query',
             'message': str(e)
         }), 500
+
+@chat_bp.route('/<chat_id>/query_stream', methods=['POST'])
+@login_required
+def query_chat_stream(chat_id):
+    """
+    Потоковый ответ по базе знаний (NDJSON): голосовой робот начинает говорить с первого
+    предложения, пока модель ещё пишет остальное.
+
+    Строки потока: {"t":"meta"} → {"t":"d","x":"…"}… → {"t":"done","response":"…"} (или {"t":"err"}).
+    Работает только для поиска по коллекции; веб-поиск и агентный поиск — через обычный /query.
+    """
+    import json as _json
+    import threading
+    from flask import Response, stream_with_context
+
+    chat = Chat.get(chat_id)
+    if not chat:
+        return jsonify({'error': 'Chat not found'}), 404
+    if chat.user_id != current_user.id:
+        return jsonify({'error': 'You do not have permission to access this chat'}), 403
+    collection_id = request.form.get('collection_id')
+    query_text = request.form.get('query')
+    if not query_text or not collection_id:
+        return jsonify({'error': 'Нужны query и collection_id'}), 400
+    try:
+        max_results = min(max(int(request.form.get('max_results', 4)), 1), 10)
+    except ValueError:
+        max_results = 4
+
+    chat.add_message('user', query_text)
+    chat_context = chat.get_context()
+
+    def generate():
+        full = ""
+        try:
+            rag_service = RAGService()
+            for ev in rag_service.process_query_stream(
+                collection_id=collection_id, query=query_text,
+                max_results=max_results, conversation_context=chat_context,
+            ):
+                if ev["t"] == "done":
+                    full = ev["response"]
+                    ev = {"t": "done", "response": full}
+                yield _json.dumps(ev, ensure_ascii=False) + "\n"
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Ошибка потокового запроса: {e}")
+            yield _json.dumps({"t": "err", "message": str(e)}, ensure_ascii=False) + "\n"
+            return
+        if full:
+            chat.add_message('assistant', full, {'search_type': 'document', 'collection_id': collection_id, 'stream': True})
+            if chat.message_count <= 2:
+                # Название чата генерирует LLM — отдельным потоком, чтобы не задерживать ответ.
+                threading.Thread(
+                    target=lambda: chat.generate_title(LLMFactory.create_llm_service()), daemon=True
+                ).start()
+
+    resp = Response(stream_with_context(generate()), mimetype='application/x-ndjson')
+    resp.headers['Cache-Control'] = 'no-cache'
+    resp.headers['X-Accel-Buffering'] = 'no'
+    return resp
+
 
 @chat_bp.route('/<chat_id>/messages')
 @login_required

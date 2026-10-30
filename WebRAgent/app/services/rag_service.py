@@ -4,6 +4,56 @@ from app.services.prompt_template_service import PromptTemplateService
 
 class RAGService:
     """Retrieval-Augmented Generation service"""
+
+    def process_query_stream(self, collection_id, query, max_results=3, max_tokens=1000, conversation_context=None):
+        """
+        Потоковая версия process_query: генератор событий.
+
+          {"t": "meta", "contexts": N, "model_info": {...}}   — найденные фрагменты
+          {"t": "d", "x": "кусок текста"}                      — очередной кусок ответа
+          {"t": "done", "response": "весь ответ"}              — конец
+
+        Поиск и промпт те же, что в process_query; отличие только в том, что ответ модели
+        отдаётся кусочками, и клиент (голосовой ассистент) может начать озвучку с первого
+        предложения.
+        """
+        search_results = self.document_service.search_documents(
+            collection_id=collection_id, query=query, limit=max_results
+        )
+        contexts = []
+        for result in search_results.get('results', []):
+            contexts.append({
+                'document_id': result.get('document_id', ''),
+                'document_title': result.get('document_title', 'Unknown'),
+                'content': result.get('content', ''),
+                'score': result.get('score', 0.0),
+                'file_path': result.get('file_path', ''),
+                'page_number': result.get('page_number', 1),
+            })
+        formatted_context = PromptTemplateService.format_context(contexts) if contexts else ""
+        yield {"t": "meta", "contexts": len(contexts),
+               "model_info": {'provider': self.llm_service.get_provider_name(),
+                              'model': self.llm_service.get_model_name()}}
+
+        exchange = list(conversation_context or [])
+        # Текущий вопрос — последним и без дубля (как в process_query).
+        if exchange and exchange[-1].get('role') == 'user' and exchange[-1].get('content', '').strip() == query.strip():
+            exchange.pop()
+        valera_system = PromptTemplateService.get_system_message("rag")
+        replaced = False
+        for msg in exchange:
+            if msg.get('role') == 'system':
+                msg['content'] = valera_system
+                replaced = True
+        if not replaced:
+            exchange.insert(0, {'role': 'system', 'content': valera_system})
+        exchange.append({'role': 'user', 'content': query})
+
+        parts = []
+        for piece in self.llm_service.stream_chat_response(exchange, context=formatted_context, max_tokens=max_tokens):
+            parts.append(piece)
+            yield {"t": "d", "x": piece}
+        yield {"t": "done", "response": "".join(parts).strip(), "contexts": contexts}
     
     def __init__(self):
         """Initialize RAG service"""

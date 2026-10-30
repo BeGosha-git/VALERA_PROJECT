@@ -11,6 +11,7 @@ voice_assistant.py
 """
 import sys
 import os
+import json
 import re
 import time
 import queue
@@ -619,6 +620,30 @@ class RAGClient:
             return response.json()
         except requests.RequestException as e:
             raise RuntimeError(f"Ошибка соединения при запросе к чату: {e}")
+
+    def chat_query_stream(self, chat_id: str, query_text: str, collection_id: str, max_results: int = 4):
+        """
+        Потоковый вариант chat_query: генератор событий NDJSON от /chat/<id>/query_stream.
+        События: {"t":"meta"}, {"t":"d","x":"кусок"}, {"t":"done","response":…} или {"t":"err"}.
+        """
+        if not self._logged_in:
+            raise RuntimeError("Необходимо сначала выполнить login()")
+        data = {"query": query_text, "collection_id": collection_id,
+                "max_results": str(max(1, min(max_results, 10)))}
+        resp = self.session.post(f"{self.base_url}/chat/{chat_id}/query_stream", data=data,
+                                 stream=True, timeout=(10, 120))
+        if resp.status_code != 200:
+            raise RuntimeError(f"Ошибка потокового запроса: статус {resp.status_code}")
+        try:
+            for line in resp.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                try:
+                    yield json.loads(line)
+                except ValueError:
+                    continue
+        finally:
+            resp.close()
 
     def get_chat_messages(self, chat_id: str, limit: int = 50):
         """Возвращает сообщения чата (для отладки/восстановления истории)."""
@@ -1293,6 +1318,37 @@ _EN_WORDS = {
 # Разрешённые латинские обозначения, которые НЕ трогаем (единицы измерения,
 # модели техники), — их допустимо произносить как есть.
 _EN_KEEP = {"h1", "v2", "3d", "5g", "usb", "gpt"}
+
+
+_SENT_END_RE = re.compile(r"[.!?…]+(?=\s)")
+
+
+_ABBR = {"стр", "ул", "пр", "просп", "им", "г", "гг", "д", "к", "т", "тел", "руб", "тыс", "млн", "млрд",
+         "др", "см", "рис", "табл", "напр", "проф", "доц", "акад", "корп", "пом", "ауд", "каб"}
+
+
+def split_complete_sentences(buf: str):
+    """
+    Отделяет от буфера законченные предложения; хвост без конца остаётся в буфере.
+
+    Граница — «.!?…» + пробел + заглавная буква/кавычка следующего предложения. Не режем после
+    сокращений («стр.», «ул.», «г.», «т. е.»), перед строчной буквой/цифрой и пока следующий
+    символ ещё не пришёл.
+    """
+    out, start = [], 0
+    for m in _SENT_END_RE.finditer(buf):
+        end = m.end()
+        rest = buf[end:].lstrip()
+        if not rest:                      # следующий символ не пришёл — граница не подтверждена
+            break
+        if not (rest[0].isupper() or rest[0] in "«\"—-("):
+            continue                      # продолжение предложения («2026 г. по будням»)
+        word = re.findall(r"[\w-]+$", buf[start:m.start()])
+        if word and m.group(0) == "." and word[0].lower() in _ABBR:
+            continue                      # «стр.», «ул.», «г.»
+        out.append(buf[start:end].strip())
+        start = end
+    return out, buf[start:]
 
 
 def clean_english(text: str) -> str:
@@ -2029,14 +2085,26 @@ def _mark_local_llm_down(reason: str = "") -> None:
     )
 
 
+_think_cache: dict = {}
+
+
 def ollama_think_off(model: str) -> dict:
     """
-    Для «думающих» моделей (Gemma 4, Qwen 3/3.5…) отключаем режим размышлений:
-    голосовому роботу нужен быстрый ответ, а не длинная цепочка рассуждений.
-    Для остальных моделей (Llama и др.) параметр не отправляем — они его не знают.
+    Для «думающих» моделей отключаем режим размышлений: голосовому роботу нужен быстрый
+    ответ, а не цепочка рассуждений (иначе токены уходят в «мысли» и ответ пустой или медленный).
+
+    Способность модели думать читаем у самой Ollama (/api/show → capabilities), потому что по
+    имени её не угадать: наша «true_valera» — это Gemma 4 под другим именем. Результат кэшируется.
     """
-    import re as _re
-    return {"think": False} if _re.search(r"(?i)(gemma4|gemma-4|qwen3|deepseek-r1|gpt-oss|magistral)", model or "") else {}
+    if not model:
+        return {}
+    if model not in _think_cache:
+        try:
+            r = requests.post(f"{OLLAMA_URL}/api/show", json={"model": model}, timeout=5)
+            _think_cache[model] = "thinking" in (r.json().get("capabilities") or [])
+        except Exception:  # noqa: BLE001
+            return {}          # не удалось узнать — не кэшируем, спросим в следующий раз
+    return {"think": False} if _think_cache[model] else {}
 
 
 def _ollama_chat(
@@ -2753,6 +2821,107 @@ class VoiceAssistant:
         # Модель упёрлась — отвечаем сами, без канцелярита.
         return UNRECOGNIZED_REPLY if gibberish else clarify_reply(mirea_related)
 
+    def _stream_enabled(self) -> bool:
+        """
+        Потоковая озвучка: тумблер включён, озвучка включена, есть серверный чат.
+
+        Пересказ (rephrase_answers) при потоке не нужен: ответ по базе уже формулируется
+        промптом Валеры, а пересказ вторым вызовом модели только добавлял задержку.
+        """
+        if not self.runtime.feature("stream_tts", default=True) or not self.runtime.feature("tts", default=True):
+            return False
+        return bool(self._chat_id) and hasattr(self.rag, "chat_query_stream")
+
+    def _stream_answer(self, rag_text: str, collection_id: str) -> Optional[str]:
+        """
+        Ответ по базе знаний потоком: первое предложение озвучивается, пока модель пишет остальное.
+
+        Возвращает озвученный текст, либо None — если поток не удался до первого слова
+        (тогда вызывающий код делает обычный запрос без потока).
+        """
+        import queue as _queue
+
+        speaker = self.runtime.get("tts", "speaker", default=self._tts_speaker)
+        budget = current_answer_words()
+        sent_q: "_queue.Queue" = _queue.Queue()
+        pcm_q: "_queue.Queue" = _queue.Queue(maxsize=3)
+        stop = threading.Event()
+        spoken: list = []
+        state = {"words": 0, "limit": False}
+        orig_prev_named = _ans_ctx["prev_named"]
+
+        def _producer():
+            while True:
+                s = sent_q.get()
+                if s is None:
+                    pcm_q.put(None)
+                    return
+                if stop.is_set():
+                    continue
+                pcm_q.put(self._synthesize_pcm_bytes(s, speaker))
+
+        def _player():
+            while True:
+                pcm = pcm_q.get()
+                if pcm is None:
+                    return
+                if self._interrupt_tts:
+                    stop.set()
+                    continue
+                if pcm and not stop.is_set():
+                    play_audio(pcm, sample_rate=TTS_SAMPLE_RATE)
+
+        prod = threading.Thread(target=_producer, daemon=True)
+        play = threading.Thread(target=_player, daemon=True)
+        prod.start()
+        play.start()
+
+        def _emit(sentence: str) -> None:
+            if state["limit"] or not sentence.strip():
+                return
+            clean = finalize_answer(sentence, budget)
+            if not clean or (clean == "Слушаю Вас." and sentence.strip() != clean):
+                return
+            if clean.endswith("?") and _ans_ctx["prev_question"] and spoken:
+                return                                    # не заканчиваем каждый ответ вопросом
+            n = len(clean.split())
+            if spoken and state["words"] + n > budget:
+                state["limit"] = True                     # потолок длины по вопросу
+                return
+            state["words"] += n
+            spoken.append(clean)
+            if _VUZ_NAME_RE.search(clean):
+                _ans_ctx["prev_named"] = True             # дальше в этом ответе вуз не называем
+            sent_q.put(clean)
+
+        buf, failed = "", None
+        try:
+            self._last_query_source = "chat-stream"
+            for ev in self.rag.chat_query_stream(self._chat_id, rag_text, collection_id, max_results=3):
+                t = ev.get("t")
+                if t == "err":
+                    raise RuntimeError(ev.get("message") or "ошибка потока")
+                if t == "d":
+                    buf += ev.get("x", "")
+                    done, buf = split_complete_sentences(buf)
+                    for s in done:
+                        _emit(s)
+                    if state["limit"]:
+                        break
+            if buf.strip() and not state["limit"]:
+                _emit(buf.strip())
+        except Exception as e:  # noqa: BLE001
+            failed = e
+            print(f"⚠️ Потоковый ответ прервался: {e}", file=sys.stderr)
+        finally:
+            sent_q.put(None)
+            prod.join(timeout=60)
+            play.join(timeout=120)
+            _ans_ctx["prev_named"] = orig_prev_named
+        if not spoken:
+            return None if failed else ""
+        return " ".join(spoken)
+
     def _remember_exchange(self, question: str, answer: str, persist: bool = True) -> None:
         """
         Дописывает обмен в ЛОКАЛЬНУЮ историю (последние 10 обменов).
@@ -3379,6 +3548,7 @@ class VoiceAssistant:
                     return
 
             # 4. Отправляем запрос в RAG (коллекция для МИРЭА, иначе интернет)
+            already_spoken = False      # поток уже озвучил ответ — повторно не говорим
             try:
                 want_mirea = self.runtime.feature("mirea_collection")
                 want_web = self.runtime.feature("web_search")
@@ -3388,13 +3558,21 @@ class VoiceAssistant:
                     if collection_id:
                         print(f"📚 Поиск по коллекции (МИРЭА): {collection_id}")
                         self.runtime.set_status("Поиск в базе МИРЭА…")
-                        rag_result = self._rag_query(
-                            query_text=rag_text,
-                            collection_id=collection_id,
-                            use_web_search=False,
-                            use_agent_search=False,
-                            max_results=3,
-                        )
+                        streamed = None
+                        if self._stream_enabled():
+                            self.runtime.set_status("Отвечаю (поток)…")
+                            streamed = self._stream_answer(rag_text, collection_id)
+                        if streamed is not None and streamed != "":
+                            rag_result = {"response": streamed, "contexts": [{"stream": True}]}
+                            already_spoken = True
+                        else:
+                            rag_result = self._rag_query(
+                                query_text=rag_text,
+                                collection_id=collection_id,
+                                use_web_search=False,
+                                use_agent_search=False,
+                                max_results=3,
+                            )
                     else:
                         print("⚠️ Нет коллекций — ищу в интернете.")
                         self.runtime.set_status("Поиск в интернете…")
@@ -3500,9 +3678,12 @@ class VoiceAssistant:
             self._remember_exchange(query_text, answer)
 
             # 5. Озвучиваем ответ
-            self.runtime.set_status("Отвечаю голосом…")
-            print("🔊 Озвучиваю ответ...")
-            self._speak(answer)
+            if already_spoken:
+                print("🔊 Ответ уже озвучен потоком.")
+            else:
+                self.runtime.set_status("Отвечаю голосом…")
+                print("🔊 Озвучиваю ответ...")
+                self._speak(answer)
 
             print("✅ Готово. Слушаю дальше...\n")
             self.runtime.set_status("Слушаю…")

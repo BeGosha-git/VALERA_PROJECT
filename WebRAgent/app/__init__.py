@@ -157,7 +157,7 @@ def create_app():
             accept = _request.headers.get("Accept-Encoding", "").lower()
             if "gzip" not in accept:
                 return response
-            if response.direct_passthrough or response.status_code >= 300:
+            if response.direct_passthrough or response.is_streamed or response.status_code >= 300:
                 return response
             if response.headers.get("Content-Encoding"):
                 return response

@@ -142,7 +142,7 @@ class OllamaService(LLMService):
             new_payload = {**payload, "messages": msgs}
         return encode(new_payload)
 
-    def _post_chat(self, messages, max_tokens):
+    def _post_chat(self, messages, max_tokens, stream=False):
         """
         Отправляет запрос в Ollama через ``/api/chat`` и возвращает текст ответа.
 
@@ -168,9 +168,11 @@ class OllamaService(LLMService):
             "keep_alive": -1,  # модель всегда прогрета
             "options": {"num_predict": max_tokens},
         }
-        import re as _re
-        if _re.search(r"(?i)(gemma4|gemma-4|qwen3|deepseek-r1|gpt-oss|magistral)", self.model or ""):
+        if self._can_think():
             payload["think"] = False   # без режима размышлений — быстрый ответ
+        if stream:
+            payload["stream"] = True
+            return self._iter_stream(self._fit_body(payload))
         data = self._fit_body(payload)
         resp = requests.post(
             f"{self.base_url}/chat",
@@ -186,6 +188,48 @@ class OllamaService(LLMService):
         resp.raise_for_status()
         return (resp.json().get("message") or {}).get("content", "") or \
             'No response received'
+
+    _THINK_CACHE = {}
+
+    def _can_think(self):
+        """Умеет ли модель «думать» (по /api/show → capabilities; имя не подходит: true_valera — это Gemma 4)."""
+        key = self.model
+        if key not in OllamaService._THINK_CACHE:
+            try:
+                r = requests.post(f"{self.base_url}/show", json={"model": self.model}, timeout=5)
+                OllamaService._THINK_CACHE[key] = "thinking" in (r.json().get("capabilities") or [])
+            except Exception:  # noqa: BLE001
+                return False
+        return OllamaService._THINK_CACHE[key]
+
+    def _iter_stream(self, data):
+        """Читает NDJSON-поток /api/chat и отдаёт кусочки текста."""
+        with requests.post(
+            f"{self.base_url}/chat", data=data,
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            stream=True, timeout=120,
+        ) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                piece = (obj.get("message") or {}).get("content") or ""
+                if piece:
+                    yield piece
+                if obj.get("done"):
+                    break
+
+    def _stream_chat_completion(self, messages, max_tokens):
+        """Потоковая версия _generate_chat_completion (тот же промпт, stream=True)."""
+        self._want_stream = True
+        try:
+            yield from self._generate_chat_completion(messages, max_tokens)
+        finally:
+            self._want_stream = False
 
     def _generate_completion(self, system_message, user_message, max_tokens):
         """
@@ -282,4 +326,5 @@ class OllamaService(LLMService):
                 {"role": "user", "content": conversation_prompt},
             ],
             max_tokens,
+            stream=getattr(self, "_want_stream", False),
         )

@@ -204,7 +204,7 @@ def create_app(runtime=None, runner=None):
         # Отдаём страницу как обычный HTML (не через Jinja): в CSS/JS есть
         # фигурные скобки, которые шаблонизатор принял бы за свои директивы.
         # Комментарии вырезаем — страница вплотную подходит к лимиту 16 КБ.
-        return _html_response(_compact_html(INDEX_HTML))
+        return _html_response(_compact_html(_page_html()))
 
     # ------------------------------------------------------------------
     # ПРАВИЛА ДЛЯ ГОСТЕЙ — отдельная страница для второго экрана
@@ -309,6 +309,98 @@ def create_app(runtime=None, runner=None):
             return jsonify({"ok": True, "model": model})
         except Exception as exc:  # noqa: BLE001
             return jsonify({"ok": False, "error": str(exc)}), 500
+
+    # ------------------------------------------------------------------
+    # Состояние системы: сервисы, видеокарты, процессор и память
+    # ------------------------------------------------------------------
+    @app.get("/api/system")
+    def api_system():
+        import subprocess
+
+        import requests as _rq
+
+        def _get(url, timeout=1.5):
+            try:
+                s = _rq.Session()
+                s.trust_env = False            # локальные сервисы — мимо HTTP_PROXY
+                return s.get(url, timeout=timeout)
+            except Exception:  # noqa: BLE001
+                return None
+
+        # --- видеокарты ---
+        gpus = []
+        try:
+            out = subprocess.run(
+                ["nvidia-smi", "--query-gpu=index,name,memory.used,memory.total,utilization.gpu,temperature.gpu",
+                 "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=4).stdout
+            roles_env = {"LLM": os.getenv("LLM_GPU"), "XTTS": os.getenv("XTTS_GPU"), "Распознавание+Silero": os.getenv("ASR_GPU")}
+            for line in out.strip().splitlines():
+                idx, name, used, total, util, temp = [x.strip() for x in line.split(",")]
+                gpus.append({
+                    "index": idx, "name": name, "used": int(float(used)), "total": int(float(total)),
+                    "util": int(float(util)), "temp": int(float(temp)),
+                    "roles": [r for r, g in roles_env.items() if g == idx],
+                })
+        except Exception:  # noqa: BLE001
+            pass
+
+        # --- сервисы (проверяем параллельно: каждая проверка до 1,5 с) ---
+        from concurrent.futures import ThreadPoolExecutor
+
+        base = rt.get("llm", "ollama_url", default="http://localhost:11434")
+        rag_base = rt.get("rag", "base_url", default="http://localhost:5000")
+        rb = rt.get("robot", "base_url", default="")
+
+        def _xtts():
+            try:
+                from tts_backends import get_xtts_client
+                xt = get_xtts_client()
+                return xt.is_up(), (len(xt.speakers()) if xt.is_up() else 0)
+            except Exception:  # noqa: BLE001
+                return False, 0
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            f_oll = pool.submit(_get, f"{base}/api/ps")
+            f_rag = pool.submit(_get, rag_base + "/auth/login")
+            f_rob = pool.submit(_get, rb, 1.0) if rb else None
+            f_xtts = pool.submit(_xtts)
+            r = f_oll.result()
+            r_rag = f_rag.result()
+            r_rob = f_rob.result() if f_rob else None
+            xt_up, xt_n = f_xtts.result()
+
+        services = []
+        if r is not None and r.ok:
+            models = (r.json() or {}).get("models") or []
+            sub = ", ".join(f"{m.get('name')} · {round((m.get('size_vram') or 0)/1e9, 1)} ГБ видеопамяти" for m in models) or "модель не загружена"
+            services.append({"name": "Ollama (языковая модель)", "ok": True, "sub": sub})
+        else:
+            services.append({"name": "Ollama (языковая модель)", "ok": False, "sub": "не отвечает"})
+        services.append({"name": "XTTS-v2 (голос)", "ok": xt_up,
+                         "sub": f"работает, голосов: {xt_n}" if xt_up else "не запущен — говорит Silero"})
+        services.append({"name": "WebRAgent (база знаний)", "ok": bool(r_rag is not None and r_rag.status_code < 500),
+                         "sub": rag_base if r_rag is not None else "не отвечает"})
+        if rb:
+            services.append({"name": "Робот Unitree H1", "ok": r_rob is not None,
+                             "sub": rb if r_rob is not None else "нет связи (" + rb + ")"})
+
+        # --- процессор и память ---
+        mem = {}
+        try:
+            for line in open("/proc/meminfo", encoding="utf-8"):
+                k, v = line.split(":")
+                mem[k] = int(v.split()[0])      # КБ
+        except Exception:  # noqa: BLE001
+            pass
+        cores = os.cpu_count() or 1
+        load = os.getloadavg()[0] if hasattr(os, "getloadavg") else 0.0
+        total_gb = mem.get("MemTotal", 0) / 1048576
+        avail_gb = mem.get("MemAvailable", 0) / 1048576
+        return jsonify({
+            "gpus": gpus, "services": services,
+            "cpu": {"cores": cores, "load": round(load, 2), "pct": min(100, int(load / cores * 100))},
+            "mem": {"total_gb": round(total_gb, 1), "used_gb": round(total_gb - avail_gb, 1)},
+        })
 
     # ------------------------------------------------------------------
     # Голос озвучки: XTTS-v2 (основной) ↔ Silero (запасной)
@@ -717,6 +809,16 @@ def _html_response(html: str):
     return Response(html.encode("utf-8"), mimetype="text/html")
 
 
+def _page_html() -> str:
+    """Страница пульта: HTML + стили из web_ui/style.css (читаются при каждом запросе — правки видны сразу)."""
+    try:
+        with open(os.path.join(PROJECT_DIR, "web_ui", "style.css"), encoding="utf-8") as fh:
+            css = fh.read()
+    except OSError:
+        css = ""
+    return INDEX_HTML.replace("/*__STYLE__*/", css)
+
+
 def _compact_html(html: str) -> str:
     """
     Убирает HTML-комментарии перед отдачей страницы.
@@ -758,422 +860,43 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <!-- Шрифты берём ЛОКАЛЬНЫЕ (Lato/Open Sans/Ubuntu есть в системе): робот на
      выставке может быть без интернета, а внешний Google Fonts ещё и тормозит
      первую загрузку. Стек с fallback-цепочкой на случай другой машины. -->
-<style>
-/* ==========================================================================
-   ВАЛЕРА — дизайн-система пульта
-   Принципы: 1) ясная иерархия (герой-статус → панели → детали)
-             2) единая шкала отступов (4/8/12/16/24)
-             3) один акцентный цвет, остальное — нейтральные поверхности
-             4) каждый интерактивный элемент имеет hover/active/focus
-   ========================================================================== */
-:root{
-  /* поверхности — от глубокого фона к приподнятым слоям */
-  --bg:#0a0f16;
-  --surface-1:#111925;
-  --surface-2:#16202e;
-  --surface-3:#1d2937;
-  --surface-4:#243244;
-  /* границы */
-  --line:#26374a;
-  --line-strong:#35495f;
-  /* текст */
-  --fg:#f4f7fb;
-  --fg-2:#a9bacd;
-  --fg-3:#6f8098;
-  /* акценты */
-  --accent:#2dd4bf;
-  --accent-strong:#14b8a6;
-  --accent-soft:rgba(45,212,191,.14);
-  --violet:#8b7cf6;
-  --violet-soft:rgba(139,124,246,.14);
-  /* семантика */
-  --ok:#4ade80; --ok-soft:rgba(74,222,128,.14);
-  --warn:#fbbf24; --warn-soft:rgba(251,191,36,.14);
-  --err:#fb7185; --err-soft:rgba(251,113,133,.14);
-  /* дорожки звука */
-  --mic:#38bdf8; --gate:#fb7185; --out:#4ade80;
-  /* геометрия */
-  --r-lg:18px; --r-md:13px; --r-sm:9px;
-  --sp-1:6px; --sp-2:10px; --sp-3:14px; --sp-4:20px; --sp-5:28px;
-  /* тени и свечения */
-  --shadow:0 20px 45px -28px rgba(0,0,0,.95);
-  --shadow-lift:0 24px 55px -26px rgba(0,0,0,.95);
-  --glow-accent:0 0 0 1px rgba(45,212,191,.22), 0 14px 40px -18px rgba(45,212,191,.45);
-  /* типографика — локальные шрифты с надёжным fallback */
-  --sans:'Lato','Open Sans','Ubuntu','Noto Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
-  --mono:'Ubuntu Mono','DejaVu Sans Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
-}
-*{box-sizing:border-box;margin:0;padding:0}
-html{-webkit-text-size-adjust:100%}
-body{
-  min-height:100vh;
-  background:
-    radial-gradient(900px 520px at 6% -14%, rgba(45,212,191,.10), transparent 60%),
-    radial-gradient(820px 480px at 104% -10%, rgba(139,124,246,.11), transparent 58%),
-    radial-gradient(700px 420px at 50% 118%, rgba(45,212,191,.05), transparent 62%),
-    var(--bg);
-  color:var(--fg);
-  font-family:var(--sans);
-  font-size:15px; line-height:1.55;
-  letter-spacing:-.011em;
-  -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
-}
-::selection{background:rgba(45,212,191,.3);color:#04191b}
-.wrap{max-width:1620px;margin:0 auto;padding:var(--sp-4) var(--sp-4) 64px}
-
-/* ---------- типографика ---------- */
-h1{font-size:25px;font-weight:800;letter-spacing:-.8px;line-height:1.1}
-h2{
-  font-size:12px;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;
-  color:var(--fg-2);display:flex;align-items:center;gap:var(--sp-2);
-  margin-bottom:var(--sp-3);
-}
-h2::before{
-  content:'';width:4px;height:14px;border-radius:3px;flex:0 0 auto;
-  background:linear-gradient(180deg,var(--accent),var(--violet));
-}
-.tag{
-  margin-left:auto;font-size:10.5px;font-weight:700;letter-spacing:.2px;
-  text-transform:none;color:var(--fg-3);
-  background:var(--surface-1);border:1px solid var(--line);
-  padding:3px 10px;border-radius:100px;
-}
-.mono{font-family:var(--mono);font-size:12px;letter-spacing:0}
-code{
-  font-family:var(--mono);font-size:.9em;color:#7dd3fc;
-  background:rgba(125,211,252,.1);padding:2px 6px;border-radius:6px;
-}
-.muted{color:var(--fg-3);font-size:12.5px}
-small.muted{display:block;margin-top:var(--sp-1)}
-
-/* ---------- шапка ---------- */
-header{
-  display:flex;align-items:center;gap:var(--sp-3);flex-wrap:wrap;
-  padding-bottom:var(--sp-3);margin-bottom:var(--sp-4);
-  border-bottom:1px solid var(--line);
-}
-.brand{display:flex;align-items:center;gap:var(--sp-3);margin-right:auto}
-.logo{
-  width:56px;height:56px;border-radius:var(--r-md);flex:0 0 auto;
-  position:relative;display:grid;place-items:center;
-  font-size:23px;font-weight:800;color:#04191b;
-  background:linear-gradient(145deg,var(--accent),var(--violet));
-  box-shadow:var(--glow-accent);
-}
-.logo::after{
-  content:'';position:absolute;inset:0;border-radius:inherit;
-  background:linear-gradient(180deg,rgba(255,255,255,.3),transparent 52%);
-}
-.brand p{color:var(--fg-2);font-size:13px;font-weight:500}
-
-.pill{
-  display:inline-flex;align-items:center;gap:var(--sp-1);
-  padding:9px 15px;border-radius:100px;text-decoration:none;
-  background:var(--surface-2);border:1px solid var(--line);
-  font-size:13px;font-weight:600;color:var(--fg-2);
-  transition:border-color .2s,background .2s;
-}
-.pill:hover{border-color:var(--line-strong);background:var(--surface-3)}
-/* Ссылка-«таблетка» на страницу правил — тот же вид, что у обычных pill. */
-a.pill{cursor:pointer}
-a.pill:hover{color:var(--fg)}
-.dot{
-  width:9px;height:9px;border-radius:50%;background:var(--fg-3);
-  transition:all .25s;flex:0 0 auto;
-}
-.dot.on{background:var(--ok);box-shadow:0 0 0 4px var(--ok-soft);animation:breathe 2.2s ease-in-out infinite}
-.dot.err{background:var(--err);box-shadow:0 0 0 4px var(--err-soft)}
-@keyframes breathe{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.82)}}
-
-/* ---------- кнопки ---------- */
-button{
-  font-family:var(--sans);font-size:13.5px;font-weight:700;cursor:pointer;
-  color:var(--fg);background:var(--surface-3);
-  border:1px solid var(--line);border-radius:var(--r-sm);
-  padding:10px 17px;letter-spacing:-.01em;white-space:nowrap;
-  transition:background .16s,border-color .16s,transform .12s,box-shadow .16s;
-}
-button:hover{background:var(--surface-4);border-color:var(--line-strong);transform:translateY(-1px)}
-button:active{transform:translateY(0) scale(.98)}
-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-button.pri{
-  background:linear-gradient(135deg,var(--accent),var(--accent-strong));
-  color:#04191b;border-color:transparent;
-  box-shadow:0 10px 26px -14px var(--accent);
-}
-button.pri:hover{filter:brightness(1.09);box-shadow:0 14px 32px -14px var(--accent)}
-button.dgr{background:var(--err-soft);border-color:rgba(251,113,133,.35);color:#ffd0d8}
-button.dgr:hover{background:rgba(251,113,133,.24);border-color:rgba(251,113,133,.62)}
-button.sm{padding:6px 12px;font-size:12.5px;border-radius:8px}
-button:disabled{opacity:.4;cursor:not-allowed;transform:none!important;filter:none!important}
-
-/* ---------- сетки ---------- */
-.grid{display:grid;gap:var(--sp-3)}
-.cols{grid-template-columns:minmax(330px,390px) minmax(0,1fr)}
-.cols-3{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
-.stack{display:grid;gap:var(--sp-3)}
-@media(max-width:1120px){.cols{grid-template-columns:1fr}}
-
-/* ---------- карточки ---------- */
-.card{
-  background:linear-gradient(170deg,var(--surface-2),var(--surface-1));
-  border:1px solid var(--line);border-radius:var(--r-lg);
-  padding:var(--sp-4);box-shadow:var(--shadow);
-  transition:border-color .2s,transform .2s,box-shadow .2s;
-}
-.card:hover{border-color:var(--line-strong);box-shadow:var(--shadow-lift)}
-
-/* ---------- тумблеры ---------- */
-.sw{
-  display:flex;align-items:center;gap:var(--sp-2);padding:9px 0;
-  cursor:pointer;border-bottom:1px solid rgba(38,55,74,.5);
-  transition:padding .16s,background .16s;
-}
-.sw:last-child{border-bottom:none}
-.sw:hover{padding-left:5px}
-.sw input{position:absolute;opacity:0;width:0;height:0}
-.track{
-  width:44px;height:24px;border-radius:100px;flex:0 0 auto;position:relative;
-  background:var(--surface-4);border:1px solid var(--line);
-  transition:background .22s cubic-bezier(.4,0,.2,1),border-color .22s,box-shadow .22s;
-}
-.track::after{
-  content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;
-  border-radius:50%;background:#8496ad;
-  transition:left .22s cubic-bezier(.4,0,.2,1),background .22s;
-}
-.sw input:checked + .track{
-  background:linear-gradient(135deg,var(--accent),var(--accent-strong));
-  border-color:transparent;box-shadow:0 0 18px -5px var(--accent);
-}
-.sw input:checked + .track::after{left:22px;background:#04191b}
-.sw input:focus-visible + .track{outline:2px solid var(--accent);outline-offset:2px}
-.sw > span{font-size:13.5px;font-weight:600}
-.sw .hint{display:block;font-size:11.5px;font-weight:500;color:var(--fg-3);margin-top:1px}
-
-/* ---------- поля ---------- */
-label.f{
-  display:block;font-size:11.5px;font-weight:700;letter-spacing:.3px;
-  color:var(--fg-2);margin:var(--sp-3) 0 var(--sp-1);
-}
-input[type=text],input[type=number],select,textarea{
-  width:100%;color:var(--fg);background:var(--surface-1);
-  border:1px solid var(--line);border-radius:var(--r-sm);
-  padding:11px 13px;font-family:var(--sans);font-size:13.5px;
-  transition:border-color .16s,box-shadow .16s,background .16s;
-}
-input:hover,select:hover,textarea:hover{border-color:var(--line-strong)}
-input:focus,select:focus,textarea:focus{
-  outline:none;border-color:var(--accent);background:var(--surface-2);
-  box-shadow:0 0 0 3px var(--accent-soft);
-}
-textarea{font-family:var(--mono);font-size:12.5px;line-height:1.65;min-height:68px;resize:vertical}
-select{cursor:pointer;appearance:none;
-  background-image:linear-gradient(45deg,transparent 50%,var(--fg-3) 50%),
-                   linear-gradient(135deg,var(--fg-3) 50%,transparent 50%);
-  background-position:calc(100% - 19px) 50%,calc(100% - 13px) 50%;
-  background-size:6px 6px,6px 6px;background-repeat:no-repeat;padding-right:38px}
-input[type=range]{
-  width:100%;height:24px;background:transparent;cursor:pointer;
-  -webkit-appearance:none;appearance:none;
-}
-input[type=range]::-webkit-slider-runnable-track{
-  height:6px;border-radius:100px;background:var(--surface-4);
-}
-input[type=range]::-webkit-slider-thumb{
-  -webkit-appearance:none;width:18px;height:18px;margin-top:-6px;border-radius:50%;
-  background:linear-gradient(135deg,var(--accent),var(--violet));
-  box-shadow:0 0 0 3px var(--accent-soft),0 3px 10px -2px rgba(0,0,0,.6);
-  transition:transform .14s;
-}
-input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.16)}
-input[type=range]::-moz-range-track{height:6px;border-radius:100px;background:var(--surface-4)}
-input[type=range]::-moz-range-thumb{
-  width:18px;height:18px;border:none;border-radius:50%;
-  background:linear-gradient(135deg,var(--accent),var(--violet));
-}
-.row{display:flex;gap:var(--sp-2);align-items:center;flex-wrap:wrap}
-.row > *{flex:1;min-width:0}
-.row > button,.row > .val,.row > .muted{flex:0 0 auto;min-width:auto}
-.val{
-  font-family:var(--mono);font-size:13px;font-weight:600;color:var(--accent);
-  min-width:56px;text-align:right;
-}
-
-/* ---------- метрики ---------- */
-.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--sp-2)}
-.metric{
-  background:var(--surface-1);border:1px solid var(--line);
-  border-radius:var(--r-md);padding:var(--sp-3);
-  transition:border-color .18s,transform .18s,background .18s;
-}
-.metric:hover{border-color:var(--line-strong);transform:translateY(-2px);background:var(--surface-2)}
-.metric .k{
-  font-size:10px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;
-  color:var(--fg-3);
-}
-.metric .v{
-  font-family:var(--mono);font-size:19px;font-weight:700;
-  color:var(--accent);margin-top:5px;letter-spacing:-.5px;
-}
-
-/* ---------- графики ---------- */
-canvas{
-  width:100%;display:block;border-radius:var(--r-md);
-  background:linear-gradient(180deg,#070b11,#0b1119);
-  border:1px solid var(--line);
-}
-.legend{
-  display:flex;gap:var(--sp-3);flex-wrap:wrap;
-  margin-top:var(--sp-2);font-size:12px;color:var(--fg-2);font-weight:600;
-}
-.legend span{display:inline-flex;align-items:center;gap:7px}
-.legend i{width:14px;height:4px;border-radius:3px;flex:0 0 auto}
-
-/* ---------- таблицы ---------- */
-.scroll{
-  border:1px solid var(--line);border-radius:var(--r-md);
-  overflow:auto;max-height:340px;background:var(--surface-1);
-  scrollbar-width:thin;scrollbar-color:var(--surface-4) transparent;
-}
-.scroll::-webkit-scrollbar{width:11px;height:11px}
-.scroll::-webkit-scrollbar-track{background:transparent}
-.scroll::-webkit-scrollbar-thumb{
-  background:var(--surface-4);border-radius:100px;border:3px solid var(--surface-1);
-}
-.scroll::-webkit-scrollbar-thumb:hover{background:var(--line-strong)}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{
-  position:sticky;top:0;z-index:1;text-align:left;
-  font-size:10px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;
-  color:var(--fg-3);background:var(--surface-2);
-  padding:11px 13px;border-bottom:1px solid var(--line);
-}
-td{padding:11px 13px;border-bottom:1px solid rgba(38,55,74,.5);vertical-align:middle}
-tbody tr{transition:background .14s}
-tbody tr:hover td{background:rgba(45,212,191,.05)}
-tbody tr:last-child td{border-bottom:none}
-
-/* ---------- вкладки ---------- */
-.tabs{
-  display:flex;gap:4px;flex-wrap:wrap;margin-bottom:var(--sp-4);
-  padding:5px;border-radius:var(--r-md);
-  background:var(--surface-1);border:1px solid var(--line);
-  width:fit-content;max-width:100%;
-}
-.tab{
-  padding:10px 17px;border-radius:9px;font-size:13px;font-weight:700;
-  background:transparent;border:1px solid transparent;color:var(--fg-3);
-}
-.tab:hover{background:var(--surface-2);border-color:var(--line);color:var(--fg-2);transform:none}
-.tab.active{
-  color:#04191b;border-color:transparent;
-  background:linear-gradient(135deg,var(--accent),var(--accent-strong));
-  box-shadow:0 8px 22px -14px var(--accent);
-}
-.pane{display:none}
-.pane.active{display:block;animation:rise .3s cubic-bezier(.16,1,.3,1)}
-@keyframes rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
-
-/* ---------- бейджи, транскрипт, журнал ---------- */
-.badge{
-  display:inline-block;font-size:11px;font-weight:800;letter-spacing:.2px;
-  padding:3px 10px;border-radius:100px;border:1px solid transparent;
-}
-.b-ok{background:var(--ok-soft);color:var(--ok);border-color:rgba(74,222,128,.32)}
-.b-warn{background:var(--warn-soft);color:var(--warn);border-color:rgba(251,191,36,.32)}
-.b-err{background:var(--err-soft);color:var(--err);border-color:rgba(251,113,133,.32)}
-
-.transcript{
-  background:var(--surface-1);border:1px solid var(--line);
-  border-left:3px solid var(--line-strong);
-  border-radius:var(--r-md);padding:var(--sp-3) var(--sp-4);
-  margin-bottom:var(--sp-2);
-  transition:border-color .18s,background .18s;
-}
-.transcript:hover{background:var(--surface-2)}
-.transcript.user{border-left-color:var(--mic)}
-.transcript.bot{border-left-color:var(--accent)}
-.transcript .lbl{
-  font-size:10px;font-weight:800;letter-spacing:.9px;text-transform:uppercase;
-  color:var(--fg-3);margin-bottom:5px;
-}
-.transcript .txt{font-size:15.5px;line-height:1.6;font-weight:500}
-
-.log{
-  font-family:var(--mono);font-size:12px;line-height:1.8;
-  max-height:400px;overflow:auto;padding:var(--sp-3) var(--sp-4);
-  border-radius:var(--r-md);border:1px solid var(--line);
-  background:linear-gradient(180deg,#070b11,#0b1119);
-  scrollbar-width:thin;scrollbar-color:var(--surface-4) transparent;
-}
-.log::-webkit-scrollbar{width:11px}
-.log::-webkit-scrollbar-thumb{background:var(--surface-4);border-radius:100px;
-  border:3px solid #0b1119}
-.log div{padding:2px 0;color:var(--fg-3);border-bottom:1px solid rgba(38,55,74,.28)}
-.log div:last-child{border-bottom:none}
-.log .ok{color:var(--ok)}
-.log .error{color:var(--err)}
-.log .info{color:var(--fg-2)}
-
-/* ---------- герой-статус (главный акцент главной вкладки) ---------- */
-.hero{
-  display:flex;align-items:center;gap:var(--sp-4);flex-wrap:wrap;
-  padding:var(--sp-4) var(--sp-5);margin-bottom:var(--sp-4);
-  border-radius:var(--r-lg);border:1px solid var(--line);
-  background:
-    linear-gradient(120deg,rgba(45,212,191,.10),rgba(139,124,246,.09)),
-    var(--surface-2);
-  box-shadow:var(--shadow);
-}
-.hero-ico{
-  width:58px;height:58px;flex:0 0 auto;border-radius:var(--r-md);
-  display:grid;place-items:center;font-size:26px;
-  background:var(--surface-1);border:1px solid var(--line);
-}
-.hero-txt{flex:1;min-width:220px}
-.hero-txt .k{
-  font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;
-  color:var(--fg-3);
-}
-.hero-txt .v{font-size:21px;font-weight:800;letter-spacing:-.4px;margin-top:2px}
-.hero-txt .s{font-size:12.5px;color:var(--fg-2);font-weight:500;margin-top:2px}
-</style>
+<style>/*__STYLE__*/</style>
 </head>
 <body>
-<div class="wrap">
-
-  <header>
+<div class="app">
+  <aside class="side">
     <div class="brand">
       <div class="logo">V</div>
-      <div>
-        <h1>Валера</h1>
-        <p>робот-экскурсовод · РТУ МИРЭА · Unitree H1</p>
-      </div>
+      <div><h1>Валера</h1><p>ассистент лаборатории<br>РТУ МИРЭА · Unitree H1</p></div>
     </div>
-    <span class="pill"><span class="dot" id="dot"></span><span id="stateTxt">остановлен</span></span>
-    <span class="pill" id="chatPill" title="Активный чат (контекст диалога)">
-      <span id="chatTxt">чат: —</span>
-    </span>
-    <a class="pill" href="/rules" target="_blank" title="Памятка для гостей на второй экран">
-      📋 Правила для гостей
-    </a>
-    <button class="pri" id="btnStart">▶ Запустить</button>
-    <button class="dgr" id="btnStop" disabled>■ Остановить</button>
-  </header>
+    <nav class="tabs">
+      <button class="tab active" data-pane="main"><span class="ico">🏠</span>Главная</button>
+      <button class="tab" data-pane="sound"><span class="ico">🎙</span>Звук</button>
+      <button class="tab" data-pane="ai"><span class="ico">🧠</span>ИИ и голос</button>
+      <button class="tab" data-pane="devices"><span class="ico">🔌</span>Устройства</button>
+      <button class="tab" data-pane="triggers"><span class="ico">⚡</span>Триггеры</button>
+      <button class="tab" data-pane="chats"><span class="ico">💬</span>Чаты</button>
+      <button class="tab" data-pane="log"><span class="ico">📜</span>Журнал</button>
+      <button class="tab" data-pane="system"><span class="ico">🖥</span>Система</button>
+    </nav>
+    <div class="side-foot">
+      <a href="/rules" target="_blank" title="Памятка для гостей на второй экран">📋 Правила для гостей</a>
+      <button id="btnTheme" title="Сменить тему">🌓 Тема</button>
+    </div>
+  </aside>
 
-  <div class="tabs">
-    <button class="tab active" data-pane="main">Звук и чувствительность</button>
-    <button class="tab" data-pane="devices">Устройства и сеть</button>
-    <button class="tab" data-pane="triggers">Триггеры «слово → команда»</button>
-    <button class="tab" data-pane="chats">Чаты и контекст</button>
-    <button class="tab" data-pane="log">Журнал</button>
-  </div>
+  <main class="content">
+    <header class="top">
+      <div class="title"><h1 id="pageTitle">Главная</h1><small id="pageSub">состояние и последний диалог</small></div>
+      <span class="pill"><span class="dot" id="dot"></span><span id="stateTxt">остановлен</span></span>
+      <span class="pill" id="chatPill" title="Активный чат (контекст диалога)"><span id="chatTxt">чат: —</span></span>
+      <button class="pri big" id="btnStart">▶ Запустить</button>
+      <button class="dgr big" id="btnStop" disabled>■ Остановить</button>
+    </header>
 
-  <!-- ============ ГЛАВНАЯ ============ -->
-  <div class="pane active" id="pane-main">
-    <!-- Герой-статус: главное, что нужно видеть с первого взгляда -->
-    <div class="hero">
+    <!-- ============ ГЛАВНАЯ ============ -->
+    <div class="pane active" id="pane-main">
+      <div class="hero">
       <div class="hero-ico" id="heroIco">⏹</div>
       <div class="hero-txt">
         <div class="k">Состояние робота</div>
@@ -1189,15 +912,31 @@ tbody tr:last-child td{border-bottom:none}
         </div>
       </div>
     </div>
-
-    <div class="grid cols">
-      <div class="stack">
-        <div class="card">
+      <div class="grid cols">
+        <div class="stack">
+          <div class="card">
+          <h2>Диалог <span class="tag">последний обмен</span></h2><div class="bubbles">
+          <div class="transcript user"><div class="lbl">Услышано</div><div class="txt muted" id="tUser">—</div></div>
+          <div class="transcript bot"><div class="lbl">Ответ Валеры</div><div class="txt" id="tBot">—</div></div>
+        </div></div>
+          <div class="card">
+          <h2>Телеметрия</h2>
+          <div class="metrics" id="metrics"></div>
+        </div>
+        </div>
+        <div class="stack">
+          <div class="card">
           <h2>Функции <span class="tag">применяются на лету</span></h2>
           <div id="features"></div>
         </div>
+        </div>
+      </div>
+    </div>
 
-        <div class="card">
+    <!-- ============ ЗВУК ============ -->
+    <div class="pane" id="pane-sound">
+      <div class="grid cols">
+        <div class="stack"><div class="card">
           <h2>Чувствительность</h2>
           <label class="f">Порог VAD (ниже = чувствительнее)</label>
           <div class="row"><input type="range" id="sThr" min="0.05" max="0.9" step="0.01"><span class="val" id="vThr"></span></div>
@@ -1205,8 +944,33 @@ tbody tr:last-child td{border-bottom:none}
           <div class="row"><input type="range" id="sSil" min="0.3" max="3" step="0.05"><span class="val" id="vSil"></span></div>
           <label class="f">Мин. длина фразы, сек</label>
           <div class="row"><input type="range" id="sMin" min="0.2" max="3" step="0.05"><span class="val" id="vMin"></span></div>
-        </div>
+        </div></div>
+        <div class="stack"><div class="card">
+          <h2>Что слышит Валера <span class="tag">микрофон → шумодав → итог</span></h2>
+          <canvas id="cPhrase" height="155"></canvas>
+          <div class="legend">
+            <span><i style="background:var(--mic)"></i>с микрофона</span>
+            <span><i style="background:var(--gate)"></i>вырезано шумодавом</span>
+            <span><i style="background:var(--out)"></i>итог для Валеры</span>
+          </div>
+        </div><div class="card">
+          <h2>Живой сигнал <span class="tag">2 секунды</span></h2>
+          <canvas id="cLive" height="84"></canvas>
+        </div><div class="card">
+          <h2>Уровень и порог гейта</h2>
+          <canvas id="cLevel" height="94"></canvas>
+          <div class="legend">
+            <span><i style="background:var(--mic)"></i>микрофон (RMS)</span>
+            <span><i style="background:var(--out)"></i>после шумодава</span>
+            <span><i style="background:var(--gate)"></i>порог гейта</span>
+          </div>
+        </div></div>
+      </div>
+    </div>
 
+    <!-- ============ ИИ И ГОЛОС ============ -->
+    <div class="pane" id="pane-ai">
+      <div class="grid cols-3">
         <div class="card">
           <h2>Модель ИИ <span class="tag" id="modelTag">Ollama</span></h2>
 
@@ -1239,7 +1003,6 @@ tbody tr:last-child td{border-bottom:none}
             <span class="muted" id="modelStatus"></span>
           </div>
         </div>
-
         <div class="card">
           <h2>Голос озвучки <span class="tag" id="ttsTag">XTTS</span></h2>
           <label class="f">Движок</label>
@@ -1261,50 +1024,10 @@ tbody tr:last-child td{border-bottom:none}
           <small class="muted" id="ttsInfo"></small>
           <span class="muted" id="ttsStatus"></span>
         </div>
-
-        <div class="card">
-          <h2>Телеметрия</h2>
-          <div class="metrics" id="metrics"></div>
-        </div>
-      </div>
-
-      <div class="stack">
-        <div class="card">
-          <h2>Что слышит Валера <span class="tag">микрофон → шумодав → итог</span></h2>
-          <canvas id="cPhrase" height="155"></canvas>
-          <div class="legend">
-            <span><i style="background:var(--mic)"></i>с микрофона</span>
-            <span><i style="background:var(--gate)"></i>вырезано шумодавом</span>
-            <span><i style="background:var(--out)"></i>итог для Валеры</span>
-          </div>
-        </div>
-
-        <div class="card">
-          <h2>Живой сигнал <span class="tag">2 секунды</span></h2>
-          <canvas id="cLive" height="84"></canvas>
-        </div>
-
-        <div class="card">
-          <h2>Уровень и порог гейта</h2>
-          <canvas id="cLevel" height="94"></canvas>
-          <div class="legend">
-            <span><i style="background:var(--mic)"></i>микрофон (RMS)</span>
-            <span><i style="background:var(--out)"></i>после шумодава</span>
-            <span><i style="background:var(--gate)"></i>порог гейта</span>
-          </div>
-        </div>
-
-        <div class="card">
-          <h2>Последний диалог</h2>
-          <div class="transcript user"><div class="lbl">Услышано</div><div class="txt muted" id="tUser">—</div></div>
-          <div class="transcript bot"><div class="lbl">Ответ Валеры</div><div class="txt" id="tBot">—</div></div>
-        </div>
       </div>
     </div>
-  </div>
 
-  <!-- ============ УСТРОЙСТВА ============ -->
-  <div class="pane" id="pane-devices">
+    <div class="pane" id="pane-devices">
     <div class="grid cols-3">
       <div class="card">
         <h2>Микрофон (ввод)</h2>
@@ -1336,9 +1059,7 @@ tbody tr:last-child td{border-bottom:none}
       </div>
     </div>
   </div>
-
-  <!-- ============ ТРИГГЕРЫ ============ -->
-  <div class="pane" id="pane-triggers">
+    <div class="pane" id="pane-triggers">
     <div class="card">
       <h2>Правила «слово → сетевая команда»</h2>
       <small class="muted" style="margin-bottom:var(--sp-3)">
@@ -1377,9 +1098,7 @@ tbody tr:last-child td{border-bottom:none}
       <p class="muted" style="margin-top:var(--sp-2)" id="trgMsg"></p>
     </div>
   </div>
-
-  <!-- ============ ЧАТЫ ============ -->
-  <div class="pane" id="pane-chats">
+    <div class="pane" id="pane-chats">
     <div class="grid cols-3" style="margin-bottom:var(--sp-3)">
       <div class="card"><h2>Всего чатов</h2><div class="metric"><div class="k">в базе</div><div class="v" id="stChats">—</div></div></div>
       <div class="card"><h2>Сообщений</h2><div class="metric"><div class="k">в истории</div><div class="v" id="stMsgs">—</div></div></div>
@@ -1426,9 +1145,7 @@ tbody tr:last-child td{border-bottom:none}
       <p class="muted" style="margin-top:var(--sp-2)" id="chatMsg"></p>
     </div>
   </div>
-
-  <!-- ============ ЖУРНАЛ ============ -->
-  <div class="pane" id="pane-log">
+    <div class="pane" id="pane-log">
     <div class="card">
       <h2>Журнал событий <span class="tag" id="logTag">последние 60</span></h2>
       <div class="log" id="logBox"></div>
@@ -1437,6 +1154,20 @@ tbody tr:last-child td{border-bottom:none}
       </div>
     </div>
   </div>
+
+    <!-- ============ СИСТЕМА ============ -->
+    <div class="pane" id="pane-system">
+      <div class="grid cols">
+        <div class="stack">
+          <div class="card"><h2>Сервисы <span class="tag" id="sysUpd">—</span></h2><div class="stack" id="svcList"></div></div>
+          <div class="card"><h2>Процессор и память</h2><div class="metrics" id="sysMetrics"></div></div>
+        </div>
+        <div class="stack">
+          <div class="card"><h2>Видеокарты <span class="tag" id="gpuTag"></span></h2><div class="stack" id="gpuList"></div></div>
+        </div>
+      </div>
+    </div>
+  </main>
 </div>
 
 <script>
@@ -1926,13 +1657,58 @@ $('btnStart').onclick = async () => { await api('/api/assistant/start', {method:
 $('btnStop').onclick  = async () => { await api('/api/assistant/stop',  {method:'POST', body:'{}'}); };
 $('btnClearLog').onclick = () => { $('logBox').innerHTML=''; };
 
+
+// ---------- тема ----------
+(function(){
+  let t=''; try{ t = localStorage.getItem('valera_theme') || ''; }catch(e){}
+  if(t) document.documentElement.dataset.theme = t;
+  $('btnTheme').onclick = () => {
+    const dark = document.documentElement.dataset.theme==='dark' ||
+      (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+    const n = dark ? 'light' : 'dark';
+    document.documentElement.dataset.theme = n;
+    try{ localStorage.setItem('valera_theme', n); }catch(e){}
+  };
+})();
+
+// ---------- вкладка «Система» ----------
+let sysTimer = null;
+function bar(pct, hot){ return `<div class="bar ${hot?'hot':''}"><i style="width:${Math.max(2,pct)}%"></i></div>`; }
+async function loadSystem(){
+  try{
+    const ctrl = new AbortController(); const tm = setTimeout(()=>ctrl.abort(), 9000);
+    const d = await (await fetch('/api/system', {signal: ctrl.signal})).json(); clearTimeout(tm);
+    $('sysUpd').textContent = 'обновлено ' + new Date().toLocaleTimeString();
+    $('svcList').innerHTML = d.services.map(s =>
+      `<div class="svc"><span class="dot ${s.ok?'on':'err'}"></span><div><div class="nm">${escapeHtml(s.name)}</div><div class="sub">${escapeHtml(s.sub)}</div></div></div>`).join('');
+    $('gpuTag').textContent = d.gpus.length + ' шт.';
+    $('gpuList').innerHTML = d.gpus.map(g => {
+      const pct = Math.round(g.used/g.total*100);
+      const roles = g.roles.map(r=>`<span class="badge b-ok">${escapeHtml(r)}</span>`).join('');
+      return `<div class="gpu"><div class="row"><div class="nm">GPU ${g.index} · ${escapeHtml(g.name)}</div><span class="muted" style="text-align:right">${g.temp} °C · загрузка ${g.util}%</span></div>
+        <div class="muted">${(g.used/1024).toFixed(1)} / ${(g.total/1024).toFixed(1)} ГБ видеопамяти</div>${bar(pct, pct>90)}
+        <div class="roles">${roles}</div></div>`;
+    }).join('') || '<p class="muted">nvidia-smi не нашёл видеокарт</p>';
+    $('sysMetrics').innerHTML =
+      `<div class="metric"><div class="k">Процессор (${d.cpu.cores} потоков)</div><div class="v">${d.cpu.pct}%</div>${bar(d.cpu.pct, d.cpu.pct>85)}</div>` +
+      `<div class="metric"><div class="k">Память</div><div class="v">${d.mem.used_gb} / ${d.mem.total_gb} ГБ</div>${bar(Math.round(d.mem.used_gb/Math.max(d.mem.total_gb,1)*100), d.mem.used_gb/Math.max(d.mem.total_gb,1)>0.9)}</div>`;
+  }catch(e){ /* сеть — следующая попытка через 3 с */ }
+}
+const PAGE_TITLES = {main:['Главная','состояние и последний диалог'], sound:['Звук','чувствительность и графики микрофона'], ai:['ИИ и голос','модель, голос и скорость речи'], devices:['Устройства','микрофон, колонки, сеть'], triggers:['Триггеры','слово → команда роботу'], chats:['Чаты','контекст и история'], log:['Журнал','события в реальном времени'], system:['Система','сервисы, видеокарты, процессор']};
+
 // переключение вкладок
-document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
-  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-  document.querySelectorAll('.pane').forEach(x=>x.classList.remove('active'));
-  t.classList.add('active'); $('pane-'+t.dataset.pane).classList.add('active');
-  if(t.dataset.pane==='chats' && !chatsLoaded) loadChats();
-});
+function openPane(name){
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active', x.dataset.pane===name));
+  document.querySelectorAll('.pane').forEach(x=>x.classList.toggle('active', x.id==='pane-'+name));
+  const ti = PAGE_TITLES[name] || [name,''];
+  $('pageTitle').textContent = ti[0]; $('pageSub').textContent = ti[1];
+  try{ location.hash = name; }catch(e){}
+  clearInterval(sysTimer);
+  if(name==='system'){ loadSystem(); sysTimer = setInterval(loadSystem, 3000); }
+  if(name==='chats' && !chatsLoaded) loadChats();
+}
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => openPane(t.dataset.pane));
+if(PAGE_TITLES[location.hash.slice(1)]) openPane(location.hash.slice(1));
 
 // старт
 buildFeatureToggles();

@@ -31,7 +31,7 @@ from bs4 import BeautifulSoup
 
 from russian_text_to_speech.NeuralSpeaker import NeuralSpeaker
 from tts_backends import get_xtts_client
-from valera_memory import ConversationMemory, CONTINUE_RE, recall_kind, style_hint
+from valera_memory import ConversationMemory, CONTINUE_RE, GREET_RE, THANKS_RE, recall_kind, style_hint
 from kairos_asr import KairosASR
                                                                                                               
 # Рантайм-состояние проекта: общие настройки, буферы для GUI и триггеры
@@ -116,6 +116,66 @@ ANSWER_MAX_WORDS = 40
 # чтобы модель успела закончить мысль, а до 40 слов ответ уже подрежет
 # limit_words по границе предложения (обрыв на полуслове выглядит плохо).
 ANSWER_MAX_TOKENS = 110
+
+
+# ---------------------------------------------------------------------------
+# ДЛИНА ОТВЕТА ЗАВИСИТ ОТ ВОПРОСА
+# ---------------------------------------------------------------------------
+# Простой фактический вопрос — одна фраза, «расскажи/объясни/экскурсия» — развёрнуто.
+# Потолок считается один раз на реплику (set_answer_budget) и дальше используется
+# всеми обрезками (finalize_answer, пересказ, прямой ответ, озвучка).
+ANSWER_WORDS_CHAT = 18      # приветствие, спасибо
+ANSWER_WORDS_SHORT = 35     # «где/когда/сколько/кто …»
+ANSWER_WORDS_NORMAL = 55    # обычный вопрос
+ANSWER_WORDS_LONG = 100     # «расскажи/объясни/как устроено/почему/подробнее»
+ANSWER_WORDS_TOUR = 120     # экскурсия
+_answer_words_now = ANSWER_MAX_WORDS
+
+_LONG_Q_RE = re.compile(
+    r"(?i)\b(?:расскажи\w*|объясни\w*|опиши\w*|поясни\w*|подробн\w*|как\s+(?:работает|работают|устроен\w*|"
+    r"это\s+работает|ходит|видит|управля\w*)|почему|зачем|в\s+чём\s+(?:разница|суть|смысл)|чем\s+отлича\w*|"
+    r"что\s+такое|для\s+чего|сравни\w*|посоветуй\w*|что\s+(?:ты\s+)?умеешь)\b"
+)
+_TOUR_Q_RE = re.compile(r"(?i)\b(?:экскурси\w*|проведи\w*|покажи\w*\s+(?:лаборатор\w*|всё|все)|обзор)\b")
+_SHORT_Q_RE = re.compile(
+    r"(?i)^\s*(?:а\s+)?(?:где|когда|сколько|кто|какой|какая|какие|какое|чей|есть\s+ли|можно\s+ли|во\s+сколько|"
+    r"как\s+(?:зовут|называется|добраться|проехать|пройти))\b"
+)
+
+
+def answer_budget(question: str) -> int:
+    """Сколько слов ответа уместно на этот вопрос."""
+    q = (question or "").strip()
+    if not q:
+        return ANSWER_MAX_WORDS
+    n = len(q.split())
+    if _TOUR_Q_RE.search(q):
+        return ANSWER_WORDS_TOUR
+    if _LONG_Q_RE.search(q) or CONTINUE_RE.search(q):
+        return ANSWER_WORDS_LONG
+    if (GREET_RE.search(q) or THANKS_RE.search(q)) and n <= 6:
+        return ANSWER_WORDS_CHAT
+    if _SHORT_Q_RE.match(q) and n <= 6:
+        return ANSWER_WORDS_SHORT
+    if n >= 14:
+        return ANSWER_WORDS_LONG - 20
+    return ANSWER_WORDS_NORMAL
+
+
+def set_answer_budget(question: str) -> int:
+    """Фиксирует потолок длины для текущей реплики (вызывается в начале обработки)."""
+    global _answer_words_now
+    _answer_words_now = answer_budget(question)
+    return _answer_words_now
+
+
+def current_answer_words() -> int:
+    return _answer_words_now
+
+
+def tokens_for_words(words: int) -> int:
+    """Потолок генерации в токенах: русский ≈ 2,3 токена на слово + запас."""
+    return int(words * 2.4) + 30
 # --------------------------------------------------------------
 
 
@@ -1774,13 +1834,14 @@ def strip_meta_speech(text: str) -> str:
     return out
 
 
-def finalize_answer(text: str, max_words: int = ANSWER_MAX_WORDS) -> str:
+def finalize_answer(text: str, max_words: Optional[int] = None) -> str:
     """
     Приводит ответ к финальному виду для озвучки: вырезает служебную речь
     («согласно источникам»), поправляет имя, убирает английские слова и «воду»,
     затем подрезает до лимита слов. Единая функция для всех путей, чтобы ответ
     всегда был чистым и коротким.
     """
+    max_words = max_words or current_answer_words()
     return limit_words(
         strip_filler(
             clean_english(fix_vuz_name(fix_name(
@@ -1941,8 +2002,9 @@ def _ollama_chat(
 def rephrase_answer_with_ai(
     question: str,
     raw_answer: str,
-    max_words: int = ANSWER_MAX_WORDS,
+    max_words: Optional[int] = None,
 ) -> str:
+    max_words = max_words or current_answer_words()
     """
     Пересказывает «сырой» ответ RAG (со ссылками/сниппетами) через локальную
     модель Ollama в короткий разговорный ответ, пригодный для озвучки.
@@ -1982,7 +2044,7 @@ def rephrase_answer_with_ai(
             model=REPHRASE_MODEL,
             # num_predict ≈ 1.4 токена на слово: 40 слов ≈ 71 токен.
             # Меньше лимита — короче ответ и быстрее генерация.
-            num_predict=ANSWER_MAX_TOKENS,
+            num_predict=tokens_for_words(max_words),
             temperature=0.5,
             timeout=LOCAL_LLM_TIMEOUT,
         )
@@ -1997,8 +2059,9 @@ def rephrase_answer_with_ai(
 
 def ask_ollama_direct(
     question: str,
-    max_words: int = ANSWER_MAX_WORDS,
+    max_words: Optional[int] = None,
 ) -> str:
+    max_words = max_words or current_answer_words()
     """
     Отвечает на вопрос напрямую через Ollama (без веб-поиска).
     Используется как fallback, когда поиск ничего не нашёл (0 контекстов) —
@@ -2025,7 +2088,7 @@ def ask_ollama_direct(
         text = _ollama_chat(
             prompt,
             model=REPHRASE_MODEL,
-            num_predict=ANSWER_MAX_TOKENS,
+            num_predict=tokens_for_words(max_words),
             temperature=0.6,
             timeout=LOCAL_LLM_TIMEOUT,
         )
@@ -2711,7 +2774,7 @@ class VoiceAssistant:
         # Финальная обработка: убираем английские слова и «воду», подрезаем
         # до лимита слов — гарантия чистого короткого ответа, даже если
         # модель/поиск вернули длинный текст.
-        text = finalize_answer(text, ANSWER_MAX_WORDS)
+        text = finalize_answer(text)
         if not text:
             return
         if not self.runtime.feature("tts", default=True):
@@ -3032,6 +3095,9 @@ class VoiceAssistant:
             kb_hit = kb_match(query_text)
             mirea_related = kb_hit is not None
             self._last_mirea = mirea_related
+            # Потолок длины ответа — по вопросу (факт — коротко, «расскажи» — развёрнуто).
+            budget = set_answer_budget(query_text)
+            print(f"📏 Длина ответа: до {budget} слов")
             if query_text != clean_text:
                 print(f"🔄 Нормализация: {query_text}")
 
@@ -3265,7 +3331,7 @@ class VoiceAssistant:
                     answer, query_text, mirea_related
                 )
                 # Обрезаем, чтобы не было слишком длинно для TTS
-                answer = answer[:999]
+                answer = answer[:1500]
                 print(f"🤖 Ответ RAG: {answer[:200]}...")
             except Exception as e:
                 print(f"❌ Ошибка RAG-запроса: {e}", file=sys.stderr)

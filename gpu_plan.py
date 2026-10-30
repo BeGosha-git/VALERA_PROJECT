@@ -45,6 +45,22 @@ def query():
     return gpus
 
 
+BIG_MODEL_RE = re.compile(r"(?i)(?:^|[:\-_])(2[6-9]b|3\d+b|[4-9]\d+b|1\d\ds?b)")
+
+
+def modelfile_base() -> str:
+    """Базовая модель из первой строки FROM в Modelfile (или переменной VALERA_MODELFILE)."""
+    path = os.getenv("VALERA_MODELFILE") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "Modelfile")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip().upper().startswith("FROM "):
+                    return line.split(None, 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
 def main():
     gpus = query()
     if not gpus:
@@ -57,7 +73,12 @@ def main():
     xtts = os.getenv("XTTS_GPU") or (rest[0] if rest else llm)
     rest2 = [i for i in rest if i != xtts]
     asr = os.getenv("ASR_GPU") or (rest2[0] if rest2 else xtts)
-    spread = os.getenv("LLM_SPREAD") == "1" and len(gpus) > 1
+    # Большая модель (≥26B параметров) в одну 16-ГБ карту не влезает — растягиваем на все карты.
+    # Между картами по слоям ходят только активации (килобайты), поэтому даже узкая шина второй
+    # карты (PCIe x4) почти не мешает. Явно: LLM_SPREAD=1 / LLM_SPREAD=0.
+    forced = os.getenv("LLM_SPREAD")
+    big = bool(BIG_MODEL_RE.search(modelfile_base()))
+    spread = len(gpus) > 1 and (forced == "1" or (forced is None and big))
     llm_visible = ",".join(g["idx"] for g in gpus) if spread else llm
     print(f"export GPU_COUNT={len(gpus)} LLM_GPU={llm} XTTS_GPU={xtts} ASR_GPU={asr} "
           f"LLM_VISIBLE={llm_visible} LLM_SPREAD={'1' if spread else '0'}")

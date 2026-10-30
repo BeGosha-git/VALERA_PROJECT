@@ -319,6 +319,23 @@ ensure_model() {
 }
 
 # ---------------------------------------------------------------------------
+# Раскладка сервисов по видеокартам (gpu_plan.py)
+# ---------------------------------------------------------------------------
+# LLM — на самую быструю карту, XTTS — на следующую, распознавание речи — на третью (или
+# вместе с XTTS, если карт две). Каждый сервис видит только «свою» карту через
+# CUDA_VISIBLE_DEVICES, поэтому они не мешают друг другу. Переопределение:
+#   LLM_GPU=0 XTTS_GPU=1 ASR_GPU=1 ./run_all.sh web      LLM_SPREAD=1 — LLM на все карты.
+LLM_VISIBLE=""
+ASR_GPU=""
+plan_gpus() {
+    export CUDA_DEVICE_ORDER=PCI_BUS_ID          # индексы nvidia-smi = индексы CUDA
+    command -v nvidia-smi >/dev/null 2>&1 || { echo "  [GPU] nvidia-smi не найден — раскладка по картам пропущена."; return 0; }
+    local plan
+    plan="$(python3 "$SCRIPT_DIR/gpu_plan.py" 2> >(sed 's/^/  [GPU] /' >&2))" || return 0
+    eval "$(echo "$plan" | grep '^export ')"
+}
+
+# ---------------------------------------------------------------------------
 # XTTS-v2 — основной голос (отдельный процесс на GPU, прогретый)
 # ---------------------------------------------------------------------------
 # Если что-то не готово (нет согласия с лицензией, env, сервис не поднялся) —
@@ -338,7 +355,7 @@ start_xtts() {
         bash "$XTTS_DIR/setup_env.sh" || { echo "  ⚠️ Не удалось создать окружение — Silero."; return 0; }
     fi
 
-    # Карта: XTTS_GPU, иначе — с наибольшим свободным объёмом видеопамяти.
+    # Карта — из плана (plan_gpus); если плана нет, берём ту, где больше свободной памяти.
     export CUDA_DEVICE_ORDER=PCI_BUS_ID
     local gpu="${XTTS_GPU:-}"
     if [ -z "$gpu" ] && command -v nvidia-smi >/dev/null 2>&1; then
@@ -435,6 +452,7 @@ fi
 #    Для режима reset Ollama не нужна — там только файлы и MongoDB.
 echo ""
 echo "[3/5] Настройка Ollama..."
+plan_gpus
 
 if [ "$RUN_MODE" = "reset" ]; then
     echo "  reset: Ollama не требуется — пропускаю."
@@ -445,10 +463,11 @@ elif [ "$KEEP_OLLAMA" = "1" ]; then
     else
         echo "  ⚠️ Ollama не отвечает, но --keep-ollama указан. Запускаю свою..."
         OLLAMA_HOST=0.0.0.0:11434 \
-        OLLAMA_MAX_LOADED_MODELS=1 \
+        OLLAMA_SCHED_SPREAD=${LLM_SPREAD:-0} OLLAMA_FLASH_ATTENTION=1 \
+    OLLAMA_MAX_LOADED_MODELS=1 \
         OLLAMA_NUM_PARALLEL=1 \
         OLLAMA_KEEP_ALIVE=-1 \
-            ollama serve &
+            env ${LLM_VISIBLE:+CUDA_VISIBLE_DEVICES=$LLM_VISIBLE} ollama serve &
         OLLAMA_PID=$!
         echo "  ollama serve запущен (PID $OLLAMA_PID)"
     fi
@@ -473,10 +492,11 @@ else
     # нужно, а лишние слоты только делят контекст и память.
     # OLLAMA_KEEP_ALIVE=-1 — модель не выгружается между вопросами.
     OLLAMA_HOST=0.0.0.0:11434 \
+    OLLAMA_SCHED_SPREAD=${LLM_SPREAD:-0} OLLAMA_FLASH_ATTENTION=1 \
     OLLAMA_MAX_LOADED_MODELS=1 \
     OLLAMA_NUM_PARALLEL=1 \
     OLLAMA_KEEP_ALIVE=-1 \
-        ollama serve &
+        env ${LLM_VISIBLE:+CUDA_VISIBLE_DEVICES=$LLM_VISIBLE} ollama serve &
     OLLAMA_PID=$!
     echo "  ollama serve запущен (PID $OLLAMA_PID, слушает 0.0.0.0:11434)"
 fi
@@ -549,7 +569,7 @@ if [ "$RUN_MODE" = "voice" ]; then
     echo ""
     echo "[5/5] Запуск voice_assistant.py ${EXTRA_ARGS}..."
     cd "$SCRIPT_DIR"
-    python voice_assistant.py $EXTRA_ARGS
+    env ${ASR_GPU:+CUDA_VISIBLE_DEVICES=$ASR_GPU} python voice_assistant.py $EXTRA_ARGS
 elif [ "$RUN_MODE" = "voice-fast" ]; then
     # --- Режим голосового ассистента (без подтверждения) ---
     echo ""
@@ -559,7 +579,7 @@ elif [ "$RUN_MODE" = "voice-fast" ]; then
     echo ""
     echo "[5/5] Запуск voice_assistant.py --no-confirm ${EXTRA_ARGS}..."
     cd "$SCRIPT_DIR"
-    python voice_assistant.py --no-confirm $EXTRA_ARGS
+    env ${ASR_GPU:+CUDA_VISIBLE_DEVICES=$ASR_GPU} python voice_assistant.py --no-confirm $EXTRA_ARGS
 elif [ "$RUN_MODE" = "web" ]; then
     # --- Веб-пульт: сайт вместо консоли и настольного GUI ---
     echo ""
@@ -591,7 +611,7 @@ elif [ "$RUN_MODE" = "web" ]; then
 
     # Запускаем в ФОНЕ и запоминаем PID: так cleanup() сможет его погасить,
     # а скрипт остаётся «хозяином» стека и ждёт Ctrl+C.
-    python voice_assistant.py --web --web-port "$WEB_PORT" --web-host "$WEB_HOST" $EXTRA_ARGS &
+    env ${ASR_GPU:+CUDA_VISIBLE_DEVICES=$ASR_GPU} python voice_assistant.py --web --web-port "$WEB_PORT" --web-host "$WEB_HOST" $EXTRA_ARGS &
     APP_PID=$!
     echo "$APP_PID" > "$APP_PID_FILE"
     echo "  ✓ Веб-пульт запущен (PID $APP_PID)"
@@ -611,7 +631,7 @@ elif [ "$RUN_MODE" = "gui" ]; then
     echo "  В окне доступны: тумблеры функций, авто/ручная чувствительность,"
     echo "  визуализация звука (микрофон → шумодав → итог) и триггеры «слово → curl»."
     cd "$SCRIPT_DIR"
-    python valera_gui.py $EXTRA_ARGS
+    env ${ASR_GPU:+CUDA_VISIBLE_DEVICES=$ASR_GPU} python valera_gui.py $EXTRA_ARGS
 elif [ "$RUN_MODE" = "kb-ingest" ]; then
     # --- Загрузка базы знаний МИРЭА (быстрый путь: прямо в контейнере) -----
     # Почему НЕ по HTTP: в этом окружении VPN обрезает крупные HTTP-запросы

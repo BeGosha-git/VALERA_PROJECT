@@ -1865,7 +1865,7 @@ _HALL_SENT_RE = re.compile(
     r"(?i)[^.!?…]*\b(?:стою\s+(?:тут\s+|здесь\s+|прямо\s+)?в\s+холле|жду\s+гостей|стою\s+в\s+холле)\b[^.!?…]*[.!?…]*\s*"
 )
 _INTRO_SENT_RE = re.compile(r"(?i)^\s*(?:привет[!,. ]*|здравствуйте[!,. ]*)?\s*я\s+валера[^.!?…]*робот[^.!?…]*[.!?…]+\s*")
-_ans_ctx = {"vuz_in_question": False, "prev_named": False, "intro_ok": False}
+_ans_ctx = {"vuz_in_question": False, "prev_named": False, "intro_ok": False, "prev_question": False}
 
 _VUZ_REPL = {
     "в": "у нас", "во": "у нас", "из": "у нас", "от": "от нас",
@@ -1883,7 +1883,9 @@ def set_answer_context(question: str, intro_ok: bool = False) -> None:
 
 def note_answer_given(answer: str) -> None:
     """После ответа: был ли в нём назван вуз (тогда следующий ответ уже не называет)."""
-    _ans_ctx["prev_named"] = bool(_VUZ_NAME_RE.search(finalize_answer(answer) or ""))
+    done = finalize_answer(answer) or ""
+    _ans_ctx["prev_named"] = bool(_VUZ_NAME_RE.search(done))
+    _ans_ctx["prev_question"] = done.rstrip().endswith("?")
 
 
 def limit_vuz_mentions(text: str) -> str:
@@ -1914,6 +1916,22 @@ def limit_vuz_mentions(text: str) -> str:
     return re.sub(r"\s{2,}", " ", re.sub(r"\s+([,.!?;:])", r"\1", out)).strip()
 
 
+_TRAIL_Q_RE = re.compile(r"(?s)^(.*?[.!…])\s+([^.!?…]*\?)\s*$")
+
+
+def limit_trailing_question(text: str) -> str:
+    """
+    Не заканчивает КАЖДЫЙ ответ встречным вопросом («Хотите узнать подробнее?»): если прошлый
+    ответ уже закончился вопросом, завершающий вопрос в этом отбрасывается.
+    """
+    if not text or not _ans_ctx["prev_question"]:
+        return text
+    m = _TRAIL_Q_RE.match(text)
+    if m and len(m.group(1).split()) >= 3:
+        return m.group(1).strip()
+    return text
+
+
 def strip_hall_talk(text: str) -> str:
     """Убирает «стою в холле», «жду гостей» и непрошеное «Я Валера, робот-экскурсовод…»."""
     if not text:
@@ -1935,9 +1953,9 @@ def finalize_answer(text: str, max_words: Optional[int] = None) -> str:
     max_words = max_words or current_answer_words()
     return limit_words(
         strip_filler(
-            clean_english(limit_vuz_mentions(strip_hall_talk(fix_vuz_name(fix_name(
+            clean_english(limit_trailing_question(limit_vuz_mentions(strip_hall_talk(fix_vuz_name(fix_name(
                 answer_guard(strip_meta_speech(strip_analysis(text)))
-            )))))
+            ))))))
         ),
         max_words,
     )

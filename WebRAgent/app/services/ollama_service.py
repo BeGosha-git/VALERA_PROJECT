@@ -165,9 +165,12 @@ class OllamaService(LLMService):
             "model": self.model,
             "messages": messages,
             "stream": False,
-            "keep_alive": "30m",  # держим модель в памяти между вызовами
+            "keep_alive": -1,  # модель всегда прогрета
             "options": {"num_predict": max_tokens},
         }
+        import re as _re
+        if _re.search(r"(?i)(gemma4|gemma-4|qwen3|deepseek-r1|gpt-oss|magistral)", self.model or ""):
+            payload["think"] = False   # без режима размышлений — быстрый ответ
         data = self._fit_body(payload)
         resp = requests.post(
             f"{self.base_url}/chat",

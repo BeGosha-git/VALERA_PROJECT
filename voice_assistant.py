@@ -2010,6 +2010,16 @@ def _mark_local_llm_down(reason: str = "") -> None:
     )
 
 
+def ollama_think_off(model: str) -> dict:
+    """
+    Для «думающих» моделей (Gemma 4, Qwen 3/3.5…) отключаем режим размышлений:
+    голосовому роботу нужен быстрый ответ, а не длинная цепочка рассуждений.
+    Для остальных моделей (Llama и др.) параметр не отправляем — они его не знают.
+    """
+    import re as _re
+    return {"think": False} if _re.search(r"(?i)(gemma4|gemma-4|qwen3|deepseek-r1|gpt-oss|magistral)", model or "") else {}
+
+
 def _ollama_chat(
     prompt: str,
     model: str,
@@ -2046,8 +2056,9 @@ def _ollama_chat(
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
-        "keep_alive": "30m",  # держим модель в памяти между вызовами
+        "keep_alive": -1,  # модель всегда прогрета (не выгружается в простое)
         "options": {"num_predict": num_predict, "temperature": temperature},
+        **ollama_think_off(model),
     }
     body = _json.dumps(payload, ensure_ascii=False).encode("utf-8")
 

@@ -304,7 +304,7 @@ def create_app(runtime=None, runner=None):
         try:
             _rq.post(f"{base}/api/generate", json={
                 "model": model, "prompt": "привет", "stream": False,
-                "keep_alive": "30m", "options": {"num_predict": 3},
+                "keep_alive": -1, "options": {"num_predict": 3},
             }, timeout=180)
             return jsonify({"ok": True, "model": model})
         except Exception as exc:  # noqa: BLE001

@@ -53,3 +53,4 @@ valera_memory.jsonl
 
 # PID-файл приложения (веб-пульт/GUI), создаётся run_all.sh
 .valera_app.pid
+.modelfile.sha

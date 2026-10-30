@@ -293,34 +293,27 @@ stop_app() {
 # Создаёт модель проекта (true_valera), если её нет
 ensure_model() {
     echo ""
-    if ollama list 2>/dev/null | grep -q "$OLLAMA_MODEL_NAME"; then
-        echo "[Ollama] Модель $OLLAMA_MODEL_NAME уже установлена."
+    # Модель пересоздаётся не только когда её нет, но и когда изменился Modelfile
+    # (иначе новый промпт/базовая модель не применялись бы без ручного ollama create).
+    local sha_file="$SCRIPT_DIR/.modelfile.sha"
+    local cur_sha=""
+    [ -f "$MODELFILE_PATH" ] && cur_sha="$(sha256sum "$MODELFILE_PATH" | cut -d' ' -f1)"
+    local old_sha=""
+    [ -f "$sha_file" ] && old_sha="$(cat "$sha_file" 2>/dev/null)"
+
+    if ollama list 2>/dev/null | grep -q "$OLLAMA_MODEL_NAME" && [ "$cur_sha" = "$old_sha" ]; then
+        echo "[Ollama] Модель $OLLAMA_MODEL_NAME актуальна."
     else
-        echo "[Ollama] Модель $OLLAMA_MODEL_NAME не найдена. Создаю из $MODELFILE_PATH..."
+        echo "[Ollama] Создаю/обновляю $OLLAMA_MODEL_NAME из $MODELFILE_PATH..."
         if [ -f "$MODELFILE_PATH" ]; then
-            ollama create "$OLLAMA_MODEL_NAME" -f "$MODELFILE_PATH"
-            echo "  ✓ Модель $OLLAMA_MODEL_NAME создана"
+            if ollama create "$OLLAMA_MODEL_NAME" -f "$MODELFILE_PATH"; then
+                echo "$cur_sha" > "$sha_file"
+                echo "  ✓ Модель $OLLAMA_MODEL_NAME создана"
+            else
+                echo "  ⚠️ Не удалось создать модель (нет базовой модели? ollama pull gemma4:12b). Использую то, что есть."
+            fi
         else
             echo "  ⚠️ Modelfile не найден ($MODELFILE_PATH). Модель не создана."
-        fi
-    fi
-
-    # Быстрая версия (3B) — почти мгновенные ответы. Создаём, если есть
-    # llama3.2:3b и ещё нет true_valera_fast. Если базовой модели нет —
-    # подсказываем команду, но не падаем (без сети сборка невозможна).
-    local fast_model="true_valera_fast:latest"
-    local fast_modelfile="$SCRIPT_DIR/Modelfile-FAST"
-    if ollama list 2>/dev/null | grep -q "$fast_model"; then
-        echo "[Ollama] Быстрая модель $fast_model уже установлена."
-    elif [ -f "$fast_modelfile" ]; then
-        if ollama list 2>/dev/null | grep -q "llama3.2:3b"; then
-            echo "[Ollama] Создаю быструю модель $fast_model из $fast_modelfile..."
-            ollama create "$fast_model" -f "$fast_modelfile" \
-                && echo "  ✓ Быстрая модель $fast_model создана" \
-                || echo "  ⚠️ Не удалось создать $fast_model"
-        else
-            echo "[Ollama] Нет базовой llama3.2:3b. Для быстрых ответов выполните:"
-            echo "         ollama pull llama3.2:3b && ./run_all.sh web"
         fi
     fi
 }

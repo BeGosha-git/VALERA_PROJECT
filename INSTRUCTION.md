@@ -1,6 +1,6 @@
 ### Установить:
 
-./run_all web   #режим web интерфейса
+./run_all web   #режим web интерфейса на http://localhost:8137/
 
 Ollama
 

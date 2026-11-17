@@ -461,7 +461,29 @@ echo "============================================"
 # 1. Инициализация conda
 echo ""
 echo "[1/5] Инициализация conda..."
-source "$(conda info --base)/etc/profile.d/conda.sh"
+#
+# ВАЖНО: conda может отсутствовать в PATH.
+# Она приходит из ~/.bashrc, а неинтерактивные шеллы (setsid, nohup, systemd,
+# cron, запуск из другого скрипта) .bashrc НЕ читают. Тогда
+# `conda info --base` возвращает пустоту, `source` молча падает, окружения
+# НЕ активируются — и XTTS/rerank стартуют СИСТЕМНЫМ python, где нет uvicorn.
+# Симптом ровно такой, как наблюдали: «No module named 'uvicorn'» и голос
+# падает на Silero, хотя в xtts_env все пакеты есть.
+if ! command -v conda >/dev/null 2>&1; then
+    for _cand in "$HOME/miniconda3/bin/conda" "$HOME/anaconda3/bin/conda" \
+                 "$SCRIPT_DIR/miniconda3/bin/conda" "/opt/conda/bin/conda"; do
+        if [ -x "$_cand" ]; then
+            export PATH="$(dirname "$_cand"):$PATH"
+            echo "  conda найдена: $_cand"
+            break
+        fi
+    done
+fi
+if command -v conda >/dev/null 2>&1; then
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+else
+    echo "  ⚠️ conda не найдена — окружения не активируются, голос будет Silero."
+fi
 
 # 2. Создание Conda-окружений (если отсутствуют)
 echo ""
@@ -500,7 +522,8 @@ elif [ "$KEEP_OLLAMA" = "1" ]; then
         echo "  ⚠️ Ollama не отвечает, но --keep-ollama указан. Запускаю свою..."
         OLLAMA_HOST=0.0.0.0:11434 \
         OLLAMA_SCHED_SPREAD=${LLM_SPREAD:-0} OLLAMA_FLASH_ATTENTION=1 \
-    OLLAMA_MAX_LOADED_MODELS=1 \
+    OLLAMA_KV_CACHE_TYPE=${OLLAMA_KV_CACHE_TYPE:-q8_0} \
+    OLLAMA_MAX_LOADED_MODELS=2 \
         OLLAMA_NUM_PARALLEL=1 \
         OLLAMA_KEEP_ALIVE=-1 \
             env ${LLM_VISIBLE:+CUDA_VISIBLE_DEVICES=$LLM_VISIBLE} ollama serve &
@@ -518,18 +541,19 @@ else
     # контекстом обрываются VPN — отсюда 500 на /api/generate и «зависший»
     # поиск по базе знаний.
     #
-    # OLLAMA_MAX_LOADED_MODELS=1 — ОДНА модель в памяти.
-    # Без этого Ollama держала одновременно true_valera (5.3 ГБ) и
-    # true_valera_fast (2.3 ГБ), и на каждый запрос «другой» модели
-    # перезагружала раннер. В этот момент /tokenize отвечал ошибкой
-    # `context canceled`, а клиент висел до таймаута (400–500 в логе, 45–60 с
-    # тишины для гостя). С одной моделью перезагрузок нет.
+    # OLLAMA_MAX_LOADED_MODELS=2 — ДВЕ модели в памяти одновременно:
+    #   • основная (26B, ~21 ГБ на двух картах) отвечает на вопросы;
+    #   • быстрая (3B, ~2 ГБ, phrase_gate.py) решает, договорил ли гость,
+    #     и ведёт смысловую сводку разговора.
+    #   Две модели нужны, чтобы гейт не выгружал основную (иначе каждый вопрос
+    #   начинался бы с холодной загрузки 26B ~20 с).
     # OLLAMA_NUM_PARALLEL=1 — один запрос за раз: голосовому роботу больше не
     # нужно, а лишние слоты только делят контекст и память.
-    # OLLAMA_KEEP_ALIVE=-1 — модель не выгружается между вопросами.
+    # OLLAMA_KEEP_ALIVE=-1 — модели не выгружаются между вопросами.
     OLLAMA_HOST=0.0.0.0:11434 \
     OLLAMA_SCHED_SPREAD=${LLM_SPREAD:-0} OLLAMA_FLASH_ATTENTION=1 \
-    OLLAMA_MAX_LOADED_MODELS=1 \
+    OLLAMA_KV_CACHE_TYPE=${OLLAMA_KV_CACHE_TYPE:-q8_0} \
+    OLLAMA_MAX_LOADED_MODELS=2 \
     OLLAMA_NUM_PARALLEL=1 \
     OLLAMA_KEEP_ALIVE=-1 \
         env ${LLM_VISIBLE:+CUDA_VISIBLE_DEVICES=$LLM_VISIBLE} ollama serve &

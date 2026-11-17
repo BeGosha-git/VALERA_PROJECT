@@ -86,11 +86,27 @@ class AssistantRunner:
         return self.thread is not None and self.thread.is_alive()
 
     def status(self) -> Dict[str, Any]:
+        gate_digest = ""
+        gate_model = ""
+        gate_enabled = False
+        if self.assistant is not None:
+            gate = getattr(self.assistant, "gate", None)
+            if gate is not None:
+                gate_digest = gate.digest or ""
+                gate_model = gate.model
+                gate_enabled = bool(gate.enabled)
         return {
             "running": self.running,
             "error": self.error,
             "uptime_sec": (time.time() - self.started_at) if self.started_at and self.running else 0,
             "chat": self.runtime.get_current_chat(),
+            # Смысловой гейт конца фразы (быстрая модель) — для страницы /rules
+            # и пульта: видно, что робот «помнит» разговор целиком.
+            "gate": {
+                "enabled": gate_enabled,
+                "model": gate_model,
+                "digest": gate_digest,
+            },
         }
 
     def start(self, stt: str = "kairos", new_chat: bool = False,
@@ -238,6 +254,7 @@ def create_app(runtime=None, runner=None):
             except (TypeError, ValueError, IndexError):
                 mic = 0.0
         asst = asst_runner.status()
+        gate = asst.get("gate") or {}
         return jsonify({
             "status": rt.get_status(),
             "heard": rt.last_transcript or "",
@@ -246,6 +263,9 @@ def create_app(runtime=None, runner=None):
             "error": asst.get("error"),
             "mic": round(mic, 4),
             "uptime": int(asst.get("uptime_sec") or 0),
+            # Смысловая сводка разговора (быстрая модель) — что робот помнит.
+            "gate_digest": gate.get("digest") or "",
+            "gate_enabled": bool(gate.get("enabled")),
         })
 
     # ------------------------------------------------------------------
@@ -1932,15 +1952,6 @@ h1{font-size:30px;font-weight:800;letter-spacing:-.9px;line-height:1.1}
 .wave i:nth-child(4){height:14px;animation-delay:.36s}
 .wave i:nth-child(5){height:9px;animation-delay:.48s}
 @keyframes eq{0%,100%{transform:scaleY(.45)}50%{transform:scaleY(1)}}
-
-/* ---------- подсказка ---------- */
-.hint{
-  margin-top:var(--sp-3);padding:var(--sp-3) var(--sp-4);
-  border-radius:var(--r-md);border:1px dashed var(--line-strong);
-  background:rgba(139,124,246,.07);
-  font-size:14.5px;font-weight:600;color:var(--fg-2);line-height:1.55;
-}
-.hint b{color:var(--violet)}
 
 footer{
   margin-top:var(--sp-4);padding-top:var(--sp-3);

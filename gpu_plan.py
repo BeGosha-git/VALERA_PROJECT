@@ -61,6 +61,34 @@ def modelfile_base() -> str:
     return ""
 
 
+def configured_model() -> str:
+    """
+    Имя модели, которое РЕАЛЬНО будет загружено ассистентом — из
+    ``valera_config.json`` → ``llm.model`` (например, ``true_valera_26b:latest``).
+
+    Раньше «большая модель» определялась только по строке FROM в Modelfile
+    (там была 12b), поэтому для 26b ``LLM_SPREAD`` не включался и модель
+    пыталась уместиться в ОДНУ карту (16 ГБ против 18 ГБ → CPU-оффлоад,
+    медленно). Конфиг — источник истины: ассистент берёт модель именно оттуда.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "valera_config.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            cfg = __import__("json").load(fh)
+        return str((cfg.get("llm") or {}).get("model") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def is_big_model() -> bool:
+    """Модель ≥26B параметров (не влезает в одну 16-ГБ карту)?"""
+    # Смотрим имя из конфига (приоритет) и строку FROM в Modelfile (запасной).
+    for name in (configured_model(), modelfile_base()):
+        if BIG_MODEL_RE.search(name):
+            return True
+    return False
+
+
 def main():
     gpus = query()
     if not gpus:
@@ -77,7 +105,7 @@ def main():
     # Между картами по слоям ходят только активации (килобайты), поэтому даже узкая шина второй
     # карты (PCIe x4) почти не мешает. Явно: LLM_SPREAD=1 / LLM_SPREAD=0.
     forced = os.getenv("LLM_SPREAD")
-    big = bool(BIG_MODEL_RE.search(modelfile_base()))
+    big = is_big_model()
     spread = len(gpus) > 1 and (forced == "1" or (forced is None and big))
     llm_visible = ",".join(g["idx"] for g in gpus) if spread else llm
     print(f"export GPU_COUNT={len(gpus)} LLM_GPU={llm} XTTS_GPU={xtts} ASR_GPU={asr} "

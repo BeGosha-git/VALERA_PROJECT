@@ -35,6 +35,7 @@ from tts_backends import get_xtts_client
 from asr_fix import fix_asr
 from valera_memory import ConversationMemory, CONTINUE_RE, GREET_RE, THANKS_RE, recall_kind, style_hint
 from kairos_asr import KairosASR
+from phrase_gate import PhraseGate
                                                                                                               
 # Рантайм-состояние проекта: общие настройки, буферы для GUI и триггеры
 # «слово → сетевая команда» (робот Unitree H1). Один и тот же экземпляр
@@ -1201,6 +1202,16 @@ def split_into_sentences(text: str) -> list:
         p = p.strip()
         if not p:
             continue
+        # Метка эмоции относится к ПРЕДЫДУЩЕМУ предложению. Разбивка идёт по
+        # «.!?…», поэтому «Привет! [эмоция:радость]» распадается на «Привет!»
+        # и «[эмоция:радость]». Возвращаем метку туда, где она стояла, иначе
+        # эмоция достанется следующей фразе.
+        _m = _EMOTION_RE.match(p)
+        if _m and out:
+            out[-1] = f"{out[-1]} {_m.group(0).strip()}"
+            p = p[_m.end():].strip()
+            if not p:
+                continue
         # Совсем короткие обрывки приклеиваем к предыдущему предложению,
         # чтобы не озвучивать «А.» отдельным куском.
         if out and len(p) < 3:
@@ -1338,9 +1349,20 @@ def split_complete_sentences(buf: str):
     out, start = [], 0
     for m in _SENT_END_RE.finditer(buf):
         end = m.end()
-        rest = buf[end:].lstrip()
+        tail = buf[end:]
+        rest = tail.lstrip()
         if not rest:                      # следующий символ не пришёл — граница не подтверждена
             break
+        # Эмоция ставится в конце КАЖДОГО предложения: «Привет! [эмоция:радость]».
+        # Метка сразу после знака конца относится к ЭТОМУ предложению, а не
+        # продолжает фразу. Без этой ветки «[» не считался заглавной буквой,
+        # предложения склеивались и на весь ответ оставалась одна эмоция.
+        emo = _EMOTION_RE.match(rest)
+        if emo:
+            label_end = end + (len(tail) - len(rest)) + emo.end()
+            out.append(buf[start:label_end].strip())
+            start = label_end
+            continue
         if not (rest[0].isupper() or rest[0] in "«\"—-("):
             continue                      # продолжение предложения («2026 г. по будням»)
         word = re.findall(r"[\w-]+$", buf[start:m.start()])
@@ -2000,14 +2022,128 @@ def strip_hall_talk(text: str) -> str:
     return out or "Слушаю Вас."
 
 
-def finalize_answer(text: str, max_words: Optional[int] = None) -> str:
+# ---------------------------------------------------------------------------
+# ЭМОЦИИ: модель возвращает метку, голос её ОТРАЖАЕТ
+# ---------------------------------------------------------------------------
+# Просить модель «говорить эмоционально» бесполезно — ответ читает синтезатор,
+# эмоция должна быть параметром синтеза. Поэтому модель в КОНЦЕ ответа ставит
+# служебную метку вида ``[эмоция:радость]``, а код:
+#   1) вырезает метку из текста (вслух она не звучит и в пульт не попадает);
+#   2) меняет темп речи и громкость через XTTS (``speed``) — это и есть
+#      «смена тона», доступная без отдельной эмоциональной модели.
+# Метка необязательна: если модель её не поставила, голос звучит как обычно.
+_EMOTION_RE = re.compile(
+    r"[\[(]\s*(?:эмоция|emotion)\s*[:：]\s*([^\])]{2,24})\s*[\])]\s*",
+    re.IGNORECASE,
+)
+
+# Темп по эмоции. Значения подобраны на слух: живая речь в радости быстрее,
+# разговор о серьёзном (стипендии, экзамены) — медленнее и ровнее.
+# ``volume`` — множитель громкости (1.0 = как обычно).
+EMOTION_STYLE = {
+    "радость":       {"speed": 1.08, "volume": 1.00, "pitch": 1.050},
+    "воодушевление": {"speed": 1.10, "volume": 1.02, "pitch": 1.065},
+    "восторг":       {"speed": 1.12, "volume": 1.03, "pitch": 1.075},
+    "дружелюбие":    {"speed": 1.04, "volume": 1.00, "pitch": 1.020},
+    "тепло":         {"speed": 1.02, "volume": 1.00, "pitch": 1.015},
+    "спокойствие":   {"speed": 1.00, "volume": 1.00, "pitch": 0.995},
+    "уверенность":   {"speed": 1.01, "volume": 1.01, "pitch": 0.990},
+    "серьёзность":   {"speed": 0.94, "volume": 1.00, "pitch": 0.962},
+    "сочувствие":    {"speed": 0.96, "volume": 0.98, "pitch": 0.970},
+    "задумчивость":  {"speed": 0.97, "volume": 0.98, "pitch": 0.982},
+    "удивление":     {"speed": 1.06, "volume": 1.02, "pitch": 1.055},
+    # Английские варианты: Gemma иногда отвечает «[emotion: joy]».
+    "joy":           {"speed": 1.08, "volume": 1.00, "pitch": 1.050},
+    "excited":       {"speed": 1.10, "volume": 1.02, "pitch": 1.065},
+    "friendly":      {"speed": 1.04, "volume": 1.00, "pitch": 1.020},
+    "warm":          {"speed": 1.02, "volume": 1.00, "pitch": 1.015},
+    "calm":          {"speed": 1.00, "volume": 1.00, "pitch": 0.995},
+    "confident":     {"speed": 1.01, "volume": 1.01, "pitch": 0.990},
+    "serious":       {"speed": 0.94, "volume": 1.00, "pitch": 0.962},
+    "sympathy":      {"speed": 0.96, "volume": 0.98, "pitch": 0.970},
+    "thoughtful":    {"speed": 0.97, "volume": 0.98, "pitch": 0.982},
+    "surprised":     {"speed": 1.06, "volume": 1.02, "pitch": 1.055},
+    "neutral":       {"speed": 1.00, "volume": 1.00, "pitch": 1.000},
+}
+DEFAULT_EMOTION = "дружелюбие"
+
+
+def parse_emotion(text: str) -> tuple:
+    """
+    Вырезает метку эмоции из ответа.
+
+    Возвращает ``(чистый_текст, эмоция|None)``. Понимает варианты написания:
+    ``[эмоция:радость]``, ``(эмоция: радость)``, ``[Emotion: joy]`` (модель
+    иногда отвечает по-английски). Неизвестную эмоцию возвращает как есть —
+    вызывающий код просто не найдёт её в ``EMOTION_STYLE``.
+    """
+    if not text:
+        return text, None
+    found = None
+
+    def _grab(match):
+        nonlocal found
+        if found is None:
+            found = match.group(1).strip().lower().rstrip(".!?,;")
+        return ""
+
+    clean = _EMOTION_RE.sub(_grab, text)
+    clean = re.sub(r"\s{2,}", " ", clean).strip()
+    return clean, found
+
+
+def emotion_style(emotion: Optional[str]) -> dict:
+    """
+    Параметры синтеза для эмоции.
+
+    Если метки нет (модель обрезалась по лимиту токенов, ответ короткий или
+    это служебная фраза), берём ``DEFAULT_EMOTION`` — дружелюбие. Голос тогда
+    чуть живее нейтрального, но без риска «переиграть». Плоским он не станет
+    ни при каких условиях.
+    """
+    if not emotion:
+        return dict(EMOTION_STYLE.get(DEFAULT_EMOTION, {"speed": 1.0, "volume": 1.0, "pitch": 1.0}))
+    return EMOTION_STYLE.get(emotion, dict(EMOTION_STYLE.get(DEFAULT_EMOTION, {"speed": 1.0, "volume": 1.0, "pitch": 1.0})))
+
+
+def split_answer_for_tts(text: str) -> list:
+    """
+    Делит ответ на предложения и достаёт эмоцию ИЗ КАЖДОГО.
+
+    Возвращает список пар ``(текст_предложения, стиль_синтеза)``. Метки
+    ``[эмоция:…]`` убираются из текста — вслух они звучать не должны — но
+    остаются привязанными к своей фразе, поэтому интонация может меняться
+    по ходу ответа (факт — спокойно, хорошая новость — радостно). Если у
+    фразы метки нет, берётся ``DEFAULT_EMOTION``: голос останется живым,
+    но не «переиграет».
+    """
+    pairs = []
+    for part in split_into_sentences(text or ""):
+        clean, name = parse_emotion(part)
+        clean = finalize_answer(clean)
+        if clean:
+            pairs.append((clean, emotion_style(name)))
+    return pairs
+
+
+def finalize_answer(
+    text: str, max_words: Optional[int] = None, keep_emotion: bool = False
+) -> str:
     """
     Приводит ответ к финальному виду для озвучки: вырезает служебную речь
     («согласно источникам»), поправляет имя, убирает английские слова и «воду»,
     затем подрезает до лимита слов. Единая функция для всех путей, чтобы ответ
     всегда был чистым и коротким.
+
+    Метку эмоции ``[эмоция:…]`` по умолчанию вырезаем: она служебная, вслух
+    звучать не должна. Но если ответ ещё будет резаться на предложения для
+    потоковой озвучки, метки нужно СОХРАНИТЬ (``keep_emotion=True``) — иначе
+    после этой функции уже не понять, какая интонация к какому предложению
+    относилась. Тогда метки снимает вызывающий код, по одной на фразу.
     """
     max_words = max_words or current_answer_words()
+    if not keep_emotion:
+        text, _ = parse_emotion(text)
     return limit_words(
         strip_filler(
             clean_english(limit_trailing_question(limit_vuz_mentions(strip_hall_talk(fix_vuz_name(fix_name(
@@ -2279,14 +2415,16 @@ def ask_ollama_direct(
         return ""
 
 
-def warmup_ollama(model: str = REPHRASE_MODEL, timeout: int = 20) -> None:
+def warmup_ollama(model: str = REPHRASE_MODEL, timeout: int = 240) -> None:
     """
     Прогревает LLM-модель в Ollama коротким вызовом, чтобы она загрузилась
     в VRAM до первого реального запроса (иначе первый ответ ждёт cold start).
 
-    Таймаут по умолчанию 20 с: холодная загрузка 8B занимает ~10–15 с. Если
-    модель не поднялась и за это время — она сломана, и ассистент перейдёт на
-    WebRAgent вместо того, чтобы ждать.
+    Таймаут по умолчанию 240 с: холодная загрузка 26B на двух картах занимает
+    ~50–90 с (плюс возможная догрузка весов с диска). Раньше стояло 20 с —
+    этого не хватало, и запрос ОБРЫВАЛ загрузку уже на середине
+    («client connection closed before llama-server finished loading, aborting
+    load»), после чего модель вообще оставалась не загруженной.
     """
     try:
         # Через /api/chat (см. _ollama_chat): у /api/generate ответ содержит
@@ -2301,7 +2439,7 @@ def warmup_ollama(model: str = REPHRASE_MODEL, timeout: int = 20) -> None:
         if text:
             print(f"🔥 LLM прогрев: {model} готова")
         else:
-            print(f"⚠️ LLM прогрев: статус {resp.status_code}", file=sys.stderr)
+            print(f"⚠️ LLM прогрев: {model} ответила пусто", file=sys.stderr)
     except Exception as e:
         print(f"⚠️ LLM прогрев не удался: {e}", file=sys.stderr)
 
@@ -2374,6 +2512,10 @@ class VoiceAssistant:
         # TTS-поток: при barge-in озвучка идёт в фоне, не блокируя обработку.
         self._tts_thread: Optional[threading.Thread] = None
 
+        # Эмоция текущего ответа (темп/громкость синтеза). Ставится в _speak
+        # по метке [эмоция:…] из ответа модели, сбрасывается после озвучки.
+        self._tts_emotion: Optional[dict] = None
+
         # STT-модель: грузим лениво и переиспользуем
         self._asr = None          # выбранная модель распознавания речи
 
@@ -2392,6 +2534,29 @@ class VoiceAssistant:
         self._conversation_history: list = []
         # Долговременная память: обмены переживают смену чата и перезапуск.
         self.memory = ConversationMemory()
+
+        # --- Смысловой гейт конца фразы (быстрая модель) -------------------
+        # Решает по СМЫСЛУ, договорил ли гость (VAD режет только по паузе), и
+        # ведёт сжатую сводку всего разговора. Модель быстрая (3B), грузится
+        # на свободной видеопамяти и не мешает основной 26B.
+        gate_cfg = cfg.get("gate", {}) or {}
+        self.gate = PhraseGate(
+            ollama_url=(gate_cfg.get("ollama_url")
+                        or cfg.get("llm", {}).get("ollama_url")
+                        or "http://localhost:11434"),
+            model=gate_cfg.get("model") or "llama3.2:3b",
+            wait_sec=float(gate_cfg.get("wait_sec", 5.0)),
+            timeout=float(gate_cfg.get("timeout", 10.0)),
+            enabled=bool(gate_cfg.get("enabled", True)),
+        )
+        # Незаконченная (по смыслу) фраза: пока гость не договорит, держим её
+        # аудио и текст, чтобы при следующей реплике склеить в одну.
+        self._pending_raw: list = []
+        self._pending_text = ""
+        self._pending_since = 0.0
+        # Когда флешируем незаконченную фразу по таймауту — не переспрашиваем гейт.
+        self._force_phrase = False
+
         self._last_mirea = False
         self._last_effective = ""
         # Откуда пришёл последний ответ: "chat" (серверный чат с контекстом),
@@ -2595,6 +2760,19 @@ class VoiceAssistant:
             try:
                 audio_np = self._phrase_queue.get(timeout=0.2)
             except queue.Empty:
+                # Флеш незаконченной фразы: гость так и не продолжил в течение
+                # gate.wait_sec — обрабатываем то, что накопилось, по принуждению
+                # (гейт уже не переспрашиваем).
+                if (self._pending_raw and not self._busy
+                        and self.gate.enabled
+                        and time.time() - self._pending_since >= self.gate.wait_sec):
+                    pending = self._pending_raw
+                    self._pending_raw = []
+                    self._pending_text = ""
+                    self._force_phrase = True
+                    print("⏱️ Фраза не продолжилась — обрабатываю как есть.")
+                    self._handle_phrase(np.concatenate(pending))
+                    self._force_phrase = False
                 continue
             if self._busy:
                 continue  # не обрабатываем новые фразы, пока заняты
@@ -2761,6 +2939,12 @@ class VoiceAssistant:
         style = style_hint(question)
         if style:
             hint = f"{hint}\n{style}" if hint else style
+        # Смысловая сводка ВСЕГО разговора (быстрая модель). В отличие от
+        # истории (последние 8 сообщений) помнит, о чём говорили в начале
+        # долгого диалога, и держит интересы гостя.
+        if self.gate and self.gate.enabled and self.gate.digest:
+            digest_hint = f"Контекст разговора (кратко): {self.gate.digest}"
+            hint = f"{digest_hint}\n{hint}" if hint else digest_hint
         if self.rag is not None:
             answer = self.rag.direct_answer(question, history=history, hint=hint)
             if answer:
@@ -2848,7 +3032,13 @@ class VoiceAssistant:
                     return
                 if stop.is_set():
                     continue
-                pcm_q.put(self._synthesize_pcm_bytes(s, speaker))
+                # В очередь кладём пару (текст, стиль эмоции): так стиль
+                # привязан к своей фразе и не «перетекает» на соседние.
+                if isinstance(s, tuple):
+                    s_text, s_emo = s
+                else:
+                    s_text, s_emo = s, None
+                pcm_q.put(self._synthesize_pcm_bytes(s_text, speaker, s_emo))
 
         def _player():
             while True:
@@ -2869,6 +3059,14 @@ class VoiceAssistant:
         def _emit(sentence: str) -> None:
             if state["limit"] or not sentence.strip():
                 return
+            # Эмоция стоит в конце КАЖДОГО предложения, поэтому кусок приходит
+            # от split_complete_sentences уже вместе со своей меткой — сразу
+            # и синтезируем _(текст, стиль)_. Если метки нет, emotion_style
+            # вернёт «дружелюбие», то есть живую интонацию, а не плоскую.
+            sentence, _emo_name = parse_emotion(sentence)
+            _emo_style = emotion_style(_emo_name)
+            if _emo_name:
+                print(f"🎭 Эмоция: {_emo_name} (темп ×{_emo_style['speed']:.2f})")
             clean = finalize_answer(sentence, budget)
             if not clean or (clean == "Слушаю Вас." and sentence.strip() != clean):
                 return
@@ -2882,7 +3080,7 @@ class VoiceAssistant:
             spoken.append(clean)
             if _VUZ_NAME_RE.search(clean):
                 _ans_ctx["prev_named"] = True             # дальше в этом ответе вуз не называем
-            sent_q.put(clean)
+            sent_q.put((clean, _emo_style))
 
         buf, failed = "", None
         try:
@@ -2933,6 +3131,14 @@ class VoiceAssistant:
             # В долговременную память — с id чата и темой (вуз/не вуз).
             self.memory.add(question, answer, chat_id=self._chat_id, mirea=self._last_mirea,
                             eq=self._last_effective or None)
+        # Смысловой учёт всего сказанного: быстрая модель сжимает весь диалог
+        # в короткую сводку. Обновляем в фоне, чтобы не задерживать озвучку.
+        if self.gate and self.gate.enabled and question and answer:
+            threading.Thread(
+                target=self.gate.update_digest,
+                args=(question, answer),
+                daemon=True,
+            ).start()
 
     def _rag_query(
         self,
@@ -3002,6 +3208,12 @@ class VoiceAssistant:
             # Авто-новый чат после длительной тишины: если гость давно ушёл,
             # начинаем разговор с чистого контекста (см. rag.auto_new_chat...).
             self._maybe_auto_new_chat()
+            # Склейка с незаконченной фразой: если прошлая реплика оборвалась
+            # на полуслове, новая — её продолжение. Объединяем АУДИО, чтобы
+            # ASR распознал фразу целиком.
+            if self._pending_raw:
+                audio_np = np.concatenate(self._pending_raw + [audio_np])
+                self._pending_raw = []
             self._handle_phrase_inner(audio_np)
             self.runtime.touch_activity()
         finally:
@@ -3034,6 +3246,10 @@ class VoiceAssistant:
             self._save_chat_id(self._chat_id)
             self.runtime.set_current_chat(self._chat_id, "")
             print(f"✅ Новый чат: {self._chat_id}")
+            # Новый разговор — сбрасываем и смысловую сводку, иначе старые
+            # темы прошлого гостя «просочатся» в новый диалог.
+            if self.gate:
+                self.gate.reset()
         else:
             print("⚠️ Не удалось создать новый чат — продолжаю текущий.")
         self.runtime.mark_new_chat_started()
@@ -3054,36 +3270,42 @@ class VoiceAssistant:
         """
         if not text:
             return
-        # Финальная обработка: убираем английские слова и «воду», подрезаем
-        # до лимита слов — гарантия чистого короткого ответа, даже если
-        # модель/поиск вернули длинный текст.
-        text = finalize_answer(text)
-        if not text:
+        # Ответ озвучивается ПОТОКОВО, по предложениям, а метка эмоции стоит в
+        # конце КАЖДОГО предложения. Поэтому метки разбираем здесь же, вместе с
+        # разбивкой: у каждой фразы будет своя интонация, а не одна на всё.
+        pairs = split_answer_for_tts(text)
+        if not pairs:
             return
+        # Интонация для отката на синтез всего текста целиком: берём стиль
+        # первой фразы. Так даже односоставный ответ («Кто ректор?» — одно
+        # предложение) не потеряет свою эмоцию на запасном пути.
+        self._tts_emotion = pairs[0][1]
         if not self.runtime.feature("tts", default=True):
             print("🔇 Озвучка выключена (тумблер в GUI).")
             return
 
         speaker = self.runtime.get("tts", "speaker", default=self._tts_speaker)
+        plain = " ".join(t for t, _ in pairs)
 
         def _do_speak():
             try:
                 # 1) Пробуем потоковую озвучку по предложениям на выбранном
                 #    устройстве (aplay). Первые слова звучат почти сразу.
                 if TTS_PARALLEL_SENTENCES:
-                    sentences = split_into_sentences(text)
-                    if len(sentences) > 1 and self._stream_sentences(sentences, speaker):
+                    if len(pairs) > 1 and self._stream_sentences(pairs, speaker):
                         return
                 # 2) Откат: целиком через устройство (aplay)…
-                played = self._speak_via_device(text, speaker)
+                played = self._speak_via_device(plain, speaker)
                 if not played:
                     # 3) …или встроенный проигрыватель NeuralSpeaker (simpleaudio).
-                    self._speak_whole_fallback(text, speaker)
+                    self._speak_whole_fallback(plain, speaker)
             except Exception as e:
                 print(f"❌ Ошибка синтеза речи: {e}", file=sys.stderr)
                 self.runtime.log_event("error", f"TTS: {e}")
             finally:
                 self._interrupt_tts = False
+                # Эмоцию сбрасываем: следующий ответ может быть без метки.
+                self._tts_emotion = None
 
         if self.runtime.feature("barge_in"):
             # Ждём завершения предыдущей озвучки (быстрое прерывание флагом)
@@ -3137,6 +3359,10 @@ class VoiceAssistant:
         Озвучивает предложения конвейером: пока играет текущее, в фоне уже
         синтезируется следующее. Возвращает True, если всё проигралось через
         aplay; False — если вывод не удался (нужен откат на другой способ).
+
+        ``sentences`` — пары ``(текст, стиль_эмоции)``: у каждой фразы своя
+        интонация, потому что метка эмоции стоит в конце каждого предложения.
+        Для обратной совместимости принимает и просто строки.
         """
         import queue as _queue
 
@@ -3144,11 +3370,14 @@ class VoiceAssistant:
         interrupted = threading.Event()
 
         def _producer():
-            for s in sentences:
+            for item in sentences:
                 if interrupted.is_set() or self._interrupt_tts:
                     break
+                s, style = item if isinstance(item, tuple) else (item, None)
+                if style:
+                    print(f"🎭 Эмоция: темп ×{style['speed']:.2f}, тон ×{style['pitch']:.2f}")
                 # Тишина в начало уже добавляется внутри _synthesize_pcm_bytes.
-                pcm = self._synthesize_pcm_bytes(s, speaker)
+                pcm = self._synthesize_pcm_bytes(s, speaker, style)
                 q.put((s, pcm))
             q.put(None)  # признак конца
 
@@ -3200,7 +3429,54 @@ class VoiceAssistant:
             print(f"⚠️ Озвучка на устройство {device} не удалась: {e}", file=sys.stderr)
             return False
 
-    def _synthesize_pcm_bytes(self, text: str, speaker: str) -> Optional[bytes]:
+    def _apply_emotion_gain(self, pcm: bytes, volume: float) -> bytes:
+        """
+        Множит громкость PCM-потока (эмоциональный акцент).
+
+        XTTS умеет менять только темп, поэтому «воодушевление»/«восторг»
+        дополнительно звучат громче. Мягкое ограничение (tanh) не даёт
+        клиппинга на громких слогах — иначе на колонках слышны щелчки.
+        """
+        if abs(volume - 1.0) < 0.01:
+            return pcm
+        try:
+            audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+            audio = np.tanh(audio * volume) * 0.98
+            return (audio * 32767).astype(np.int16).tobytes()
+        except Exception:  # noqa: BLE001
+            return pcm
+
+    def _apply_emotion_pitch(self, pcm: bytes, pitch: float) -> bytes:
+        """
+        Сдвигает ТОН голоса ресемплингом PCM (эмоциональная интонация).
+
+        Зачем отдельно от ``speed``: XTTS меняет темп, но сама генерация
+        недетерминирована, и на слух разница между «спокойно» и «радостно»
+        смазывается (замер: разброс длительности ±20 % при одном и том же
+        ``speed``). Ресемплинг даёт ГАРАНТИРОВАННЫЙ сдвиг: тот же поток
+        проигрывается с другой частотой — радость выше и быстрее, серьёзность
+        ниже и медленнее. Это и есть «смена тона», минимально достаточная
+        для эмоциональной речи.
+
+        Коэффициент держим в диапазоне 0.95–1.08: сильнее — голос начинает
+        звучать неестественно («эффект бурундука»).
+        """
+        if abs(pitch - 1.0) < 0.005:
+            return pcm
+        pitch = max(0.94, min(1.09, pitch))
+        try:
+            audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+            n_out = max(1, int(round(len(audio) / pitch)))
+            # Линейная интерполяция по новой сетке индексов.
+            idx = np.linspace(0, len(audio) - 1, n_out)
+            stretched = np.interp(idx, np.arange(len(audio)), audio)
+            return stretched.astype(np.int16).tobytes()
+        except Exception:  # noqa: BLE001
+            return pcm
+
+    def _synthesize_pcm_bytes(
+        self, text: str, speaker: str, emotion: Optional[dict] = None
+    ) -> Optional[bytes]:
         """
         Синтезирует речь в сырые PCM-байты (S16_LE, моно, 48 кГц).
 
@@ -3208,17 +3484,30 @@ class VoiceAssistant:
         внутренней модели напрямую — так мы получаем данные и сами решаем,
         на какое устройство их отправить. Повторяем ту же предподготовку
         текста (транслит + числа прописью), что и оригинальный ``speak()``.
+
+        ``emotion`` — стиль {speed, volume, pitch}. Если не задан, берётся
+        ``self._tts_emotion`` (обычный путь через ``_speak``). Стриминг передаёт
+        его явно: там предложения идут очередью и общий атрибут состояния
+        гоняется между потоками.
         """
         # Основной голос — XTTS-v2 (отдельный сервис на GPU). Если он не поднят
         # или упал, клиент вернёт None и ниже сработает запасной Silero.
         if self.runtime.get("tts", "backend", default="xtts") == "xtts":
+            # Базовая скорость из настроек умножается на темп эмоции:
+            # радость — быстрее, серьёзный разговор — медленнее. Это и есть
+            # «смена тона», доступная без отдельной эмоциональной модели.
+            base_speed = float(self.runtime.get("tts", "speed", default=1.0) or 1.0)
+            emo = emotion if emotion is not None else (getattr(self, "_tts_emotion", None) or {})
+            speed = base_speed * float(emo.get("speed", 1.0))
             pcm = get_xtts_client().synthesize(
                 text,
                 speaker=self.runtime.get("tts", "xtts_speaker", default="Damien Black"),
                 sample_rate=TTS_SAMPLE_RATE,
-                speed=float(self.runtime.get("tts", "speed", default=1.0) or 1.0),
+                speed=round(speed, 3),
             )
             if pcm:
+                pcm = self._apply_emotion_gain(pcm, float(emo.get("volume", 1.0)))
+                pcm = self._apply_emotion_pitch(pcm, float(emo.get("pitch", 1.0)))
                 return leading_silence_bytes(TTS_SAMPLE_RATE) + pcm
 
         try:
@@ -3311,6 +3600,26 @@ class VoiceAssistant:
             print(f"🗣️  Распознано: {clean_text}")
             self.runtime.set_transcript(clean_text)
             self.runtime.set_status(f"Услышал: {clean_text[:60]}")
+
+            # --- Смысловой гейт: договорил ли гость? -------------------------
+            # VAD режет речь по паузе (~0.75 с), поэтому человек, задумавшийся
+            # посреди предложения, обрезается на полуслове. Быстрая модель
+            # смотрит на ТЕКСТ и решает по смыслу: фраза завершена или оборвана.
+            # Если оборвана — не отвечаем, а держим аудио и ждём продолжения
+            # (жёсткий потолок по времени всё равно закроет фразу).
+            if (self.gate.enabled and not self._force_phrase
+                    and not is_backchannel(clean_text)
+                    and not is_forbidden_topic(clean_text)
+                    and not is_self_question(clean_text)):
+                decision = self.gate.is_complete(clean_text)
+                if not decision["complete"]:
+                    self._pending_raw = [raw_audio]
+                    self._pending_text = clean_text
+                    self._pending_since = time.time()
+                    print(f"⏸️ Фраза оборвана ({decision['reason']}) — слушаю дальше.")
+                    self.runtime.set_status("Слушаю дальше…")
+                    self.runtime.set_transcript(clean_text, "…")
+                    return
 
             # --- Поддакивания: «угу», «ага», «ясно» --------------------------
             # Это НЕ вопрос. Раньше такая реплика уходила в LLM, и та выдавала

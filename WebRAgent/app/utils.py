@@ -24,6 +24,24 @@ import json
 CONTEXT_PREVIEW_CHARS = 2000
 
 
+def parse_conversation_context(raw):
+    """Разбирает переданную клиентом историю диалога."""
+    if not raw:
+        return None
+    try:
+        messages = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(messages, list):
+        return None
+    return [
+        {"role": msg["role"], "content": msg["content"].strip()[:600]}
+        for msg in messages[-8:]
+        if isinstance(msg, dict) and msg.get("role") in ("user", "assistant")
+        and isinstance(msg.get("content"), str) and msg["content"].strip()
+    ]
+
+
 def slim_result(result, context_chars: int = CONTEXT_PREVIEW_CHARS):
     """
     Уменьшает результат поиска, сохраняя всё нужное клиенту.

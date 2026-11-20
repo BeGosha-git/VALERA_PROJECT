@@ -1134,13 +1134,9 @@ class ValeraGUI:
                                      foreground=WARN)
             return
         try:
-            asst._clear_chat_id_file()
-            asst._chat_id = asst.rag.create_chat()
-            if asst._chat_id:
-                asst._save_chat_id(asst._chat_id)
-                self.rt.set_current_chat(asst._chat_id, "")
-            self.rt.mark_new_chat_started()
-            self.lbl_chat_msg.config(text=f"✓ новый чат: {asst._chat_id}", foreground=OK)
+            chat_id = asst.new_conversation()
+            status = f"✓ новый чат: {chat_id}" if chat_id else "✓ новый локальный разговор"
+            self.lbl_chat_msg.config(text=status, foreground=OK)
         except Exception as exc:  # noqa: BLE001
             self.lbl_chat_msg.config(text=f"Ошибка: {exc}", foreground=ERR)
         self._refresh_chats()

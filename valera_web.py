@@ -741,13 +741,7 @@ def create_app(runtime=None, runner=None):
         """Просит ассистента начать новый чат (сброс контекста)."""
         if asst_runner.assistant is not None:
             try:
-                asst_runner.assistant._clear_chat_id_file()
-                asst_runner.assistant._chat_id = asst_runner.assistant.rag.create_chat()
-                new_id = asst_runner.assistant._chat_id
-                if new_id:
-                    asst_runner.assistant._save_chat_id(new_id)
-                    rt.set_current_chat(new_id, "")
-                rt.mark_new_chat_started()
+                new_id = asst_runner.assistant.new_conversation()
                 rt.log_event("info", "Новый чат создан вручную")
                 return jsonify({"ok": True, "chat_id": new_id})
             except Exception as exc:  # noqa: BLE001
@@ -1209,7 +1203,7 @@ const FEATURES = [
   ['noise_reduction','Шумодав','Спектральное вычитание + энергетический гейт'],
   ['auto_vad','Авто-чувствительность','Порог VAD подстраивается под шум'],
   ['auto_new_chat','Авто-новый чат','Новый чат после длительной тишины'],
-  ['react_to_backchannel','Реакция на «угу»','Отвечать на поддакивания (по умолчанию — молчать)'],
+  // ['react_to_backchannel','Реакция на «угу»','Отвечать на поддакивания (по умолчанию — молчать)'],
   ['web_search','Веб-поиск','Искать ответ в интернете'],
   ['mirea_collection','База МИРЭА и Студсоюза','Искать в коллекции вуза (МИРЭА, Студсоюз, профком…)'],
   ['confirm_before_answer','Подтверждение вопроса','Спрашивать перед отправкой в ИИ'],
@@ -1662,7 +1656,9 @@ $('btnDelSel').onclick = async () => {
 };
 $('btnNewChat').onclick = async () => {
   const r = await api('/api/chat/new', {method:'POST'});
-  $('chatMsg').textContent = r.ok ? ('✓ новый чат: ' + (r.chat_id||'').slice(0,8)) : ('✗ ' + (r.error||''));
+  $('chatMsg').textContent = r.ok
+    ? (r.chat_id ? '✓ новый чат: ' + r.chat_id.slice(0,8) : '✓ новый локальный разговор')
+    : ('✗ ' + (r.error||''));
   loadChats();
 };
 $('btnSaveChatCfg').onclick = async () => {

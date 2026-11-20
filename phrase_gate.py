@@ -1,38 +1,25 @@
 """
-Смысловой детектор конца фразы + смысловой учёт всего разговора.
+Смысловая проверка конца фразы, предложенной темы и контекста разговора.
 
-Быстрая модель (по умолчанию llama3.2:3b, ~2 ГБ) решает две задачи, которые
-основная 26B-модель делать не должна (слишком медленно и дорого):
+VAD режет речь по паузе. Гейт проверяет распознанный текст и при обрыве
+просит подождать продолжения до установленного предела. Он также выделяет
+предложенную роботом тему и ведёт краткую сводку разговора.
 
-1) **Закончил ли человек фразу по смыслу?**
-   VAD режет речь по паузе (``silence_timeout`` ≈ 0.75 с). Человек, который
-   задумался посреди предложения («Кто ректор… э-э… МИРЭА?»), обрезается на
-   полуслове. Быстрая модель смотрит на РАСПОЗНАННЫЙ ТЕКСТ и решает: мысль
-   завершена (→ отвечаем) или оборвана (→ ждём продолжения). Решение — по
-   смыслу и по времени: гейт лишь ПРОДЛЕВАЕТ ожидание, а жёсткий потолок
-   (MAX_PHRASE_DURATION_SEC в voice_assistant.py) всё равно закрывает фразу.
-
-2) **Смысловой учёт сказанного.**
-   Модель ведёт сжатую сводку всего диалога (тема, ключевые факты, что
-   интересует гостя) и обновляет её после каждого обмена. Эта сводка
-   подмешивается основной модели как контекст, поэтому она помнит весь
-   разговор, а не только последние реплики.
-
-Быстрая модель грузится на свободной части видеопамяти (после того, как 26B
-разложена по двум картам), поэтому отвечает за доли секунды и не мешает
-основной генерации.
+VoiceAssistant использует настроенную локальную модель Ollama. При
+необходимости для гейта можно указать собственную модель в конфигурации.
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+import threading
 import time
+from collections import deque
 
 import requests
 
-# Модель по умолчанию: самая маленькая из уже скачанных (~2 ГБ), быстрая и
-# достаточная для классификации «закончено / нет» и короткой сводки.
+# Модель по умолчанию при использовании PhraseGate отдельно от VoiceAssistant.
 DEFAULT_MODEL = os.getenv("GATE_MODEL", "llama3.2:3b")
 
 # Сколько ждём продолжения незаконченной фразы, прежде чем обработать как есть.
@@ -52,27 +39,26 @@ _DANGLING_RE = re.compile(
 def _post_chat(ollama_url: str, model: str, prompt: str, max_tokens: int,
                timeout: float) -> str:
     """
-    Один запрос к быстрой модели через ``/api/chat``.
+    Один служебный запрос к локальной модели через ``/api/chat``.
 
     Тело собираем ``json.dumps(..., ensure_ascii=False)`` — кириллица уходит
     в UTF-8 без раздувания в ``\\uXXXX``. ``think: false`` безвреден для
     llama3.2 (у неё нет режима размышлений) и обязателен для Gemma/Qwen.
     """
+    options = {"num_predict": max_tokens, "temperature": 0.1}
+    if model.startswith("llama3.2:"):
+        # У отдельной модели гейта достаточно небольшого контекста.
+        options["num_ctx"] = 1024
     payload = {
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [
+            {"role": "system", "content": "Ты выполняешь служебную проверку диалога. Соблюдай заданный формат ответа."},
+            {"role": "user", "content": prompt},
+        ],
         "stream": False,
         "think": False,
         "keep_alive": -1,  # держим в памяти между вызовами
-        "options": {
-            "num_predict": max_tokens,
-            "temperature": 0.1,
-            # Гейт получает короткие промты (~200 токенов) + сводку (~100),
-            # поэтому длинный контекст не нужен. Без этого ограничения
-            # llama3.2:3b грузилась с контекстом 32K и резервировала ~5 ГБ
-            # KV-кэша — впритык к 26B на двух картах (риск OOM/выгрузки).
-            "num_ctx": 1024,
-        },
+        "options": options,
     }
     resp = requests.post(
         f"{ollama_url}/api/chat",
@@ -107,6 +93,10 @@ class PhraseGate:
         # Сжатая смысловая сводка всего, что сказано роботу за сеанс.
         self.digest: str = ""
         self._last_call = 0.0
+        self._digest_lock = threading.Lock()
+        self._digest_queue = deque()
+        self._digest_generation = 0
+        self._digest_running = False
 
     # ------------------------------------------------------------------
     # 1. Законченность фразы
@@ -161,10 +151,73 @@ class PhraseGate:
         # Непонятный ответ — не блокируем.
         return {"complete": True, "reason": f"неоднозначно: {answer[:40]!r}"}
 
+    def detect_offered_topic(self, answer: str) -> str:
+        """Выделяет тему, которую Валера предложил в предыдущем ответе.
+
+        Модель ищет предложение продолжить разговор или перейти
+        к следующему разделу экскурсии. Метод возвращает название темы,
+        если оно дословно есть в ответе Валеры. При отсутствии предложения,
+        выключенном гейте или ошибке запроса возвращает пустую строку.
+        """
+        if not self.enabled or not answer.strip():
+            return ""
+
+        prompt = (
+            "Определи, предложил ли Валера тему для следующей реплики. "
+            "Если он предложил рассказать о чём-то или объявил следующий "
+            "раздел экскурсии, но ещё ничего о нём не сообщил, "
+            "скопируй полное название темы из текста. "
+            "Ответь одной строкой в формате «ТЕМА: название». "
+            "Если предложения нет или тема непонятна, ответь «НЕТ».\n\n"
+            f"Ответ Валеры: «{answer}»"
+        )
+
+        try:
+            result = _post_chat(
+                self.ollama_url,
+                self.model,
+                prompt,
+                max_tokens=32,
+                timeout=min(self.timeout, 3.0),
+            )
+        except requests.RequestException:
+            return ""
+
+        match = re.fullmatch(r"ТЕМА:[ \t]*([^\r\n]{1,100})", result.strip(), re.I)
+        if not match:
+            return ""
+
+        topic = match.group(1).strip(' «»".')
+        if not topic or _DANGLING_RE.search(topic) or topic.casefold() not in answer.casefold():
+            return ""
+        return topic
+
     # ------------------------------------------------------------------
     # 2. Смысловой учёт сказанного
     # ------------------------------------------------------------------
-    def update_digest(self, user_text: str, answer: str) -> str:
+    def enqueue_digest(self, user_text: str, answer: str) -> None:
+        """Обновляет сводку в фоне, в порядке поступления реплик."""
+        if not self.enabled:
+            return
+        with self._digest_lock:
+            self._digest_queue.append((self._digest_generation, user_text, answer))
+            if not self._digest_running:
+                self._digest_running = True
+                threading.Thread(target=self._drain_digest_queue, daemon=True).start()
+
+    def _drain_digest_queue(self) -> None:
+        while True:
+            with self._digest_lock:
+                if not self._digest_queue:
+                    self._digest_running = False
+                    return
+                generation, question, answer = self._digest_queue.popleft()
+            try:
+                self.update_digest(question, answer, generation=generation)
+            except (AttributeError, TypeError, ValueError) as exc:
+                print(f"⚠️ Гейт: неверный ответ при обновлении сводки ({type(exc).__name__}).", flush=True)
+
+    def update_digest(self, user_text: str, answer: str, *, generation: int | None = None) -> str:
         """
         Обновляет смысловую сводку разговора и возвращает её.
 
@@ -174,7 +227,12 @@ class PhraseGate:
         if not self.enabled:
             return self.digest
 
-        prev = self.digest or "(пока пусто — это первая реплика)"
+        with self._digest_lock:
+            if generation is None:
+                generation = self._digest_generation
+            if generation != self._digest_generation:
+                return self.digest
+            prev = self.digest or "(пока пусто — это первая реплика)"
         prompt = (
             "Ты ведёшь краткую смысловую сводку разговора с гостем "
             "(робот-экскурсовод РТУ МИРЭА).\n"
@@ -194,11 +252,15 @@ class PhraseGate:
             print(f"⚠️ Гейт: не удалось обновить сводку ({exc})", flush=True)
             return self.digest
 
-        if digest:
-            self.digest = digest.strip()
-        return self.digest
+        with self._digest_lock:
+            if digest and generation == self._digest_generation:
+                self.digest = digest.strip()
+            return self.digest
 
     # ------------------------------------------------------------------
     def reset(self) -> None:
         """Сброс сводки (например, при новом чате)."""
-        self.digest = ""
+        with self._digest_lock:
+            self._digest_generation += 1
+            self._digest_queue.clear()
+            self.digest = ""

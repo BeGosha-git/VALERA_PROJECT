@@ -7,6 +7,7 @@ from app.models.document import Document
 from app.services.rag_service import RAGService
 from app.services.agent_search_service import AgentSearchService
 from app.services.mindmap_service import MindmapService
+from app.utils import parse_conversation_context
 
 main_bp = Blueprint('main', __name__)
 
@@ -43,16 +44,8 @@ def query():
         max_results = 4
     
     # Parse conversation context (JSON array of {role, content} messages)
-    conversation_context = None
-    raw_context = request.form.get('conversation_context')
-    if raw_context:
-        try:
-            import json
-            parsed = json.loads(raw_context)
-            if isinstance(parsed, list) and len(parsed) > 0:
-                conversation_context = parsed
-        except (ValueError, TypeError):
-            conversation_context = None
+    conversation_context = parse_conversation_context(request.form.get("conversation_context"))
+    original_query = request.form.get("original_query", "")
     
     # Validate inputs based on search type
     if not query_text:
@@ -131,7 +124,8 @@ def query():
                 collection_id=collection_id,
                 query=query_text,
                 max_results=max_results,
-                conversation_context=conversation_context
+                conversation_context=conversation_context,
+                original_query=original_query,
             )
     
     # Return JSON if AJAX request, otherwise render template

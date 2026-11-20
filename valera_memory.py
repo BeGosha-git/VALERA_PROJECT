@@ -22,6 +22,8 @@ import os
 import re
 import threading
 import time
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -41,8 +43,7 @@ RECALL_RE = re.compile(
     r"|о\s+чём\s+(?:мы\s+|я\s+)?(?:говорили|разговаривали|шла\s+речь|была\s+речь|спрашивал[аи]?)"
     r"|что\s+ты\s+(?:мне\s+|нам\s+)?(?:говорил|рассказывал|отвечал|сказал|советовал)"
     r"|в\s+прошлый\s+раз|прошл\w+\s+(?:раз|разговор|чат|беседа|вопрос)"
-    r"|\bран(?:ьше|ее)\b|\bвчера\b|\bдо\s+этого\b|\bперед\s+этим\b"
-    r"|\bнапомни\b|\bпомнишь\b|\bчто\s+(?:у\s+нас\s+)?было\b|\bпредыдущ\w+"
+    r"|\bнапомни\b|\bпомнишь\b|\bчто\s+(?:у\s+нас\s+)?было\b"
     r"|\bчто\s+(?:мы|я|ты|вы)\s+(?:\w+\s+){0,2}(?:говорили|обсуждали|спрашивал\w*|говорил\w*|просил\w*|"
     r"рассказывал\w*|отвечал\w*|сказал\w*)"
     r"|\bпро\s+что\s+(?:мы|я)\s+(?:\w+\s+){0,2}(?:говорили|спрашивал\w*|обсуждали)"
@@ -54,8 +55,10 @@ RECALL_RE = re.compile(
 REPEAT_RE = re.compile(r"(?i)\b(?:повтори\w*|скажи\s+ещё\s+раз|ещё\s+раз|что\s+ты\s+сказал)\b")
 # «Подробнее / дальше / продолжай» — продолжить прошлый ответ, не повторяясь.
 CONTINUE_RE = re.compile(
-    r"(?i)^\s*(?:ну\s+|а\s+|и\s+)?(?:расскажи\s+)?(?:подробнее|подробней|дальше|продолжай\w*|продолжи\w*|"
-    r"ещё|еще|что\s+ещё|что\s+еще|а\s+ещё|а\s+еще|поясни|уточни|что\s+именно|объясни)\b"
+    r"(?i)^\s*(?:(?:ну|а|и)[,\s]+)?(?:расскажи(?:те)?\s+)?"
+    r"(?:подробнее|подробней|дальше|продолжай\w*|продолжи\w*|"
+    r"рассказывай(?:те)?|больше|ещё|еще|что\s+ещё|что\s+еще|"
+    r"а\s+ещё|а\s+еще|поясни|уточни|что\s+именно|объясни)\b"
 )
 # Начало реплики-уточнения, не имеющей собственной темы.
 ELLIPSIS_START_RE = re.compile(
@@ -70,6 +73,71 @@ NEWTOPIC_RE = re.compile(
     r"|что\s+такое\b|кто\s+так(?:ой|ая)\b|что\s+за\b|как\s+работает\b)"
 )
 PRONOUN_RE = re.compile(r"(?i)\b(?:это|этот|эта|эти|этого|этом|там|туда|оттуда|он|она|они|его|её|ее|их|тот|то)\b")
+ARCHIVE_RE = re.compile(r"(?i)\b(?:вчера|в\s+прошлый\s+раз|прошл\w+\s+(?:чат\w*|разговор\w*|бесед\w*))\b")
+_FOLLOWUP_PREFIX_RE = re.compile(r"(?i)^[\s,]*(?:(?:а|и|ну)\s+)+")
+_BARE_FOLLOWUP_RE = re.compile(r"(?i)где|куда|когда|как|почему|зачем|кто|какой|какая|какие")
+_NUMERIC_FOLLOWUP_RE = re.compile(
+    r"(?i)сколько(?:\s+(?:стоит|стоят|баллов|мест|лет|времени))?"
+    r"(?:\s+(?:для|на|в|у)\s+.+)?"
+)
+_FOLLOWUP_DETAIL_RE = re.compile(
+    r"(?i)(?:для|на|в|у|по|без|с)\s+"
+    r"(?!(?:.+\s)?(?:есть|стоит|сколько|нужно|можно|кто|когда|почему|работает|холодно|жарко|тепло)\b)"
+    r"\w+(?:\s+\w+){0,4}"
+)
+_FACETS = (
+    (re.compile(r"(?i)\b(?:стоимост\w*|стоит|стоят|цен[ауые]|оплат\w*)\b"), "стоимость"),
+    (re.compile(r"(?i)\b(?:(?:проходн\w*\s+)?балл\w*|егэ)\b"), "баллы"),
+    (re.compile(r"(?i)\b(?:мест[ао]?|местах|местам)\b"), "места"),
+)
+
+
+@dataclass(frozen=True)
+class FollowUp:
+    query: str
+    topic: str
+    mirea: bool
+    choices: tuple[str, ...] = ()
+
+    @property
+    def clarification(self) -> str:
+        return "Вы про " + " или ".join(self.choices) + "?" if self.choices else ""
+
+
+def is_offer_confirmation(text: str) -> bool:
+    """Проверяет, может ли реплика быть согласием на предложение."""
+    phrase = text.strip(" ,.!?…")
+    return bool(
+        re.fullmatch(
+            r"(?i)(?:(?:валера|лера)[,\s]+)?(?:ну[,\s]+)?"
+            r"(?:да|давай(?:те)?|хорошо|о['’]?кей)",
+            phrase,
+        )
+    )
+
+
+def accepts_offer(text: str, offered_topic: str) -> bool:
+    """Распознаёт согласие, если у Валеры есть предложенная тема."""
+    return bool(offered_topic and is_offer_confirmation(text))
+
+
+def needs_topic(text: str, has_own_topic: bool = False) -> bool:
+    """Определяет, нужна ли реплике тема из предыдущего разговора."""
+    text = text.strip(" ,.!?…")
+    detail = _FOLLOWUP_PREFIX_RE.sub("", text)
+    if not detail or GREET_RE.fullmatch(text) or THANKS_RE.fullmatch(text) or FILLER_RE.fullmatch(text):
+        return False
+    if NEWTOPIC_RE.match(text):
+        return False
+    return bool(
+        CONTINUE_RE.fullmatch(text)
+        or _BARE_FOLLOWUP_RE.fullmatch(detail)
+        or _NUMERIC_FOLLOWUP_RE.fullmatch(detail)
+        or (_FOLLOWUP_DETAIL_RE.fullmatch(detail) and (detail != text or not has_own_topic))
+        or (PRONOUN_RE.search(detail) and (ELLIPSIS_START_RE.search(text) or not has_own_topic))
+        or any(pattern.fullmatch(detail) for pattern, _ in _FACETS)
+    )
+
 
 _STOP = {
     "что", "как", "где", "когда", "кто", "это", "эти", "про", "для", "или", "так", "вот", "ещё", "еще",
@@ -95,10 +163,10 @@ def recall_kind(text: str) -> Optional[str]:
     """'recall' | 'repeat' | None — что просит гость про прошлое."""
     if not text:
         return None
-    if RECALL_RE.search(text):
-        return "recall"
     if REPEAT_RE.search(text):
         return "repeat"
+    if RECALL_RE.search(text):
+        return "recall"
     return None
 
 
@@ -175,13 +243,18 @@ class ConversationMemory:
             pass
 
     def add(self, question: str, answer: str, chat_id: Optional[str] = None,
-            mirea: bool = False, eq: Optional[str] = None) -> None:
+            mirea: bool = False, eq: Optional[str] = None,
+            topic: Optional[str] = None, use_as_topic: bool = True) -> None:
         if not question or not answer:
             return
         row = {"ts": time.time(), "chat": chat_id, "q": question.strip()[:400],
                "a": answer.strip()[:600], "mirea": bool(mirea)}
         if eq and eq.strip() != question.strip():
             row["eq"] = eq.strip()[:300]   # «эффективный» вопрос с учётом контекста
+        if topic and topic.strip() != question.strip():
+            row["topic"] = topic.strip()[:240]
+        if not use_as_topic:
+            row["use_as_topic"] = False
         with self._lock:
             self.rows.append(row)
             self.rows = self.rows[-MAX_ROWS:]
@@ -196,7 +269,12 @@ class ConversationMemory:
         with self._lock:
             return self.rows[-1] if self.rows else None
 
-    def followup_base(self, text: str, has_own_topic: bool = False) -> Optional[Dict]:
+    def recent(self, chat_id: Optional[str], limit: int = 10) -> List[Dict]:
+        with self._lock:
+            return [row for row in self.rows if row.get("chat") == chat_id][-limit:]
+
+    def followup_base(self, text: str, has_own_topic: bool = False, *,
+                      current_chat: Optional[str] = None) -> Optional[Dict]:
         """
         Предыдущий обмен, если ``text`` — уточнение («а сколько стоит?», «подробнее»,
         «а там есть метро?», «а какие баллы примерно?»). Иначе None.
@@ -205,24 +283,65 @@ class ConversationMemory:
         это скорее новый вопрос, и продолжением он считается только при явных признаках
         (союз «а…», местоимение, «подробнее»).
         """
-        prev = self.last()
-        if not prev or time.time() - prev["ts"] > FOLLOWUP_WINDOW_SEC:
+        if not needs_topic(text, has_own_topic):
             return None
-        if GREET_RE.search(text) or THANKS_RE.search(text) or FILLER_RE.match(text):
+        cutoff = time.time() - FOLLOWUP_WINDOW_SEC
+        with self._lock:
+            return next((
+                row for row in reversed(self.rows)
+                if row.get("chat") == current_chat and row.get("use_as_topic", True)
+                and row["ts"] >= cutoff
+            ), None)
+
+    def resolve_followup(
+        self,
+        text: str,
+        current_chat: str,
+        has_own_topic: bool,
+        pending: Optional[FollowUp] = None,
+        *,
+        offered_topic: str = "",
+    ) -> Optional[FollowUp]:
+        """Подбирает поисковый запрос из текущей темы и новой детали."""
+        if accepts_offer(text, offered_topic):
+            recent = self.recent(current_chat, limit=1)
+            if recent and time.time() - recent[0]["ts"] <= FOLLOWUP_WINDOW_SEC:
+                return FollowUp(
+                    query=f"Расскажи подробнее по теме «{offered_topic}».",
+                    topic=offered_topic,
+                    mirea=bool(recent[0].get("mirea")),
+                )
+        detail = _FOLLOWUP_PREFIX_RE.sub("", text.strip(" ,.!?…"))
+        if pending:
+            choice = re.sub(r"(?i)^(?:про|о|об)\s+", "", detail)
+            for pattern, label in _FACETS:
+                if label in pending.choices and pattern.fullmatch(choice):
+                    return FollowUp(f"{label.capitalize()} по теме «{pending.topic}»", pending.topic, pending.mirea)
+
+        previous = self.followup_base(text, has_own_topic, current_chat=current_chat)
+        if previous is None:
             return None
-        words = text.split()
-        n = len(words)
-        if NEWTOPIC_RE.match(text):
-            return None
-        if CONTINUE_RE.search(text) and n <= 6:
-            return prev
-        if n <= 8 and (ELLIPSIS_START_RE.search(text) or PRONOUN_RE.search(text)):
-            return prev
-        # Совсем короткая реплика сама по себе тему не задаёт («сколько мест?», «а стоимость?»),
-        # как и реплика без слов-тем — это продолжение разговора, а не новый вопрос.
-        if n <= 4 or (not has_own_topic and n <= 6):
-            return prev
-        return None
+        topic = previous.get("topic") or previous["q"].strip(" ,.!?…")
+
+        effective = previous.get("eq") or previous["q"]
+        mirea = bool(previous.get("mirea"))
+        if detail.lower() == "сколько":
+            focused = [label for pattern, label in _FACETS if pattern.search(effective)]
+            choices = focused or [label for pattern, label in _FACETS if pattern.search(previous["a"])]
+            if len(choices) > 1:
+                return FollowUp(text, topic, mirea, tuple(choices))
+            if choices:
+                return FollowUp(f"{choices[0].capitalize()} по теме «{topic}»", topic, mirea)
+        if _FOLLOWUP_DETAIL_RE.fullmatch(detail):
+            base = effective.strip(" ,.!?…")
+            if re.search(r"[.!?]\s", base) or len(base) + len(detail) > 240:
+                base = topic
+            query = f"{base} {detail}?"
+        elif CONTINUE_RE.fullmatch(detail):
+            query = topic
+        else:
+            query = f"{topic}. {detail[:1].upper()}{detail[1:]}?"
+        return FollowUp(query, topic, mirea)
 
     # -- «что было раньше» -------------------------------------------------
     def recall(self, text: str, current_chat: Optional[str] = None, limit: int = 5) -> Tuple[str, List[Dict]]:
@@ -231,8 +350,14 @@ class ConversationMemory:
         Возвращает (вид, строки по порядку времени).
         """
         kind = recall_kind(text) or "recall"
+        archive = bool(ARCHIVE_RE.search(text))
         with self._lock:
-            rows = list(self.rows)
+            rows = [r for r in self.rows if archive or r.get("chat") == current_chat]
+        if re.search(r"(?i)\bвчера\b", text):
+            yesterday = date.today() - timedelta(days=1)
+            rows = [r for r in rows if datetime.fromtimestamp(r["ts"]).date() == yesterday]
+        elif archive:
+            rows = [r for r in rows if r.get("chat") != current_chat]
         if not rows:
             return kind, []
         if kind == "repeat":
@@ -244,7 +369,6 @@ class ConversationMemory:
                 return kind, recent[-limit:]
         topic = set(_stems(RECALL_RE.sub(" ", text)))
         if topic:
-            now = time.time()
             scored = []
             for i, r in enumerate(rows):
                 hay = set(_stems(r["q"] + " " + r["a"]))
@@ -256,6 +380,7 @@ class ConversationMemory:
             if scored:
                 best = sorted(scored, key=lambda t: -t[0])[:limit]
                 return kind, [r for _, _, r in sorted(best, key=lambda t: t[1])]
+            return kind, []
         # общий вопрос «что было раньше» — просто последние обмены
         return kind, rows[-limit:]
 

@@ -284,7 +284,7 @@ class OllamaService(LLMService):
         non_system = [m for m in messages if m['role'] != 'system']
         
         # Keep at most the last N messages as "recent context" (excluding current question)
-        RECENT_LIMIT = 6
+        RECENT_LIMIT = 8
         history = non_system[:-1] if len(non_system) > 1 else []
         last = non_system[-1] if non_system else None
         

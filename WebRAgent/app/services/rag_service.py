@@ -5,7 +5,14 @@ from app.services.prompt_template_service import PromptTemplateService
 class RAGService:
     """Retrieval-Augmented Generation service"""
 
-    def process_query_stream(self, collection_id, query, max_results=3, max_tokens=1000, conversation_context=None):
+    @staticmethod
+    def _current_question(query, original_query):
+        if original_query and original_query != query:
+            return f"{original_query}\nУточнённый смысл текущего вопроса: {query}"
+        return query
+
+    def process_query_stream(self, collection_id, query, max_results=3, max_tokens=1000,
+                             conversation_context=None, original_query=""):
         """
         Потоковая версия process_query: генератор событий.
 
@@ -47,7 +54,7 @@ class RAGService:
                 replaced = True
         if not replaced:
             exchange.insert(0, {'role': 'system', 'content': valera_system})
-        exchange.append({'role': 'user', 'content': query})
+        exchange.append({'role': 'user', 'content': self._current_question(query, original_query)})
 
         parts = []
         for piece in self.llm_service.stream_chat_response(exchange, context=formatted_context, max_tokens=max_tokens):
@@ -60,7 +67,8 @@ class RAGService:
         self.document_service = DocumentService()
         self.llm_service = LLMFactory.create_llm_service()
     
-    def process_query(self, collection_id, query, max_results=3, max_tokens=1000, conversation_context=None):
+    def process_query(self, collection_id, query, max_results=3, max_tokens=1000,
+                      conversation_context=None, original_query=""):
         """
         Process a user query using RAG
         
@@ -142,7 +150,7 @@ class RAGService:
             # Ensure the current query is always the single last user message
             current_exchange.append({
                 'role': 'user',
-                'content': query
+                'content': self._current_question(query, original_query)
             })
 
             # Generate response with LLM using chat format
@@ -154,7 +162,7 @@ class RAGService:
         else:
             # No conversation context, use standard response format
             llm_response = self.llm_service.generate_response(
-                prompt=query,
+                prompt=self._current_question(query, original_query),
                 context=formatted_context,
                 max_tokens=max_tokens
             )

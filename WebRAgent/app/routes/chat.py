@@ -9,7 +9,7 @@ from app.services.agent_search_service import AgentSearchService
 from app.services.searxng_service import SearXNGService
 from app.services.web_search_agent_service import WebSearchAgentService
 from app.services.llm_service import LLMFactory
-from app.utils import slim_result, estimate_size
+from app.utils import slim_result, estimate_size, parse_conversation_context
 
 # Логгер на уровне модуля. Объявлять его внутри функции нельзя: ниже по коду
 # он же присваивался в блоке except, из-за чего Python считал имя локальным —
@@ -17,6 +17,19 @@ from app.utils import slim_result, estimate_size
 logger = logging.getLogger(__name__)
 
 chat_bp = Blueprint('chat', __name__, url_prefix='/chat')
+
+
+def _save_question_and_get_context(chat, query):
+    original = (request.form.get("original_query") or query).strip() or query
+    metadata = {"search_query": query} if original != query else None
+    chat.add_message("user", original, metadata)
+    context = parse_conversation_context(request.form.get("conversation_context"))
+    if context is None:
+        context = chat.get_context()
+        if metadata and context and context[-1].get("role") == "user":
+            context = context[:-1]
+    return original, context
+
 
 @chat_bp.route('/')
 @login_required
@@ -108,11 +121,7 @@ def chat_query(chat_id):
     if not use_web_search and not collection_id:
         return jsonify({'error': 'Missing collection ID (required for document search)'}), 400
     
-    # Add the user message to the chat
-    chat.add_message('user', query_text)
-    
-    # Get previous chat context
-    chat_context = chat.get_context()
+    original_query, chat_context = _save_question_and_get_context(chat, query_text)
 
     # Системный промт здесь НЕ добавляем.
     #
@@ -162,7 +171,8 @@ def chat_query(chat_id):
                     collection_id=collection_id,
                     query=query_text,
                     max_results=max_results,
-                    conversation_context=chat_context
+                    conversation_context=chat_context,
+                    original_query=original_query,
                 )
                 
         # Add the assistant's response to the chat with metadata about the search
@@ -241,8 +251,7 @@ def query_chat_stream(chat_id):
     except ValueError:
         max_results = 4
 
-    chat.add_message('user', query_text)
-    chat_context = chat.get_context()
+    original_query, chat_context = _save_question_and_get_context(chat, query_text)
 
     def generate():
         full = ""
@@ -251,6 +260,7 @@ def query_chat_stream(chat_id):
             for ev in rag_service.process_query_stream(
                 collection_id=collection_id, query=query_text,
                 max_results=max_results, conversation_context=chat_context,
+                original_query=original_query,
             ):
                 if ev["t"] == "done":
                     full = ev["response"]

@@ -114,24 +114,17 @@ def create_app():
         try:
             import logging
             log = logging.getLogger(__name__)
-            from app.services.document_service import (
-                DocumentService, _get_snapshot, _build_snapshot,
-            )
+            from app.services.document_service import DocumentService, _get_snapshot
+            from app.models.collection import Collection
             ds = DocumentService()
-            collections = ds.qdrant_service.list_collections() or []
-            for col in collections[:1]:  # активная база — обычно одна
-                cid = col if isinstance(col, str) else (col.get("id") or "")
-                if not cid:
-                    continue
-                snap = _build_snapshot(ds.qdrant_service, cid) or {}
-                # Кладём в кэш под тем же ключом, что использует поиск.
-                from app.services import document_service as _d
+            collections = Collection.get_all()
+            if collections:
+                col = next((c for c in collections if (c.name or "").strip().casefold() == "мирэа"),
+                           collections[0])
+                snap = _get_snapshot(ds.qdrant_service, col.id)
                 if snap:
-                    import time as _t
-                    with _d._SNAPSHOT_LOCK:
-                        _d._SNAPSHOT_CACHE[str(cid)] = snap
                     log.info(
-                        f"KB snapshot preloaded: {cid} "
+                        f"KB snapshot preloaded: {col.id} "
                         f"({len(snap.get('items', []))} chunks)"
                     )
         except Exception as e:

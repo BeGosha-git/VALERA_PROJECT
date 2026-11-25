@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import threading
+from functools import cached_property
 from pathlib import Path
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
@@ -34,7 +35,11 @@ def get_sentence_transformer(name: str) -> "SentenceTransformer":
     with _ST_MODEL_LOCK:
         model = _ST_MODEL_CACHE.get(name)
         if model is None:
-            model = SentenceTransformer(name)
+            try:
+                model = SentenceTransformer(name, local_files_only=True)
+            except OSError:
+                # При первой установке веса могут ещё отсутствовать на диске.
+                model = SentenceTransformer(name)
             _ST_MODEL_CACHE[name] = model
         return model
 
@@ -63,22 +68,17 @@ class QdrantService:
         # Initialize embedding model based on active configuration
         self.active_config = self.config["active"]
         self.llm_provider = self.active_config["llm_provider"]
-        self.vector_size = 384  # Default for sentence-transformers
-        
-        if self.llm_provider == 'openai':
-            self.openai_api_key = os.getenv('OPENAI_API_KEY')
-            openai_model = self.active_config["models"]["openai_embedding"] or 'text-embedding-3-small'
-            self.vector_size = self.get_vector_size('openai', openai_model)
-        elif self.llm_provider == 'ollama':
-            self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
-            self.ollama_model = self.active_config["models"]["ollama_embedding"] or 'nomic-embed-text'
-            self.vector_size = self.get_vector_size('ollama', self.ollama_model)
-        else:
-            # For Claude or fallback to sentence-transformers
-            model_name = self.active_config["models"]["embedding"] or 'all-MiniLM-L6-v2'
-            self.embedding_model = get_sentence_transformer(model_name)
-            self.embedding_model_name = model_name
-            self.vector_size = self.get_vector_size('embedding', model_name)
+        self._ensure_provider_initialized(self.llm_provider)
+
+    @cached_property
+    def vector_size(self):
+        """Размер нужен при записи в Qdrant. Для поиска по снимку он уже известен."""
+        models = self.active_config["models"]
+        if self.llm_provider == "openai":
+            return self.get_vector_size("openai", models["openai_embedding"] or "text-embedding-3-small")
+        if self.llm_provider == "ollama":
+            return self.get_vector_size("ollama", self.ollama_model)
+        return self.get_vector_size("embedding", models["embedding"] or "all-MiniLM-L6-v2")
     
     def get_embedding(self, text, provider=None, model=None):
         """

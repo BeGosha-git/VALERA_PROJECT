@@ -1,15 +1,61 @@
+import logging
+import re
+from time import monotonic
+
+from app.services.admission_examples import asks_programs
 from app.services.llm_service import LLMFactory
 from app.services.document_service import DocumentService
 from app.services.prompt_template_service import PromptTemplateService
 
+logger = logging.getLogger(__name__)
+
+# Один предлог с возможной точкой — оборванная генерация. «Да», «Нет»,
+# числа и другие самостоятельные короткие ответы пропускаем.
+_FRAGMENT = re.compile(r"\s*(?:в|на|из|к|для|по|про|о|об|с|и|или|но)?[.!?…\s]*", re.I)
+
+
 class RAGService:
     """Retrieval-Augmented Generation service"""
 
+    def _search(self, collection_id, query, limit, history=None, original_query=""):
+        higher_ed = re.compile(r"высш\w+ образован|бакалавр|специалитет|магистратур|аспирантур", re.I)
+        college = re.compile(r"колледж|\bспо\b|средн\w+ профессиональн", re.I)
+        scoped = higher_ed.search(query) and not college.search(query)
+        started = monotonic()
+        logger.info("Поиск по коллекции %s начат", collection_id)
+        question = original_query or query
+        program_question = query if asks_programs(query) else question
+        options = dict(program_question=program_question, history=history) if asks_programs(program_question) else {}
+        result = self.document_service.search_documents(
+            collection_id=collection_id, query=query, limit=limit * 3 if scoped else limit, **options
+        )
+        rows = result.get("results", [])
+        if scoped:
+            # FAQ и заголовки часто дают точное совпадение по цене для другого уровня.
+            def matches_level(row):
+                heading = (row.get("document_title") or "") + " " + (row.get("content") or "")[:350]
+                return not college.search(heading) or higher_ed.search(heading)
+
+            rows = [row for row in rows if matches_level(row)]
+        logger.info("Поиск по коллекции занял %.2f с, найдено фрагментов: %d",
+                    monotonic() - started, min(limit, len(rows)))
+        return rows[:limit]
+
     @staticmethod
     def _current_question(query, original_query):
-        if original_query and original_query != query:
-            return f"{original_query}\nУточнённый смысл текущего вопроса: {query}"
-        return query
+        question = original_query or query
+        message = question if question == query else f"{question}\nУточнённый смысл текущего вопроса: {query}"
+        if asks_programs(query) or asks_programs(question):
+            message += ("\nНазови направление и один-два его профиля из таблицы приёма. Различай направление и профиль. "
+                        "Если гость спросил про платное обучение, "
+                        "в первых двух предложениях дай названия и цену за год. Общую цену назови один раз. "
+                        "Если спрашивают о шансах, сравни баллы гостя с проходными по конкретному профилю "
+                        "и укажи год. Объясни, что результат нового конкурса заранее неизвестен. "
+                        "Если спрашивают, чем занимаются на программе, поясни на примере учебной задачи. "
+                        "При выборе на стыке интересов объясни, как программа их сочетает. "
+                        "Если среди вопросов есть вопрос о тебе, коротко представься. "
+                        "Ответь на каждую часть по данным источников. Если сведений не хватает, укажи, каких именно.")
+        return message
 
     def process_query_stream(self, collection_id, query, max_results=3, max_tokens=1000,
                              conversation_context=None, original_query=""):
@@ -24,11 +70,8 @@ class RAGService:
         отдаётся кусочками, и клиент (голосовой ассистент) может начать озвучку с первого
         предложения.
         """
-        search_results = self.document_service.search_documents(
-            collection_id=collection_id, query=query, limit=max_results
-        )
         contexts = []
-        for result in search_results.get('results', []):
+        for result in self._search(collection_id, query, max_results, conversation_context, original_query):
             contexts.append({
                 'document_id': result.get('document_id', ''),
                 'document_title': result.get('document_title', 'Unknown'),
@@ -57,10 +100,26 @@ class RAGService:
         exchange.append({'role': 'user', 'content': self._current_question(query, original_query)})
 
         parts = []
-        for piece in self.llm_service.stream_chat_response(exchange, context=formatted_context, max_tokens=max_tokens):
+        started = monotonic()
+        started_answer = False
+        for piece in self.llm_service.stream_chat_response([dict(m) for m in exchange], context=formatted_context, max_tokens=max_tokens):
+            if not parts:
+                logger.info("Первый фрагмент ответа модели через %.2f с после поиска", monotonic() - started)
             parts.append(piece)
+            if not started_answer:
+                piece = "".join(parts)
+                if _FRAGMENT.fullmatch(piece):
+                    continue
+                started_answer = True
             yield {"t": "d", "x": piece}
-        yield {"t": "done", "response": "".join(parts).strip(), "contexts": contexts}
+        answer = "".join(parts).strip()
+        if not started_answer:
+            # Один повтор по тем же источникам, до сохранения ответа в историю чата.
+            answer = self.llm_service.generate_chat_response(exchange, context=formatted_context, max_tokens=max_tokens)
+            if _FRAGMENT.fullmatch(answer or "") or answer.startswith("Error generating"):
+                answer = "Не удалось сформулировать ответ. Повторите, пожалуйста, вопрос."
+            yield {"t": "d", "x": answer}
+        yield {"t": "done", "response": answer, "contexts": contexts}
     
     def __init__(self):
         """Initialize RAG service"""
@@ -83,15 +142,10 @@ class RAGService:
             dict: RAG results with query, context, and LLM response
         """
         # Retrieve relevant context from Qdrant
-        search_results = self.document_service.search_documents(
-            collection_id=collection_id,
-            query=query,
-            limit=max_results
-        )
         
         # Extract context from search results
         contexts = []
-        for result in search_results.get('results', []):
+        for result in self._search(collection_id, query, max_results, conversation_context, original_query):
             contexts.append({
                 'document_id': result.get('document_id', ''),
                 'document_title': result.get('document_title', 'Unknown'),

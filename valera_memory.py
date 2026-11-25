@@ -22,9 +22,13 @@ import os
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Tuple
+from valera_dialogue import (
+    INSTITUTES, TOUR, GuestFact, Outline, admission_scope, asks_about_fact, asks_example, institute_names, institute_overview, lab_robots,
+    asks_next, guest_statement, named_program, names_new_subject, needs_program, ordered_request, search_topic,
+)
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 MEMORY_PATH = os.getenv("VALERA_MEMORY_PATH", os.path.join(PROJECT_DIR, "valera_memory.jsonl"))
@@ -98,9 +102,16 @@ class FollowUp:
     topic: str
     mirea: bool
     choices: tuple[str, ...] = ()
+    outline: Optional[Outline] = None
+    awaiting_program: bool = False
+    reply: str = ""
 
     @property
     def clarification(self) -> str:
+        if self.awaiting_program:
+            return "Для какой образовательной программы Вас интересуют баллы или стоимость?"
+        if self.reply:
+            return self.reply
         return "Вы про " + " или ".join(self.choices) + "?" if self.choices else ""
 
 
@@ -109,7 +120,7 @@ def is_offer_confirmation(text: str) -> bool:
     phrase = text.strip(" ,.!?…")
     return bool(
         re.fullmatch(
-            r"(?i)(?:(?:валера|лера)[,\s]+)?(?:ну[,\s]+)?"
+            r"(?i)(?:(?:валера|лера)[,\s]+)?(?:(?:ну|так|тогда|да)[,\s]+)*"
             r"(?:да|давай(?:те)?|хорошо|о['’]?кей)",
             phrase,
         )
@@ -244,17 +255,22 @@ class ConversationMemory:
 
     def add(self, question: str, answer: str, chat_id: Optional[str] = None,
             mirea: bool = False, eq: Optional[str] = None,
-            topic: Optional[str] = None, use_as_topic: bool = True) -> None:
+            topic: Optional[str] = None, use_as_topic: bool = True,
+            outline: Optional[Outline] = None, fact: Optional[GuestFact] = None) -> None:
         if not question or not answer:
             return
         row = {"ts": time.time(), "chat": chat_id, "q": question.strip()[:400],
-               "a": answer.strip()[:600], "mirea": bool(mirea)}
+               "a": answer.strip()[:1500], "mirea": bool(mirea)}
         if eq and eq.strip() != question.strip():
             row["eq"] = eq.strip()[:300]   # «эффективный» вопрос с учётом контекста
         if topic and topic.strip() != question.strip():
             row["topic"] = topic.strip()[:240]
         if not use_as_topic:
             row["use_as_topic"] = False
+        if outline:
+            row["outline"] = asdict(outline)
+        if fact:
+            row["guest_fact"] = asdict(fact)
         with self._lock:
             self.rows.append(row)
             self.rows = self.rows[-MAX_ROWS:]
@@ -272,6 +288,168 @@ class ConversationMemory:
     def recent(self, chat_id: Optional[str], limit: int = 10) -> List[Dict]:
         with self._lock:
             return [row for row in self.rows if row.get("chat") == chat_id][-limit:]
+
+    def guest_fact_reply(self, text: str, chat: str) -> tuple[str, Optional[GuestFact]]:
+        with self._lock:
+            rows = [row for row in self.rows if row.get("chat") == chat]
+        last = rows[-1] if rows else {}
+        facts = []
+        previous = None
+        for row in rows:
+            # Старые журналы хранят только q/a. Восстанавливаем поправки по словам гостя.
+            recorded = row.get("guest_fact")
+            previous = GuestFact(**recorded) if recorded else guest_statement(row["q"], previous)
+            if previous:
+                facts.append(previous)
+        if time.time() - last.get("ts", 0) > FOLLOWUP_WINDOW_SEC:
+            previous = None
+        fact = guest_statement(text, previous)
+        if fact:
+            if previous and fact.subject == previous.subject and fact.relation == previous.relation:
+                return f"Понял, {fact.value}.", fact
+            return f"Запомнил, что {fact.statement}.", fact
+        for stored in reversed(facts):
+            if asks_about_fact(text, stored):
+                return f"Вы сказали, что {stored.statement}.", stored
+        return "", None
+
+    def current_discussion(self, chat: str) -> Dict:
+        rows = self.recent(chat)
+        recent = next((r for r in reversed(rows) if r.get("use_as_topic", True) or r.get("guest_fact")), {})
+        return recent if time.time() - recent.get("ts", 0) <= FOLLOWUP_WINDOW_SEC else {}
+
+    def discussion_followup(self, text: str, chat: str, extract_items=None, *, mirea=False) -> Optional[FollowUp]:
+        """Выбирает следующий пункт или уточняет текущий до обычной маршрутизации."""
+        recent = self.current_discussion(chat)
+        saved = recent.get("outline")
+        outline = Outline(**saved) if saved else None
+        previous_topic = recent.get("topic") or recent.get("q", "")
+        previous_answer = recent.get("a", "")
+        overview = institute_overview(text)
+        if overview and not re.search(r"по (?:очереди|порядку)|поочер[её]дно|по шагам", text, re.I):
+            query = (f"Обзор институтов РТУ МИРЭА: {', '.join(INSTITUTES)}. {text} "
+                     "Назови институты и примеры направлений. Различай средний и проходной балл, "
+                     "уточняй программу только для цифр, которых нет в источниках.")
+            return FollowUp(query, "Институты РТУ МИРЭА", True, outline=Outline(tuple(INSTITUTES), mirea=True))
+        offer = re.split(r"(?<=[.!?…])\s+", previous_answer.strip())[-1]
+        if offer.endswith("?") and not re.search(r"следующ|дальше|остальн|продолж", offer, re.I):
+            named = institute_names(previous_answer)
+            subject = (outline.current if outline else "") or (named[-1] if named else previous_topic)
+            if is_offer_confirmation(text) and re.search(r"хотите|рассказать|интересует", offer, re.I) and " или " not in offer:
+                if subject:
+                    query = f"{search_topic(subject)}. {offer} Гость согласился. Раскрой предложенную тему."
+                    if named and re.search(r"программ|направлени", offer, re.I):
+                        query += " Назови программы института и поясни, что на них изучают."
+                    return FollowUp(query, subject, bool(named or recent.get("mirea")), outline=outline)
+            if " или " in offer and re.fullmatch(r"(?i)(?:давай(?:те)?\s+)?(?:про\s+)?[\w -]{2,60}[.!]?", text.strip()):
+                words = set(_stems(text)) - {"давай", "расск"}
+                choices = [part for part in re.split(r"\s+или\s+", offer, flags=re.I) if words.intersection(_stems(part))]
+                if len(choices) == 1:
+                    query = f"{search_topic(subject)}. {offer} Гость выбрал: {text}. Раскрой этот вариант с примером."
+                    if named and lab_robots(text):
+                        query = f"Подбор направления в РТУ МИРЭА. {query} Интересы: робототехника."
+                    return FollowUp(query, subject, bool(named or recent.get("mirea")), outline=outline)
+
+        # Слова «собаки» и «модели» относятся к оборудованию только в разговоре о роботах.
+        if lab_robots(previous_topic + " " + previous_answer) and re.search(
+            r"кажд\w* модел|\bсобак\w*\b|\bGo[12]\b", text, re.I
+        ) and not re.search(r"пород|домашн|ветеринар", text, re.I):
+            topic = "Роботы лаборатории РТУ МИРЭА"
+            if re.search(r"собак|Go[12]", text, re.I):
+                topic += ", четвероногие роботы Unitree"
+            return FollowUp(f"{topic}. {text} Различай характеристики моделей и наличие в лаборатории. "
+                            "Назови только подтверждённые сведения.", topic, True)
+
+        if lab_robots(previous_topic + " " + previous_answer) and re.search(
+            r"про что можно пообщаться|про вс[её],? что (?:есть|знаешь)", text, re.I
+        ):
+            topic = "Роботы и оборудование лаборатории РТУ МИРЭА"
+            return FollowUp(f"{topic}. Перечисли темы для разговора с примерами из лаборатории.", topic, True)
+        scope = admission_scope(text, previous_topic)
+        if scope and not overview:
+            program = named_program(text)
+            if not program and not institute_names(text):
+                program = previous_topic.partition("Программа: ")[2]
+            if program:
+                scope += f". Программа: {program}"
+            return FollowUp(f"{scope}. {text}", scope, True, outline=outline,
+                            awaiting_program=needs_program(text) and not program)
+        if re.search(r"\b(?:колледж\w*|спо)\b", text, re.I):
+            return None
+
+        next_item = asks_next(text) or is_offer_confirmation(text)
+        ordered = ordered_request(text)
+        example = asks_example(text)
+        detail = bool(needs_topic(text, mirea) or re.fullmatch(
+            r"(?i)(?:о['’]?кей[,\s]+)?расскажи(?:те)?,? что (?:ты знаешь|вы знаете)[.?!]?", text))
+        explicit_institutes = bool(re.search(r"\bинститут\w*", text, re.I))
+        tour = bool(re.search(r"экскурси\w*.*лаборатори|по\s+лаборатории.*экскурси", text, re.I))
+        institutes = tuple(INSTITUTES)
+        if not outline and (next_item or ordered) and (
+            len(institute_names(previous_answer)) >= 2 and
+            ("институт" in previous_topic.lower() or re.search(r"следующ\w+ институт", previous_answer, re.I))
+        ):
+            outline = Outline(institutes, mirea=True)
+            if outline.upcoming in institute_names(previous_answer):
+                outline = outline.after_answer(outline.upcoming, previous_answer)
+        start_institutes = explicit_institutes and (ordered or re.fullmatch(
+            r"(?i)(?:расскаж\w* (?:про |об? )?)?институт(?:ы|ах|ов)[.!?]*", text.strip()))
+        selected = tuple(institute_names(text))
+        if outline and not ordered and len(selected) == 1 and selected[0] in outline.items:
+            target = selected[0]
+            return FollowUp(f"{search_topic(target)}. {text}", target, True, outline=outline)
+        if outline and is_offer_confirmation(text) and previous_answer.rstrip().endswith("?"):
+            offer = re.split(r"(?<=[.!?…])\s+", previous_answer.strip())[-1]
+            if not re.search(r"следующ|дальше|остальн|продолж", offer, re.I):
+                offered = institute_names(offer)
+                if len(offered) == 1 and offered[0] in outline.items:
+                    target = offered[0]
+                elif outline.current and re.search(r"подробн|пример|об этом|о н[её]м", offer, re.I):
+                    target = outline.current
+                else:
+                    return None  # новая тема или выбор разбираются обычным обработчиком предложений
+                return FollowUp(f"{search_topic(target)}. {offer} Приведи конкретные детали.",
+                                target, outline.mirea, outline=outline)
+        if ordered and selected:
+            outline = Outline(selected, mirea=True)
+        elif start_institutes and (not outline or tuple(outline.items) != institutes):
+            outline = Outline(institutes, mirea=True)
+        elif tour:
+            if not outline or tuple(outline.items) != TOUR:
+                outline = Outline(TOUR, mirea=True)
+        elif ordered and not start_institutes and (not outline or names_new_subject(text)):
+            source = text if names_new_subject(text) else previous_answer
+            items = extract_items(source, plan=source == text) if extract_items and source else ()
+            if items:
+                outline = Outline(tuple(items), mirea=mirea if source == text else bool(recent.get("mirea")),
+                                  subject=text if source == text else previous_topic)
+            elif source == text:
+                return None  # явно задана новая тема, разбираем сам вопрос
+            elif "институт" in previous_topic.lower() and source != text:
+                outline = Outline(institutes, mirea=True)
+            else:
+                outline = None
+        if outline and (ordered or next_item or start_institutes or tour):
+            if next_item:
+                outline = outline.next_part()
+            target = outline.upcoming
+            if not target:
+                return FollowUp(text, previous_topic, outline.mirea, outline=outline,
+                                reply="Мы дошли до конца списка. Какой пункт обсудим подробнее?")
+            subject = f" Тема: {outline.subject}." if outline.subject else ""
+            return FollowUp(f"{search_topic(target)}.{subject} Расскажи об этом пункте по существу с конкретным примером.",
+                            target, outline.mirea, outline=outline)
+        if outline and outline.current and (example or detail):
+            target = outline.current
+            request = "Приведи один конкретный пример." if example else text
+            subject = f" Тема: {outline.subject}." if outline.subject else ""
+            return FollowUp(f"{search_topic(target)}.{subject} {request}", target, outline.mirea, outline=outline)
+        if (ordered or example) and previous_topic:
+            request = "Приведи один конкретный пример" if example else "Начни с первого пункта и раскрой его"
+            reference = f" Последнее пояснение: {previous_answer[:240]}" if example else ""
+            return FollowUp(f"{request} по теме «{previous_topic}».{reference}",
+                            previous_topic, bool(recent.get("mirea")))
+        return None
 
     def followup_base(self, text: str, has_own_topic: bool = False, *,
                       current_chat: Optional[str] = None) -> Optional[Dict]:
@@ -312,7 +490,21 @@ class ConversationMemory:
                     mirea=bool(recent[0].get("mirea")),
                 )
         detail = _FOLLOWUP_PREFIX_RE.sub("", text.strip(" ,.!?…"))
+        if re.search(r"\b(?:колледж\w*|спо)\b", detail, re.I):
+            if re.fullmatch(r"(?:в |про )?(?:колледж\w*|спо)", detail, re.I):
+                rows = self.recent(current_chat, limit=1)
+                if rows and time.time() - rows[0]["ts"] <= FOLLOWUP_WINDOW_SEC:
+                    previous_query = rows[0].get("eq") or rows[0]["q"]
+                    facets = [label for pattern, label in _FACETS if pattern.search(previous_query)]
+                    if facets:
+                        return FollowUp("Колледж РТУ МИРЭА: " + " и ".join(facets), "колледж", True)
+            return None
         if pending:
+            if pending.awaiting_program and len(detail.split()) <= 12 and not re.search(
+                r"[?!]|\b(?:кто|где|почему|расскажи\w*|что такое|я же сказал|все институты)\b", detail, re.I
+            ):
+                return FollowUp(f"{pending.query} Образовательная программа: {detail}.",
+                                f"{pending.topic}. Программа: {detail}", True, outline=pending.outline)
             choice = re.sub(r"(?i)^(?:про|о|об)\s+", "", detail)
             for pattern, label in _FACETS:
                 if label in pending.choices and pattern.fullmatch(choice):

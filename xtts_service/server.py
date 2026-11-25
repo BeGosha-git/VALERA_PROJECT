@@ -38,6 +38,11 @@ from typing import Optional
 import numpy as np
 import torch
 import uvicorn
+
+if __package__:
+    from .speech_text import words_only
+else:  # python xtts_service/server.py
+    from speech_text import words_only
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -79,8 +84,7 @@ def _num2words_ru(match: "re.Match") -> str:
 def prepare_text(text: str) -> str:
     """Числа — словами (XTTS читает русские цифры нестабильно), лишнее — убрать."""
     text = re.sub(r"-?[0-9][0-9,._]*", _num2words_ru, text)
-    text = re.sub(r"[*_#`~<>|\\]", " ", text)
-    return re.sub(r"\s{2,}", " ", text).strip()
+    return words_only(text)
 
 
 class SynthRequest(BaseModel):
@@ -114,7 +118,7 @@ def load_model() -> None:
     print(f"[xtts] модель готова за {time.time() - t0:.1f} с; "
           f"голос: {'клон ' + REF_WAV if _use_clone else DEFAULT_SPEAKER}", flush=True)
     # Прогрев: первый синтез строит кэши CUDA — делаем его до первого гостя.
-    _synth("Привет, я Валера.", None, 24000, 1.0)
+    _synth("Привет я Валера", None, 24000, 1.0)
     print("[xtts] прогрев завершён", flush=True)
 
 
@@ -126,7 +130,7 @@ def _speakers() -> list:
 
 
 def _synth(text: str, speaker: Optional[str], rate: int, speed: float) -> np.ndarray:
-    kwargs = dict(text=prepare_text(text), language="ru", speed=speed)
+    kwargs = dict(text=text, language="ru", speed=speed)
     if _use_clone:
         kwargs["speaker_wav"] = REF_WAV
     else:
@@ -163,12 +167,12 @@ def speakers():
 def tts(req: SynthRequest):
     if _tts is None:
         raise HTTPException(503, "model is loading")
-    text = (req.text or "").strip()
-    if len(text) < 2:
+    text = prepare_text((req.text or "")[:600])
+    if not text:
         raise HTTPException(400, "text too short")
     rate = req.sample_rate if req.sample_rate in (16000, 22050, 24000, 44100, 48000) else 48000
     t0 = time.time()
-    pcm = _synth(text[:600], req.speaker, rate, max(0.5, min(1.5, req.speed)))
+    pcm = _synth(text, req.speaker, rate, max(0.5, min(1.5, req.speed)))
     return Response(
         content=pcm.tobytes(), media_type="application/octet-stream",
         headers={"X-Sample-Rate": str(rate), "X-Synth-Seconds": f"{time.time() - t0:.2f}"},

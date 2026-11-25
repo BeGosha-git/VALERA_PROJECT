@@ -453,8 +453,14 @@ def create_app(runtime=None, runner=None):
         from flask import Response
         from tts_backends import get_xtts_client
 
+        from valera_numbers import spoken_numbers
+        from xtts_service.speech_text import words_only
+
         payload = request.get_json(silent=True) or {}
         text = (payload.get("text") or "Привет! Я Валера, робот-экскурсовод.").strip()[:200]
+        text = words_only(spoken_numbers(text))
+        if not text:
+            return jsonify({"ok": False, "error": "Введите текст для озвучки"}), 400
         speaker = payload.get("speaker") or rt.get("tts", "xtts_speaker", default="Damien Black")
         rate = 24000
         try:
@@ -2084,11 +2090,11 @@ const MODE_TEXT = {
 // ---------------------------------------------------------------------------
 function startTyping(text) {
   if (typeTimer) { clearInterval(typeTimer); typeTimer = null; }
+  if (!text.startsWith(shownAnswer)) typedChars = 0;
   shownAnswer = text;
-  typedChars = 0;
   const el = $('answer');
   el.classList.remove('placeholder');
-  el.textContent = '';
+  el.textContent = text.slice(0, typedChars);
   // Курсор «печатающей машинки»: видно, что текст появляется прямо сейчас,
   // а не просто перерисовался экран.
   const caret = document.createElement('span');
@@ -2157,7 +2163,12 @@ function paint(d) {
   const ans = (d.answer || '').trim();
   if (ans && ans !== shownAnswer) {
     startTyping(ans);
-  } else if (!ans && !shownAnswer) {
+  } else if (!ans && shownAnswer) {
+    clearInterval(typeTimer);
+    typeTimer = null;
+    shownAnswer = '';
+    typedChars = 0;
+    $('answer').textContent = '';
     $('answer').classList.add('placeholder');
   }
 

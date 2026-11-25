@@ -17,6 +17,8 @@ import glob
 import json
 import os
 import re
+from pathlib import Path
+from functools import lru_cache
 from typing import Dict, Optional, Set
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -82,6 +84,34 @@ def _known_words() -> Set[str]:
     return words
 
 
+@lru_cache(maxsize=1)
+def _spoken_abbreviations():
+    """Буквенные произношения сокращений из первой колонки глоссария МИРЭА."""
+    glossary = Path(PROJECT_DIR, "knowledge_base/rtu_mirea_llm_kb/chunks/03_glossariy_sokrascheniy.md")
+    try:
+        rows = glossary.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    letters = dict(zip("абвгдеёжзийклмнопрстуфхцчшщыэюя",
+                       "а бэ вэ гэ дэ е ё жэ зэ и й ка эль эм эн о пэ эр эс тэ у эф ха цэ че ша ща ы э ю я".split()))
+    aliases = {}
+    for cell in re.findall(r"^\| ([^|]+?) \|", rows, re.M):
+        for term in cell.split(" / "):
+            if not re.fullmatch(r"[А-ЯЁ]{3,6}", term) or len(set(term)) == 1:
+                continue
+            sounds = [letters[ch] for ch in term.lower() if ch in letters]
+            if len(sounds) == len(term):
+                aliases[" ".join(sounds)] = term
+                aliases["-".join(sounds)] = term
+                aliases["".join(sounds)] = term
+    return aliases
+
+
+@lru_cache(maxsize=1)
+def _abbreviation_pattern():
+    return re.compile(r"(?<!\w)(?:" + "|".join(map(re.escape, sorted(_spoken_abbreviations(), key=len, reverse=True))) + r")(?!\w)", re.I)
+
+
 _MANUAL_RE = re.compile(r"(?i)(?<![а-яёa-z])(" + "|".join(sorted(map(re.escape, MANUAL), key=len, reverse=True)) + r")(?![а-яёa-z])")
 _WORD_RE = re.compile(r"[А-Яа-яЁё]{7,}")
 
@@ -95,6 +125,14 @@ def fix_asr(text: str) -> str:
     if not text:
         return text
     out = _MANUAL_RE.sub(lambda m: _match_case(m.group(1), MANUAL[m.group(1).lower()]), text)
+    # «Между викендом, робототехникой и IT» — ослышка в сравнении областей.
+    out = re.sub(r"(?i)(\bмежду\s+)викендом(?=[,\s]+(?:и\s+)?(?:робототехник|программир|фронтенд|IT\b|ИТ\b))",
+                 r"\1бэкендом", out)
+    out = re.sub(r"\b(?:goed|go|гоу)[ -]?(один|два|[12])\b",
+                 lambda m: "Go1" if m[1].lower() in {"один", "1"} else "Go2", out, flags=re.I)
+    aliases = _spoken_abbreviations()
+    if aliases:
+        out = _abbreviation_pattern().sub(lambda m: aliases[m[0].lower()], out)
     known = _known_words()
 
     def _fuzzy(m: "re.Match") -> str:

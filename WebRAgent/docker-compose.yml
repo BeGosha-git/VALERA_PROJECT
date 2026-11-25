@@ -16,6 +16,8 @@ services:
     - QDRANT_URL=http://172.17.0.1:6333
     - QDRANT_HOST=172.17.0.1
     - QDRANT_PORT=6333
+    # run_all.sh пересоздаёт контейнер. Веса для поиска храним вместе с данными базы.
+    - HF_HUB_CACHE=/app/data/embedding_models
     - SEARXNG_URL=http://localhost:8080
     - MONGODB_URI=mongodb://localhost:27017/ragapp
     - FLASK_DEBUG=1

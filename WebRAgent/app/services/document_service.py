@@ -4,6 +4,8 @@ import uuid
 import mimetypes
 import logging
 import tempfile
+import threading
+from concurrent.futures import Future, TimeoutError as FutureTimeout
 import shutil
 import zipfile
 from pathlib import Path
@@ -20,6 +22,7 @@ from bs4 import BeautifulSoup
 import markdown
 from werkzeug.datastructures import FileStorage
 
+from app.services.admission_examples import examples
 from app.models.document import Document
 from app.models.collection import Collection
 from app.services.qdrant_service import QdrantService
@@ -584,9 +587,14 @@ def _build_snapshot(qdrant_service: "QdrantService", collection_id: str):
 
     items = []
     vectors = []
+    seen_content = set()
     for p in points:
         payload = p.get("payload") or {}
         content = payload.get("content", "") or ""
+        key = " ".join(content.split())
+        if not key or key in seen_content:
+            continue
+        seen_content.add(key)
         title = payload.get("document_title", "") or ""
         item = {
             "id": p.get("id"),
@@ -703,6 +711,36 @@ def _get_snapshot(qdrant_service: "QdrantService", collection_id: str):
 
 
 _RERANK_DOWN_UNTIL = 0.0
+
+# Холодный старт модели не должен блокировать поиск по уже готовому текстовому
+# индексу. Ограничиваем и число зависших вычислений на процесс.
+_QUERY_EMBED_SLOTS = threading.BoundedSemaphore(2)
+
+
+def _query_embedding(service, query, collection):
+    if not _QUERY_EMBED_SLOTS.acquire(blocking=False):
+        return None
+    result = Future()
+
+    def encode():
+        try:
+            options = {}
+            if collection and collection.embedding_provider and collection.embedding_model:
+                options = dict(provider=collection.embedding_provider, model=collection.embedding_model)
+            result.set_result(service.get_embedding(query, **options))
+        except Exception as exc:
+            result.set_exception(exc)
+        finally:
+            _QUERY_EMBED_SLOTS.release()
+
+    threading.Thread(target=encode, daemon=True).start()
+    try:
+        return result.result(timeout=2.0)
+    except FutureTimeout:
+        logger.info("Эмбеддинг не готов за 2 с, ищу по текстовому индексу")
+    except Exception as exc:
+        logger.warning("Не удалось получить эмбеддинг запроса: %s", exc)
+    return None
 
 
 def _maybe_rerank(query, scored, limit):
@@ -1389,7 +1427,7 @@ class DocumentService:
 
         return document
     
-    def search_documents(self, collection_id, query, limit=5):
+    def search_documents(self, collection_id, query, limit=5, *, program_question=None, history=None):
         """
         Search for documents in a collection
         
@@ -1424,18 +1462,7 @@ class DocumentService:
             }
 
         # Эмбеддинг вопроса — один раз (самая дорогая часть поиска).
-        query_vector = None
-        try:
-            if collection and collection.embedding_provider and collection.embedding_model:
-                query_vector = self.qdrant_service.get_embedding(
-                    query,
-                    provider=collection.embedding_provider,
-                    model=collection.embedding_model,
-                )
-            else:
-                query_vector = self.qdrant_service.get_embedding(query)
-        except Exception as e:
-            print(f"Не удалось получить эмбеддинг запроса: {e}")
+        query_vector = _query_embedding(self.qdrant_service, query, collection)
 
         items = snapshot["items"]
         matrix = snapshot.get("matrix")
@@ -1642,6 +1669,11 @@ class DocumentService:
                     'page_number': 1,
                 })
             formatted_results = formatted_results[:limit]
+
+        if program_question:
+            rows = examples(items, program_question, history)
+            top = max((row["score"] for row in formatted_results), default=0)
+            formatted_results = ([dict(row, score=top + 1) for row in rows] + formatted_results)[:limit]
 
         return {
             'query': query,

@@ -46,15 +46,39 @@
 #
 # Жизненный цикл:
 #   Скрипт владеет ВСЕМ стеком сразу: веб-пульт/GUI запускается вместе с
-#   сервером и гасится вместе с ним (Ctrl+C). Порт веб-пульта освобождается
-#   от процессов прошлых запусков, поэтому повторный старт не падает с
-#   «Address already in use» и не показывает пустую страницу.
+#   сервером и гасится вместе с ним (Ctrl+C). Повторный запуск завершается до изменения сервисов.
 # ============================================================================
 
 set -e
 
 # Пути к проектам (относительно папки скрипта)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Все режимы управляют одним Docker Compose. Держим блокировку каталога
+# проекта до завершения cleanup, включая запуск из другого терминала.
+exec 9<"$SCRIPT_DIR"
+if flock -n -E 75 9; then
+    :
+else
+    rc=$?
+    if [[ $rc == 75 ]]; then
+        echo "Валера уже запущен или останавливается. Повторный запуск отменён." >&2
+    fi
+    exit "$rc"
+fi
+
+APP_PID_FILE="$SCRIPT_DIR/.valera_app.pid"
+# Пульт предыдущей версии мог стартовать до появления блокировки.
+if [[ -r "$APP_PID_FILE" ]] && read -r previous_pid < "$APP_PID_FILE" &&
+   [[ $previous_pid =~ ^[1-9][0-9]*$ ]] &&
+   [[ $(readlink "/proc/$previous_pid/cwd") == "$SCRIPT_DIR" ]] &&
+   grep -Fzxq 'voice_assistant.py' "/proc/$previous_pid/cmdline" &&
+   grep -Fzxq -- '--web' "/proc/$previous_pid/cmdline"; then
+    echo "Валера уже запущен (PID $previous_pid). Повторный запуск отменён." >&2
+    exit 75
+fi
+
+# Bash сохраняет дескриптор блокировки на время блока, не передавая его сервисам.
+{
 WEBRAGENT_DIR="$SCRIPT_DIR/WebRAgent"
 TTS_DIR="$SCRIPT_DIR/russian_text_to_speech"
 MIC_DIR="$SCRIPT_DIR/mic_to_text"
@@ -249,45 +273,22 @@ stop_own_ollama() {
 
 # PID приложения, запущенного этим скриптом
 APP_PID=""
-APP_PID_FILE="$SCRIPT_DIR/.valera_app.pid"
 WEB_PORT_DEFAULT=8137
-WEB_PORT=""   # заполняется в режиме web
 
-# Освобождает порт веб-пульта: убивает зависшие процессы прошлых запусков.
-# Без этого повторный запуск падает с «Address already in use».
-free_app_port() {
-    local port="${1:-$WEB_PORT_DEFAULT}"
-    # fuser — самый надёжный способ найти владельца порта
-    if command -v fuser >/dev/null 2>&1; then
-        fuser -k "${port}/tcp" >/dev/null 2>&1 || true
-    fi
-    # Подстраховка: процессы проекта с веб-режимом
-    pkill -f "valera_web.py" >/dev/null 2>&1 || true
-    pkill -f "voice_assistant.py --web" >/dev/null 2>&1 || true
-    sleep 1
-}
-
-# Останавливает приложение этого скрипта (и подчищает осиротевшие процессы)
+# Завершаем только дочерний пульт этого запуска.
 stop_app() {
-    local pid=""
-    # 1) PID, сохранённый в переменной
-    if [ -n "$APP_PID" ]; then
-        pid="$APP_PID"
-    # 2) PID из файла (если скрипт перезапускали)
-    elif [ -f "$APP_PID_FILE" ]; then
-        pid="$(cat "$APP_PID_FILE" 2>/dev/null || true)"
+    if [[ -z "$APP_PID" ]]; then
+        return
     fi
-
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-        echo "Остановка приложения (PID $pid)..."
-        kill "$pid" 2>/dev/null || true
+    if kill -0 "$APP_PID" 2>/dev/null; then
+        kill "$APP_PID" 2>/dev/null || true
         sleep 1
-        kill -9 "$pid" 2>/dev/null || true
+        kill -KILL "$APP_PID" 2>/dev/null || true
+        wait "$APP_PID" 2>/dev/null || true
     fi
-    rm -f "$APP_PID_FILE"
-
-    # 3) На случай осиротевших процессов, оставшихся от старых запусков
-    free_app_port "${WEB_PORT:-$WEB_PORT_DEFAULT}"
+    if [[ -f "$APP_PID_FILE" && $(<"$APP_PID_FILE") == "$APP_PID" ]]; then
+        rm -f "$APP_PID_FILE"
+    fi
 }
 
 # Создаёт модель проекта (true_valera), если её нет
@@ -658,10 +659,6 @@ elif [ "$RUN_MODE" = "web" ]; then
         EXTRA_ARGS="$(echo "$EXTRA_ARGS" | sed 's/--web-host[ =]\?[^ ]*//')"
     fi
 
-    # Освобождаем порт от процессов прошлых запусков — иначе «Address already in use»
-    echo "  Освобождаю порт ${WEB_PORT}..."
-    free_app_port "$WEB_PORT"
-
     echo ""
     echo "[5/5] Запуск веб-пульта Валеры на http://${WEB_HOST}:${WEB_PORT}..."
     echo "  Откройте этот адрес в браузере. Интерфейс заменяет настольный GUI:"
@@ -752,3 +749,4 @@ fi
 
 # Приложение отработало — завершаем
 cleanup
+} 9<&-

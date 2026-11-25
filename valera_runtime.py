@@ -832,8 +832,7 @@ class RuntimeState:
     def set_transcript(self, text: str, answer: str = "") -> None:
         with self._lock:
             self.last_transcript = text or ""
-            if answer:
-                self.last_answer = answer
+            self.last_answer = answer
         self._notify("transcript", text)
 
     def log_event(self, level: str, text: str) -> None:

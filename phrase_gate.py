@@ -37,7 +37,7 @@ _DANGLING_RE = re.compile(
 
 
 def _post_chat(ollama_url: str, model: str, prompt: str, max_tokens: int,
-               timeout: float) -> str:
+               timeout: float, *, response_format=None) -> str:
     """
     Один служебный запрос к локальной модели через ``/api/chat``.
 
@@ -60,6 +60,8 @@ def _post_chat(ollama_url: str, model: str, prompt: str, max_tokens: int,
         "keep_alive": -1,  # держим в памяти между вызовами
         "options": options,
     }
+    if response_format is not None:
+        payload["format"] = response_format
     resp = requests.post(
         f"{ollama_url}/api/chat",
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -150,6 +152,38 @@ class PhraseGate:
             return {"complete": True, "reason": "завершена"}
         # Непонятный ответ — не блокируем.
         return {"complete": True, "reason": f"неоднозначно: {answer[:40]!r}"}
+
+    def discussion_items(self, text: str, *, plan: bool = False) -> tuple[str, ...]:
+        """Извлекает предложенный порядок произвольных тем из слов собеседников."""
+        if not self.enabled or not text:
+            return ()
+        instruction = ("Если гость назвал пункты, сохрани его порядок и формулировки. Иначе "
+                       "составь краткий план объяснения названной темы из двух-пяти пунктов. "
+                       "Каждый пункт должен быть названием аспекта темы. Факты и цифры не добавляй."
+                       if plan else "Выдели пункты одного предложенного перечисления по порядку. "
+                       "Скопируй названия дословно из текста. Если списка нет, верни [].")
+        prompt = instruction + "\nВерни только JSON-массив строк.\nТекст: " + text
+        try:
+            schema = {"type": "array", "items": {"type": "string"}, "maxItems": 15}
+            items = json.loads(_post_chat(self.ollama_url, self.model, prompt, 180,
+                                          self.timeout, response_format=schema))
+        except (ValueError, requests.RequestException):
+            return ()
+        if not isinstance(items, list) or not 2 <= len(items) <= 15:
+            return ()
+        position = 0
+        labels = []
+        for label in items:
+            if not isinstance(label, str) or not 1 < len(label.strip()) <= 90:
+                return ()
+            label = label.strip()
+            start = text.casefold().find(label.casefold(), position)
+            if start < 0 and not plan:
+                return ()
+            position = start + len(label)
+            if label not in labels:
+                labels.append(label)
+        return tuple(labels) if len(labels) >= 2 else ()
 
     def detect_offered_topic(self, answer: str) -> str:
         """Выделяет тему, которую Валера предложил в предыдущем ответе.

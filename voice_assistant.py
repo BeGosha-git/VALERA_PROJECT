@@ -19,6 +19,7 @@ import threading
 import tempfile
 import subprocess
 import uuid
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -27,7 +28,7 @@ from typing import Optional
 import numpy as np
 import soundfile as sf
 import torch
-from silero_vad import load_silero_vad
+from silero_vad import VADIterator, collect_chunks, get_speech_timestamps, load_silero_vad, read_audio, save_audio
 import requests
 from bs4 import BeautifulSoup
 
@@ -36,11 +37,16 @@ from bs4 import BeautifulSoup
 from russian_text_to_speech.NeuralSpeaker import NeuralSpeaker
 from tts_backends import get_xtts_client
 from asr_fix import fix_asr
+from valera_numbers import spoken_numbers
+from valera_gestures import choose_gesture, start_gesture
+from xtts_service.speech_text import words_only
+from valera_dialogue import INSTITUTE_RE, asks_next, institute_overview, search_topic, selection_topic
 from valera_memory import (
     CONTINUE_RE, FOLLOWUP_WINDOW_SEC, GREET_RE, THANKS_RE,
     ConversationMemory, FollowUp, is_offer_confirmation, needs_topic, recall_kind, style_hint,
 )
 from kairos_asr import KairosASR
+from kairos_asr.utils.vad_utils import SileroVAD as KairosVAD
 from phrase_gate import PhraseGate
                                                                                                               
 # Рантайм-состояние проекта: общие настройки, буферы для GUI и триггеры
@@ -95,6 +101,9 @@ AUDIO_DEVICE = os.getenv("AUDIO_DEVICE", "default")
 
 # RAG-клиент
 RAG_BASE_URL = os.getenv("RAG_BASE_URL", "http://localhost:5000")
+VOICE_SEARCH_WAIT = max(1.0, _env_float("VOICE_SEARCH_WAIT_SEC", 12.0))
+# Один читатель WebRAgent на голосовой процесс, в том числе после обрыва связи.
+_VOICE_SEARCH_SLOT = threading.BoundedSemaphore(1)
 RAG_USERNAME = os.getenv("RAG_USERNAME", "admin")
 RAG_PASSWORD = os.getenv("RAG_PASSWORD", "change_me_in_production")
 
@@ -184,6 +193,11 @@ def tokens_for_words(words: int) -> int:
     """Потолок генерации в токенах: русский ≈ 2,3 токена на слово + запас."""
     return int(words * 2.4) + 30
 # --------------------------------------------------------------
+
+
+def _kairos_local_vad():
+    """Контракт Kairos: модель и пять утилит Silero в порядке torch.hub."""
+    return load_silero_vad().eval(), (get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks)
 
 
 class SileroVAD:
@@ -306,6 +320,55 @@ def clean_audio(audio: np.ndarray, noise_profile: Optional[np.ndarray],
 # Используется лёгкая модель Kairos (см. kairos_asr). Она быстрая, работает
 # на CPU и не требует тяжёлых зависимостей — этого достаточно для коротких
 # фраз экскурсовода.
+
+
+class ChatMissing(RuntimeError):
+    """Сервер подтвердил, что чат отсутствует."""
+
+
+class StreamUnsupported(RuntimeError):
+    """Эта версия сервера не принимает запросы на потоковый маршрут."""
+
+
+def _voice_search_results(fetch):
+    """Ждём готовое предложение или результат поиска; сеть не управляет микрофоном."""
+    if not _VOICE_SEARCH_SLOT.acquire(blocking=False):
+        raise TimeoutError("Предыдущий поиск ещё завершается")
+    cancelled = threading.Event()
+    events = queue.Queue()
+    end = object()
+
+    def read():
+        error = None
+        try:
+            for value in fetch(cancelled):
+                if cancelled.is_set():
+                    break
+                events.put((value, None))
+        except Exception as exc:
+            error = exc
+        finally:
+            _VOICE_SEARCH_SLOT.release()
+            events.put((end, error))
+
+    threading.Thread(target=read, daemon=True).start()
+    deadline = time.monotonic() + 4 * VOICE_SEARCH_WAIT
+    try:
+        while True:
+            wait = min(VOICE_SEARCH_WAIT, deadline - time.monotonic())
+            if wait <= 0:
+                raise TimeoutError("Истекло время голосового поиска")
+            try:
+                value, error = events.get(timeout=wait)
+            except queue.Empty:
+                raise TimeoutError("Поиск не успел вернуть ответ") from None
+            if error:
+                raise error
+            if value is end:
+                return
+            yield value
+    finally:
+        cancelled.set()
 
 
 class RAGClient:
@@ -438,7 +501,7 @@ class RAGClient:
 
         query_url = f"{self.base_url}/query"
         try:
-            response = self.session.post(query_url, data=data, timeout=300)
+            response = self.session.post(query_url, data=data, timeout=(3, VOICE_SEARCH_WAIT))
             if response.status_code != 200:
                 raise RuntimeError(
                     f"Ошибка запроса: статус {response.status_code}, ответ: {response.text}"
@@ -454,7 +517,7 @@ class RAGClient:
 
         url = f"{self.base_url}/collections"
         try:
-            response = self.session.get(url, timeout=60)
+            response = self.session.get(url, timeout=(2, 3))
             if response.status_code != 200:
                 raise RuntimeError(
                     f"Ошибка получения коллекций: статус {response.status_code}"
@@ -535,7 +598,7 @@ class RAGClient:
             response = self.session.post(
                 url,
                 json=payload,
-                timeout=90,
+                timeout=(3, VOICE_SEARCH_WAIT),
             )
             if response.status_code != 200:
                 return ""
@@ -556,7 +619,7 @@ class RAGClient:
 
         url = f"{self.base_url}/chat/new"
         try:
-            response = self.session.post(url, timeout=60)
+            response = self.session.post(url, timeout=(2, 3))
             if response.status_code != 200:
                 print(
                     f"❌ Ошибка создания чата: статус {response.status_code}",
@@ -624,7 +687,9 @@ class RAGClient:
 
         url = f"{self.base_url}/chat/{chat_id}/query"
         try:
-            response = self.session.post(url, data=data, timeout=300)
+            response = self.session.post(url, data=data, timeout=(3, VOICE_SEARCH_WAIT))
+            if response.status_code == 404 and response.json().get("error") == "Chat not found":
+                raise ChatMissing("Сервер не нашёл чат")
             if response.status_code != 200:
                 raise RuntimeError(
                     f"Ошибка запроса чата: статус {response.status_code}, "
@@ -649,11 +714,21 @@ class RAGClient:
         if original_query and original_query != query_text:
             data["original_query"] = original_query
         resp = self.session.post(f"{self.base_url}/chat/{chat_id}/query_stream", data=data,
-                                 stream=True, timeout=(10, 120))
-        if resp.status_code != 200:
-            raise RuntimeError(f"Ошибка потокового запроса: статус {resp.status_code}")
+                                 stream=True, timeout=(3, VOICE_SEARCH_WAIT))
         try:
-            for line in resp.iter_lines(decode_unicode=True):
+            if resp.status_code == 404:
+                try:
+                    error = resp.json().get("error")
+                except ValueError:
+                    error = None
+                if error == "Chat not found":
+                    raise ChatMissing("Сервер не нашёл чат")
+                raise StreamUnsupported("Потоковый маршрут отсутствует")
+            if resp.status_code == 405:
+                raise StreamUnsupported("Потоковый маршрут не принимает POST")
+            if resp.status_code != 200:
+                raise RuntimeError(f"Ошибка потокового запроса: статус {resp.status_code}")
+            for line in resp.iter_lines(chunk_size=1):
                 if not line:
                     continue
                 try:
@@ -714,12 +789,11 @@ def clean_question(text: str) -> str:
     """Убирает из текста имена/слова и мат (по стеблям)."""
     import re
 
-    cleaned = text
+    cleaned = normalize_name(text)
     for stem in PROFANITY_STEMS + FILTER_STEMS:
         cleaned = re.sub(rf"\b{stem}\w*", "", cleaned, flags=re.IGNORECASE)
     # Схлопываем лишние пробелы
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned
+    return re.sub(r"\s+", " ", cleaned).lstrip(" ,.!?…").strip()
 
 
 def is_yes_answer(answer: str) -> bool:
@@ -890,9 +964,9 @@ def kb_match(text: str) -> Optional[str]:
     import re
 
     pattern = r"\b(" + "|".join(COLLECTION_KEYWORDS) + r")\b"
-    match = re.search(pattern, text, flags=re.IGNORECASE)
+    match = INSTITUTE_RE.search(text) or re.search(pattern, text, flags=re.IGNORECASE)
     if match:
-        return match.group(1)
+        return match.group()
     # Основы слов: ловят любые падежи («поступление», «мегалабораторию»,
     # «робототехнике»), которые точный список выше пропускает.
     stem = _KB_STEMS_RE.search(text)
@@ -1036,7 +1110,7 @@ FORBIDDEN_TOPIC_PATTERNS = [
     r"\bвоенн\w+\s+операци", r"\bвоенн\w+\s+действи",
     r"\bвойн", r"\bвоюем", r"\bвоевать",
     r"\bукраин", r"\bмобилизаци", r"\bмобилиз", r"\bфронт\b",
-    r"\bобстрел", r"\bбпла\b", r"\bдрон", r"\bснаряд",
+    r"\bобстрел", r"\bснаряд",
     r"\bнацизм", r"\bнацист", r"\bфашизм", r"\bфашист",
     # --- религия и национальность (спорное в публичном месте) ---
     r"\bрелиги", r"\bцерков", r"\bнациональност", r"\bнационализм",
@@ -1058,7 +1132,7 @@ FORBIDDEN_REFUSAL = (
 # ]
 
 
-def is_forbidden_topic(text: str) -> bool:
+def is_forbidden_topic(text: str, *, academic: bool = False) -> bool:
     """
     Политика / военная тематика / религия / национальность — не обсуждаем.
 
@@ -1069,6 +1143,11 @@ def is_forbidden_topic(text: str) -> bool:
     import re
 
     low = text.lower()
+    if re.search(r"\b(?:дрон|бпла\b|беспилот)", low):
+        if re.search(r"\b(?:боев|военн|вооруж|оруж|атак|ударн|взрыв|бомб|пораж[её]н|камикадзе)", low):
+            return True
+        if not academic and re.search(r"\b(?:дрон|бпла\b)", low):
+            return True
     return any(re.search(p, low) for p in FORBIDDEN_TOPIC_PATTERNS)
 
 
@@ -1245,7 +1324,7 @@ def split_into_sentences(text: str) -> list:
 
     if not text:
         return []
-    text = text.strip()
+    text = normalize_emotion_marks(text.strip())
     # Режем ПОСЛЕ знака конца предложения (. ! ? …), сохраняя знак в начале фразы.
     parts = _re.split(r"(?<=[.!?…])\s+", text)
     out: list = []
@@ -1402,6 +1481,7 @@ def split_complete_sentences(buf: str):
     сокращений («стр.», «ул.», «г.», «т. е.»), перед строчной буквой/цифрой и пока следующий
     символ ещё не пришёл.
     """
+    buf = normalize_emotion_marks(buf, final=False)
     out, start = [], 0
     for m in _SENT_END_RE.finditer(buf):
         end = m.end()
@@ -1419,6 +1499,8 @@ def split_complete_sentences(buf: str):
             out.append(buf[start:label_end].strip())
             start = label_end
             continue
+        if rest.startswith("(") and not re.search(r"[)\]]", rest):
+            continue  # возможное начало метки в следующем пакете
         if not (rest[0].isupper() or rest[0] in "«\"—-("):
             continue                      # продолжение предложения («2026 г. по будням»)
         word = re.findall(r"[\w-]+$", buf[start:m.start()])
@@ -1724,6 +1806,19 @@ _ANALYSIS_MARKERS = (
 UNRECOGNIZED_REPLY = "Повторите, пожалуйста."
 
 
+def offline_search_reply(question: str, mirea: bool) -> tuple[str, str]:
+    """Краткая справка из раздела 2.1 базы МИРЭА для общего вопроса о вузе."""
+    topic = " ".join(re.findall(r"\w+", question.casefold()))
+    if mirea and re.fullmatch(
+        r"(?:(?:расскажи(?:те)?(?: мне)? (?:про|об?)|что такое) )?"
+        r"(?:(?:наш(?:ем)?|ваш(?:ем)?) )?(?:университет[е]?|вуз[е]?|(?:рту )?мирэа)",
+        topic,
+    ):
+        return ("МИРЭА — Российский технологический университет в Москве. "
+                "Университет ведёт свою историю с 1947 года.", "local-kb")
+    return "Сейчас поиск недоступен. Попробуйте задать вопрос чуть позже.", "search-unavailable"
+
+
 def looks_like_analysis(text: str) -> bool:
     """
     Похоже ли, что вместо ответа модель разбирает поведение гостя.
@@ -1876,7 +1971,8 @@ _SELF_QUESTION_RE = re.compile(
     r"|\bкак\s+(?:тебя|вас)\s+зовут\b"
     r"|\b(?:тво[её]|ваше)\s+имя\b"
     r"|\bты\s+(?:работаешь|работаете|здесь|тут|на\s+работе|готов)\b"
-    r"|\bчто\s+ты\s+(?:умеешь|можешь|знаешь)\b"
+    r"|\bчто\s+ты\s+(?:умеешь|можешь)\b"
+    r"|\bчто\s+ты\s+знаешь(?:\s+(?:о|про)\s+себ[ея])?[?!.…\s]*$"
     r"|\bрасскажи\s+(?:о\s+себе|про\s+себя)\b"
     r"|\bты\s+(?:меня|нас)\s+(?:слышишь|понимаешь|видишь)\b"
     r"|\b(?:ты|вы)\s+(?:бо[тт]|робот)\b"
@@ -2226,6 +2322,28 @@ EMOTION_STYLE = {
 }
 DEFAULT_EMOTION = "дружелюбие"
 
+_ORPHAN_STYLE_RE = re.compile(
+    r"(?<=[.!?…])\s+(" + "|".join(EMOTION_STYLE) + r")(?=\s+[А-ЯЁA-Z]|[.]?\s*\Z)(?:\.(?=\s*\Z))?"
+)
+_SHORT_STYLE_RE = re.compile(r"[\[(]\s*(" + "|".join(EMOTION_STYLE) + r")\s*[\])]", re.I)
+_TAG_TAIL_RE = re.compile(r"[\[(]\s*(?:э(?:м(?:о(?:ц(?:и(?:я)?)?)?)?)?|e(?:m(?:o(?:t(?:i(?:on?)?)?)?)?)?)[.:：\s]*$", re.I)
+
+
+def normalize_emotion_marks(text: str, *, final: bool = True) -> str:
+    """Восстанавливает отделившуюся от скобок метку на границе предложений."""
+    def restore(match):
+        # Конец пакета может приходиться на середину обычного слова.
+        if not final and not text[match.end():].strip(". "):
+            return match.group()
+        return f" [эмоция:{match.group(1)}]"
+
+    text = _SHORT_STYLE_RE.sub(r"[эмоция:\1]", text)
+    text = _ORPHAN_STYLE_RE.sub(restore, text)
+    if final:
+        text = _TAG_TAIL_RE.sub("", text)
+        text = re.sub(r"(?<=[.!?…])\s+эмо\.?\s*$", "", text)
+    return text
+
 
 def parse_emotion(text: str) -> tuple:
     """
@@ -2246,7 +2364,7 @@ def parse_emotion(text: str) -> tuple:
             found = match.group(1).strip().lower().rstrip(".!?,;")
         return ""
 
-    clean = _EMOTION_RE.sub(_grab, text)
+    clean = _EMOTION_RE.sub(_grab, normalize_emotion_marks(text))
     clean = _INCOMPLETE_EMOTION_RE.sub("", clean)
     clean = re.sub(r"\s{2,}", " ", clean).strip()
     return clean, found
@@ -2293,6 +2411,9 @@ _TRANSITION_START_RE = re.compile(
     re.I,
 )
 _OFFER_QUESTION_RE = re.compile(r"^(?:хотите\s+(?:узнать|посмотреть)|рассказать\s+(?:вам|подробнее|про|о|об)).*\?$", re.I)
+_EMPTY_PROMISE_RE = re.compile(
+    r"^(?:(?:я|мы)\s+)?(?:могу рассказать|продолжу рассказ|сначала опишу|"
+    r"с чего (?:именно )?вы|что именно вас интересует|о ч[её]м вам рассказать)\b", re.I)
 
 
 def is_stalled_continuation(text: str, previous: str) -> bool:
@@ -2300,11 +2421,12 @@ def is_stalled_continuation(text: str, previous: str) -> bool:
     plain, _ = parse_emotion(text or "")
     previous, _ = parse_emotion(previous or "")
     words = re.findall(r"\w+", plain.casefold())
-    if not words or words == re.findall(r"\w+", previous.casefold()) or _INCOMPLETE_ANSWER_END_RE.search(plain):
+    if (not words or words in (["слушаю", "вас"], ["ответ", "отсутствует"])
+            or words == re.findall(r"\w+", previous.casefold()) or _INCOMPLETE_ANSWER_END_RE.search(plain)):
         return True
     parts = split_into_sentences(plain)
     return all(
-        _OFFER_QUESTION_RE.fullmatch(part)
+        _OFFER_QUESTION_RE.fullmatch(part) or _EMPTY_PROMISE_RE.match(part)
         or (_TRANSITION_START_RE.match(part) and not re.search(r"[,;:]", part))
         for part in parts
     )
@@ -2326,6 +2448,7 @@ def finalize_answer(
     относилась. Тогда метки снимает вызывающий код, по одной на фразу.
     """
     max_words = max_words or current_answer_words()
+    text = spoken_numbers(text or "")
     plain, _ = parse_emotion(text)
     if keep_emotion and _EMOTION_RE.search(text or ""):
         checked = answer_guard(strip_meta_speech(strip_analysis(plain)))
@@ -2743,6 +2866,7 @@ class VoiceAssistant:
 
         # STT-модель: грузим лениво и переиспользуем
         self._asr = None          # выбранная модель распознавания речи
+        self._asr_lock = threading.Lock()
 
         self.is_recording = False
         self.noise_profile: Optional[np.ndarray] = None
@@ -3008,14 +3132,14 @@ class VoiceAssistant:
         Возвращает модель распознавания речи (Kairos).
         Грузится лениво при первом использовании и переиспользуется.
         """
-        if self._asr is not None:
+        with self._asr_lock:
+            if self._asr is None:
+                # Kairos по умолчанию ищет ветку Silero на GitHub даже при наличии кэша.
+                KairosVAD.get_silero_model = staticmethod(_kairos_local_vad)
+                print("[STT] Загружаю Kairos с локальным Silero...", flush=True)
+                self._asr = KairosASR(device="auto")
+                print("[STT] Распознаватель готов.", flush=True)
             return self._asr
-
-        print("[STT] Инициализация Kairos-модели...")
-        from kairos_asr import KairosASR
-
-        self._asr = KairosASR(device="auto")
-        return self._asr
 
     def _warmup_all(self):
         """
@@ -3208,23 +3332,29 @@ class VoiceAssistant:
         return ask_ollama_direct(question, history=history, hint=hint)
 
     def _finish_continuation(self, answer: str, question: str, context: DialogueContext,
-                             search_query: str) -> str:
+                             search_query: str, *, evidence: Optional[list] = None) -> str:
         """Даёт модели одну попытку дополнить повторный или оборванный ответ."""
         previous = next(
             (message["content"] for message in reversed(context.history) if message["role"] == "assistant"),
             "",
         )
         answer = finalize_answer(answer, keep_emotion=True)
-        if not is_stalled_continuation(answer, previous):
+        if not is_stalled_continuation(answer, previous) and not is_unrecognized_reply(answer):
             return answer
         hint = (
             "Гость просит продолжить рассказ. Сразу дай новый конкретный факт по теме. "
             "Закончи мысль. Если подходящих сведений нет, скажи об этом и ничего не выдумывай."
         )
+        if evidence is not None:
+            excerpts = [(row.get("content") or "") if isinstance(row, dict) else str(row) for row in evidence]
+            sources = "\n".join(piece[:1000] for piece in excerpts if piece.strip())
+            if not sources:
+                return "По этому пункту у меня пока нет подробностей."
+            hint += "\nОтветь только по этим фрагментам базы МИРЭА:\n" + sources[:3000]
         retry = self._direct_llm(question, hint=hint, context=context, search_query=search_query)
         retry = finalize_answer(retry, keep_emotion=True)
-        if is_stalled_continuation(retry, previous):
-            return "Что именно Вы хотите узнать об этом?"
+        if is_stalled_continuation(retry, previous) or is_unrecognized_reply(retry):
+            return "По этому пункту у меня пока нет подробностей."
         return retry
 
     def _answer_said_unrecognized(
@@ -3274,12 +3404,12 @@ class VoiceAssistant:
         return bool(self._chat_id) and hasattr(self.rag, "chat_query_stream")
 
     def _stream_answer(self, rag_text: str, collection_id: str, *,
-                       context: Optional[DialogueContext] = None, original_query: str = "") -> Optional[str]:
+                       context: Optional[DialogueContext] = None, original_query: str = "") -> str:
         """
         Ответ по базе знаний потоком: первое предложение озвучивается, пока модель пишет остальное.
 
-        Возвращает озвученный текст, либо None — если поток не удался до первого слова
-        (тогда вызывающий код делает обычный запрос без потока).
+        Возвращает готовые предложения. Ошибка до первого предложения уходит
+        обработчику реплики, чтобы он мог ответить без второго запроса к модели.
         """
         import queue as _queue
 
@@ -3306,18 +3436,38 @@ class VoiceAssistant:
                     s_text, s_emo = s
                 else:
                     s_text, s_emo = s, None
-                pcm_q.put(self._synthesize_pcm_bytes(s_text, speaker, s_emo))
+                try:
+                    pcm = self._synthesize_pcm_bytes(s_text, speaker, s_emo)
+                except Exception as exc:
+                    print(f"⚠️ Синтез фразы прервался: {exc}", file=sys.stderr)
+                    pcm = None
+                pcm_q.put((s_text, pcm))
 
         def _player():
+            first_phrase = True
             while True:
-                pcm = pcm_q.get()
-                if pcm is None:
+                item = pcm_q.get()
+                if item is None:
                     return
                 if self._interrupt_tts:
                     stop.set()
                     continue
-                if pcm and not stop.is_set():
-                    play_audio(pcm, sample_rate=TTS_SAMPLE_RATE)
+                if not stop.is_set():
+                    s_text, pcm = item
+                    try:
+                        if pcm:
+                            gesture = choose_gesture(s_text, first_phrase=first_phrase)
+                            if gesture:
+                                print(f"Жест: {gesture}", flush=True)
+                                if os.getenv("VALERA_ROBOT_GESTURES") == "1":
+                                    start_gesture(gesture)
+
+
+                        first_phrase = False
+                        if not pcm or not play_audio(pcm, sample_rate=TTS_SAMPLE_RATE):
+                            self._speak_whole_fallback(s_text, speaker)
+                    except Exception as exc:
+                        print(f"⚠️ Ошибка воспроизведения: {exc}", file=sys.stderr)
 
         prod = threading.Thread(target=_producer, daemon=True)
         play = threading.Thread(target=_player, daemon=True)
@@ -3336,7 +3486,7 @@ class VoiceAssistant:
             if _emo_name:
                 print(f"🎭 Эмоция: {_emo_name} (темп ×{_emo_style['speed']:.2f})")
             clean = finalize_answer(sentence, budget)
-            if not clean or (clean == "Слушаю Вас." and sentence.strip() != clean):
+            if not clean or _INCOMPLETE_ANSWER_END_RE.fullmatch(clean) or (clean == "Слушаю Вас." and sentence.strip() != clean):
                 return
             if clean.endswith("?") and _ans_ctx["prev_question"] and spoken:
                 return                                    # не заканчиваем каждый ответ вопросом
@@ -3346,44 +3496,62 @@ class VoiceAssistant:
                 return
             state["words"] += n
             spoken.append(clean)
+            self.runtime.set_transcript(original_query or rag_text, " ".join(spoken))
             if _VUZ_NAME_RE.search(clean):
                 _ans_ctx["prev_named"] = True             # дальше в этом ответе вуз не называем
             sent_q.put((clean, _emo_style))
 
-        buf, failed = "", None
-        try:
-            self._last_query_source = "chat-stream"
-            context = context if context is not None else self._dialogue_context()
+        chat_id = self._chat_id
+        context = context if context is not None else self._dialogue_context()
+
+        def sentences(cancelled):
+            buf = ""
+            emitted_boundary = False
             for ev in self.rag.chat_query_stream(
-                self._chat_id, rag_text, collection_id, max_results=3,
+                chat_id, rag_text, collection_id, max_results=3,
                 conversation_context=context.search_history(), original_query=original_query,
             ):
-                t = ev.get("t")
-                if t == "err":
+                if cancelled.is_set():
+                    return
+                if ev.get("t") == "err":
+                    if parse_emotion(buf)[0].endswith((".", "!", "?", "…")):
+                        yield buf
                     raise RuntimeError(ev.get("message") or "ошибка потока")
-                if t == "d":
-                    buf += ev.get("x", "")
-                    done, buf = split_complete_sentences(buf)
-                    for s in done:
-                        _emit(s)
+                if ev.get("t") == "done":
+                    if not emitted_boundary:
+                        buf = ev.get("response") or buf
+                    break
+                if ev.get("t") == "d":
+                    piece = ev.get("x") or ""
+                    done, buf = split_complete_sentences(buf + piece)
+                    emitted_boundary |= bool(done)
+                    yield from done
+            if buf.strip():
+                yield buf.strip()
+
+        try:
+            self._last_query_source = "chat-stream"
+            with closing(_voice_search_results(sentences)) as results:
+                for sentence in results:
+                    _emit(sentence)
                     if state["limit"]:
                         break
-            if buf.strip() and not state["limit"]:
-                _emit(buf.strip())
         except Exception as e:  # noqa: BLE001
-            failed = e
             print(f"⚠️ Потоковый ответ прервался: {e}", file=sys.stderr)
+            if not spoken:
+                raise
         finally:
             sent_q.put(None)
             prod.join(timeout=60)
             play.join(timeout=120)
             _ans_ctx["prev_named"] = orig_prev_named
         if not spoken:
-            return None if failed else ""
+            return ""  # Ни одного законченного предложения: обычный запрос по базе.
         return " ".join(spoken)
 
     def _remember_exchange(self, question: str, answer: str, persist: bool = True, *,
-                           use_as_topic: bool = True) -> None:
+                           use_as_topic: bool = True, followup: Optional[FollowUp] = None,
+                           fact=None) -> None:
         """
         Дописывает обмен в ЛОКАЛЬНУЮ историю (последние 10 обменов).
 
@@ -3409,6 +3577,9 @@ class VoiceAssistant:
                 eq=(self._last_effective or None) if use_as_topic else None,
                 topic=(self._last_topic or None) if use_as_topic else None,
                 use_as_topic=use_as_topic,
+                outline=(followup.outline.after_answer(followup.topic, answer)
+                         if followup and followup.outline else None),
+                fact=fact,
             )
         # Смысловой учёт всего сказанного: быстрая модель сжимает весь диалог
         # в короткую сводку. Обновляем в фоне, чтобы не задерживать озвучку.
@@ -3437,24 +3608,32 @@ class VoiceAssistant:
         context = context if context is not None else self._dialogue_context()
         search_history = context.search_history()
 
-        def _params(cid: Optional[str]) -> dict:
-            return dict(
-                query_text=query_text,
-                collection_id=cid,
-                use_web_search=use_web_search,
-                use_agent_search=use_agent_search,
-                max_results=max_results,
-                conversation_context=search_history,
-                original_query=original_query,
-            )
+        params = dict(
+            query_text=query_text,
+            collection_id=collection_id,
+            use_web_search=use_web_search,
+            use_agent_search=use_agent_search,
+            max_results=max_results,
+            conversation_context=search_history,
+            original_query=original_query,
+        )
+
+        def request(chat_id):
+            def fetch(_cancelled):
+                if chat_id:
+                    yield self.rag.chat_query(chat_id=chat_id, **params)
+                else:
+                    yield self.rag.query(**params)
+
+            self._last_query_source = "chat" if chat_id else "query"
+            with closing(_voice_search_results(fetch)) as results:
+                return next(results)
 
         if self._chat_id:
             try:
-                self._last_query_source = "chat"
-                return self.rag.chat_query(chat_id=self._chat_id, **_params(collection_id))
-            except Exception as e:
-                # Чат мог исчезнуть — пересоздаём и пробуем ещё раз
-                print(f"♻️  Чат недоступен ({e.__class__.__name__}) — создаю новый...")
+                return request(self._chat_id)
+            except ChatMissing:
+                print("♻️  Сервер не нашёл прежний чат — создаю новый...")
                 self._chat_id = None
 
         new_chat = self.rag.create_chat()
@@ -3463,27 +3642,10 @@ class VoiceAssistant:
             self._save_chat_id(new_chat)
             self.runtime.set_current_chat(new_chat, "")
             print(f"✅ Новый чат с контекстом: {new_chat}")
-            try:
-                self._last_query_source = "chat"
-                return self.rag.chat_query(chat_id=new_chat, **_params(collection_id))
-            except Exception as e:
-                print(f"⚠️  Запрос к чату не удался: {e}", file=sys.stderr)
+            return request(new_chat)
 
         print("⚠️  Серверный чат недоступен — передаю локальный контекст в /query.")
-        self._last_query_source = "query"
-        try:
-            return self.rag.query(
-                query_text=query_text,
-                collection_id=collection_id,
-                use_web_search=use_web_search,
-                use_agent_search=use_agent_search,
-                max_results=max_results,
-                conversation_context=search_history,
-                original_query=original_query,
-            )
-        except (RuntimeError, ValueError) as exc:
-            print(f"⚠️ Поиск недоступен ({type(exc).__name__}) — пробую прямой ответ.")
-            return {"response": "", "contexts": []}
+        return request(None)
 
     def _handle_phrase(self, audio_np: np.ndarray):
         """Полный пайплайн: Шумодав → STT → триггеры → RAG → TTS"""
@@ -3610,6 +3772,9 @@ class VoiceAssistant:
         Добавляем в начало короткую тишину в WAV, чтобы начало фразы не
         срезалось при открытии устройства (та же причина, что и в aplay-пути).
         """
+        text = words_only(spoken_numbers(text))
+        if not text:
+            return
         try:
             data = self._synthesize_pcm_bytes(text, speaker)
             if data:
@@ -3651,20 +3816,22 @@ class VoiceAssistant:
         """
         import queue as _queue
 
-        q: "_queue.Queue" = _queue.Queue(maxsize=3)
+        q: "_queue.Queue" = _queue.Queue()
         interrupted = threading.Event()
 
         def _producer():
-            for item in sentences:
-                if interrupted.is_set() or self._interrupt_tts:
-                    break
-                s, style = item if isinstance(item, tuple) else (item, None)
-                if style:
-                    print(f"🎭 Эмоция: темп ×{style['speed']:.2f}, тон ×{style['pitch']:.2f}")
-                # Тишина в начало уже добавляется внутри _synthesize_pcm_bytes.
-                pcm = self._synthesize_pcm_bytes(s, speaker, style)
-                q.put((s, pcm))
-            q.put(None)  # признак конца
+            try:
+                for item in sentences:
+                    if interrupted.is_set() or self._interrupt_tts:
+                        break
+                    s, style = item if isinstance(item, tuple) else (item, None)
+                    if style:
+                        print(f"🎭 Эмоция: темп ×{style['speed']:.2f}, тон ×{style['pitch']:.2f}")
+                    q.put((s, self._synthesize_pcm_bytes(s, speaker, style)))
+            except Exception as exc:
+                print(f"⚠️ Синтез ответа прервался: {exc}", file=sys.stderr)
+            finally:
+                q.put(None)
 
         th = threading.Thread(target=_producer, daemon=True)
         th.start()
@@ -3675,12 +3842,16 @@ class VoiceAssistant:
                 item = q.get()
                 if item is None:
                     break
-                _s, pcm = item
+                #_s, pcm = item
+                phrase, pcm = item
                 if self._interrupt_tts:
                     interrupted.set()
                     break
                 if not pcm:
                     continue
+                gesture = choose_gesture(phrase, first_phrase=not played_any)
+                if gesture:
+                    print(f"Жест: {gesture}", flush=True)
                 if not play_audio(pcm, sample_rate=TTS_SAMPLE_RATE):
                     # Устройство не приняло звук — прерываем и просим откат.
                     interrupted.set()
@@ -3707,6 +3878,11 @@ class VoiceAssistant:
             data = self._synthesize_pcm_bytes(text, speaker)
             if not data:
                 return False
+            gesture = choose_gesture(text, first_phrase=True)
+            if gesture:
+                print(f"Жест: {gesture}", flush=True)
+                if os.getenv("VALERA_ROBOT_GESTURES") == "1":
+                    start_gesture(gesture)
             return play_audio(data, sample_rate=TTS_SAMPLE_RATE)
         except Exception as e:  # noqa: BLE001
             print(f"⚠️ Озвучка на устройство {device} не удалась: {e}", file=sys.stderr)
@@ -3773,6 +3949,10 @@ class VoiceAssistant:
         его явно: там предложения идут очередью и общий атрибут состояния
         гоняется между потоками.
         """
+        text = words_only(spoken_numbers(text))
+        if not text:
+            return None
+
         # Основной голос — XTTS-v2 (отдельный сервис на GPU). Если он не поднят
         # или упал, клиент вернёт None и ниже сработает запасной Silero.
         if self.runtime.get("tts", "backend", default="xtts") == "xtts":
@@ -3794,20 +3974,13 @@ class VoiceAssistant:
                 return leading_silence_bytes(TTS_SAMPLE_RATE) + pcm
 
         try:
-            import re as _re
-
-            from num2words import num2words
             from transliterate import translit
 
             model = getattr(self.tts, "_NeuralSpeaker__model", None)
             if model is None:
                 return None
 
-            def _num2words_ru(match):
-                return num2words(match.group().replace(",", "."), lang="ru")
-
-            prepared = translit(text, "ru")
-            prepared = _re.sub(r"-?[0-9][0-9,._]*", _num2words_ru, prepared)
+            prepared = words_only(translit(text, "ru"))
             if not any(char.isalnum() for char in prepared):
                 return None
 
@@ -3859,6 +4032,8 @@ class VoiceAssistant:
                 text = result.full_text.strip()
             except Exception as e:
                 print(f"❌ Ошибка распознавания речи: {e}", file=sys.stderr)
+                self.runtime.log_event("error", f"Ошибка распознавания речи: {e}")
+                self.runtime.set_status("Ошибка распознавания. Слушаю дальше…")
                 return
             finally:
                 if tmp_path and os.path.exists(tmp_path):
@@ -3888,10 +4063,37 @@ class VoiceAssistant:
             self.runtime.set_transcript(clean_text)
             self.runtime.set_status(f"Услышал: {clean_text[:60]}")
             speech = requested_speech(clean_text)
-            forbidden = is_forbidden_topic(clean_text)
+            if not speech:
+                clean_text = fix_asr(clean_text)
+            recent = self.memory.current_discussion(self._memory_chat_id)
+            selection = selection_topic(clean_text, recent.get("topic") or recent.get("q", ""), recent.get("a", ""))
+            forbidden = is_forbidden_topic(clean_text, academic=bool(selection))
             confirms_offer = is_offer_confirmation(clean_text)
             backchannel = is_backchannel(clean_text)
-            offer_followup = self._resolve_offer_confirmation(clean_text) if confirms_offer and not forbidden else None
+            discussion = None
+            if not forbidden and not speech:
+                fact_answer, fact = self.memory.guest_fact_reply(clean_text, self._memory_chat_id)
+                if fact_answer:
+                    log_question(raw_text=text, query_text=clean_text, answer=fact_answer,
+                                 chat_id=self._chat_id, source="guest-memory")
+                    self._remember_exchange(clean_text, fact_answer, use_as_topic=False, fact=fact)
+                    self.runtime.set_transcript(clean_text, fact_answer)
+                    self._speak(fact_answer, literal=True)
+                    self.runtime.set_status("Слушаю…")
+                    return
+                if selection:
+                    discussion = FollowUp(f"{selection}. {clean_text}", selection, True)
+                elif not self._pending_followup or institute_overview(clean_text):
+                    discussion = self.memory.discussion_followup(
+                        clean_text, self._memory_chat_id, getattr(self.gate, "discussion_items", None),
+                        mirea=is_mirea_related(clean_text),
+                    )
+            offer_followup = discussion
+            if discussion and is_forbidden_topic(discussion.query, academic=bool(selection)):
+                forbidden = True
+                offer_followup = None
+            if not discussion and confirms_offer and not forbidden and not speech:
+                offer_followup = self._resolve_offer_confirmation(clean_text)
 
             # --- Смысловой гейт: договорил ли гость? -------------------------
             # VAD режет речь по паузе (~0.75 с), поэтому человек, задумавшийся
@@ -3902,6 +4104,7 @@ class VoiceAssistant:
             if (self.gate.enabled and not self._force_phrase
                     and not speech
                     and not confirms_offer
+                    and not discussion
                     and not backchannel
                     and not forbidden
                     and not is_self_question(clean_text)):
@@ -3926,10 +4129,14 @@ class VoiceAssistant:
             #         print("🤫 Поддакивание — отвечать не нужно, слушаю дальше.")
             #         self.runtime.set_status("Слушаю…")
             #     return
-            if not offer_followup and (confirms_offer or backchannel):
-                reply = "О чём Вам рассказать дальше?" if confirms_offer else "Слушаю Вас."
+            if not forbidden and not offer_followup and (confirms_offer or backchannel):
+                if self._pending_followup and self._pending_followup.clarification:
+                    reply = self._pending_followup.clarification
+                else:
+                    reply = "О чём Вам рассказать дальше?" if confirms_offer else "Слушаю Вас."
                 log_question(raw_text=text, query_text=clean_text, answer=reply,
                              chat_id=self._chat_id, source="clarification" if confirms_offer else "backchannel")
+                self._remember_exchange(clean_text, reply, use_as_topic=False)
                 self.runtime.set_transcript(clean_text, reply)
                 self._speak(reply)
                 self.runtime.set_status("Слушаю…")
@@ -3973,7 +4180,8 @@ class VoiceAssistant:
             # --- Триггеры «слово → сетевая команда» (робот Unitree H1) ---------
             # Проверяем ДО любого поиска: если фраза содержит ключевое слово,
             # сразу дёргаем заданную команду (например, curl к API робота).
-            trigger_results = [] if offer_followup else self.runtime.fire_triggers(clean_text, raw_text=text)
+            skip_triggers = offer_followup and (confirms_offer or asks_next(clean_text))
+            trigger_results = [] if skip_triggers else self.runtime.fire_triggers(clean_text, raw_text=text)
             for res in trigger_results:
                 if res.get("skipped"):
                     print(f"⏱️  Триггер пропущен ({res.get('reason')}): {res.get('command')}")
@@ -3989,9 +4197,9 @@ class VoiceAssistant:
             # уходил искать посторонних людей). Проверяем тему уже по
             # нормализованному тексту — тогда опечатки распознавания
             # («статсоюз», «стуцсоюз») тоже уходят в базу вуза.
-            query_text = fix_asr(normalize_tech_terms(normalize_studsouz(
+            query_text = normalize_tech_terms(normalize_studsouz(
                 normalize_name(normalize_mirea(clean_text))
-            )))
+            ))
             kb_hit = kb_match(offer_followup.query if offer_followup else query_text)
             mirea_related = kb_hit is not None
             self._last_mirea = mirea_related
@@ -4000,7 +4208,7 @@ class VoiceAssistant:
             # Потолок длины ответа — по вопросу (факт — коротко, «расскажи» — развёрнуто).
             budget = set_answer_budget(offer_followup.query if offer_followup else query_text)
             self_question = offer_followup is None and is_self_question(query_text)
-            set_answer_context(query_text, intro_ok=self_question)
+            set_answer_context(query_text, intro_ok=is_self_question(query_text))
             print(f"📏 Длина ответа: до {budget} слов")
             if query_text != clean_text:
                 print(f"🔄 Нормализация: {query_text}")
@@ -4017,27 +4225,28 @@ class VoiceAssistant:
                 self.runtime.set_status("Вспоминаю…")
                 if not mem_rows:
                     answer = "Я не помню, о чём мы говорили раньше."
+                elif kind == "repeat":
+                    answer = mem_rows[-1]["a"]
                 else:
                     ctx = ConversationMemory.format_context(mem_rows)
-                    if kind == "repeat":
-                        hint = ("Гость просит повторить. Вот твой последний ответ — повтори его своими "
-                                "словами, коротко:\n" + ctx)
-                    else:
-                        hint = ("Гость спрашивает, что было раньше в разговорах. Вот записи из твоей "
-                                "памяти (от старых к новым):\n" + ctx + "\nОтветь коротко по этим записям, "
-                                "ничего не выдумывай; если нужного там нет — скажи, что не помнишь.")
+                    hint = ("Гость спрашивает, что было раньше в разговорах. Вот записи из твоей "
+                            "памяти (от старых к новым):\n" + ctx + "\nОтветь коротко по этим записям, "
+                            "ничего не выдумывай; если нужного там нет — скажи, что не помнишь.")
                     answer = self._direct_llm(query_text, hint=hint, context=context)
                     if not answer:
-                        answer = mem_rows[-1]["a"] if kind == "repeat" else \
-                            "Хм, не получилось вспомнить. Спросите ещё раз."
-                answer = finalize_answer(answer, keep_emotion=True)
+                        answer = "Хм, не получилось вспомнить. Спросите ещё раз."
+                if kind != "repeat":
+                    answer = finalize_answer(answer, keep_emotion=True)
                 log_question(
                     raw_text=text, query_text=query_text, mirea=False, web_search=False,
                     answer=answer, chat_id=self._chat_id, source="memory",
                 )
                 self._remember_exchange(query_text, answer, persist=(kind != "repeat"), use_as_topic=False)
                 self.runtime.set_transcript(clean_text, parse_emotion(answer)[0])
-                self._speak(answer)
+                if kind == "repeat":
+                    self._speak(answer, literal=True)
+                else:
+                    self._speak(answer)
                 print("✅ Готово. Слушаю дальше...\n")
                 self.runtime.set_status("Слушаю…")
                 return
@@ -4045,7 +4254,7 @@ class VoiceAssistant:
             # --- Уточнения: «а сколько стоит?», «подробнее», «а там метро есть?» ---
             # Такая реплика сама по себе ничего не говорит базе знаний, поэтому
             # для поиска дополняем её прошлым вопросом и сохраняем тему (вуз).
-            rag_text = query_text
+            rag_text = INSTITUTE_RE.sub(lambda m: search_topic(m.group().upper()), query_text)
             followup = offer_followup
             if followup is None and not self_question:
                 followup = self.memory.resolve_followup(
@@ -4055,7 +4264,7 @@ class VoiceAssistant:
             if followup is None and not self_question and needs_topic(query_text, kb_hit is not None):
                 clarification = "Уточните, пожалуйста, о чём именно Вы спрашиваете?"
             if clarification:
-                self._pending_followup = followup
+                self._pending_followup = followup if followup and not followup.reply else None
                 log_question(raw_text=text, query_text=query_text, answer=clarification,
                              chat_id=self._chat_id, source="clarification")
                 self._remember_exchange(query_text, clarification, use_as_topic=False)
@@ -4159,6 +4368,7 @@ class VoiceAssistant:
                     # «потеряет» эту реплику.
                     self._remember_exchange(
                         query_text, answer, use_as_topic=followup is not None or not self.is_conversational(query_text),
+                        followup=followup,
                     )
                     print(f"🤖 Ответ: {answer[:200]}...")
                     self.runtime.set_transcript(clean_text, parse_emotion(answer)[0])
@@ -4177,6 +4387,9 @@ class VoiceAssistant:
 
             # 4. Отправляем запрос в RAG (коллекция для МИРЭА, иначе интернет)
             already_spoken = False      # поток уже озвучил ответ — повторно не говорим
+            search_failed = False
+            scoped_kb = bool(mirea_related and (discussion or INSTITUTE_RE.search(rag_text)
+                                                or (pending and pending.awaiting_program)))
             try:
                 want_mirea = self.runtime.feature("mirea_collection")
                 want_web = self.runtime.feature("web_search")
@@ -4187,12 +4400,17 @@ class VoiceAssistant:
                         print(f"📚 Поиск по коллекции (МИРЭА): {collection_id}")
                         self.runtime.set_status("Поиск в базе МИРЭА…")
                         streamed = None
-                        if not continuing and self._stream_enabled():
+                        if not continuing and not scoped_kb and self._stream_enabled():
                             self.runtime.set_status("Отвечаю (поток)…")
-                            streamed = self._stream_answer(
-                                rag_text, collection_id, context=context, original_query=clean_text,
-                            )
-                        if streamed is not None and streamed != "":
+                            try:
+                                streamed = self._stream_answer(
+                                    rag_text, collection_id, context=context, original_query=clean_text,
+                                )
+                            except ChatMissing:
+                                self._chat_id = None
+                            except StreamUnsupported:
+                                print("Сервер поддерживает обычный запрос по базе.")
+                        if streamed:
                             rag_result = {"response": streamed, "contexts": [{"stream": True}]}
                             already_spoken = True
                         else:
@@ -4206,16 +4424,14 @@ class VoiceAssistant:
                                 original_query=clean_text,
                             )
                     else:
-                        print("⚠️ Нет коллекций — ищу в интернете.")
-                        self.runtime.set_status("Поиск в интернете…")
-                        rag_result = self._rag_query(
-                            query_text=rag_text,
-                            use_web_search=True,
-                            use_agent_search=False,
-                            max_results=3,
-                            context=context,
-                            original_query=clean_text,
-                        )
+                        if scoped_kb or not want_web:
+                            rag_result = {"response": "", "contexts": []}
+                        else:
+                            self.runtime.set_status("Поиск в интернете…")
+                            rag_result = self._rag_query(
+                                query_text=rag_text, use_web_search=True, use_agent_search=False,
+                                max_results=3, context=context, original_query=clean_text,
+                            )
                 elif not want_web:
                     # Веб-поиск выключен тумблером в GUI: отвечаем напрямую через LLM
                     print("🌐 Веб-поиск выключен — отвечаю через LLM напрямую...")
@@ -4244,7 +4460,9 @@ class VoiceAssistant:
                 # ответ типа «В данный момент я.») — отвечаем напрямую через LLM,
                 # как на обычную реплику диалога (например, «Здесь ты», «Привет»).
                 n_contexts = len(rag_result.get("contexts", []))
-                if not already_spoken and (n_contexts == 0 or len(answer.strip()) < 10):
+                if scoped_kb and not n_contexts:
+                    answer = "По этому пункту у меня пока нет подтверждённых сведений."
+                elif not already_spoken and not scoped_kb and (n_contexts == 0 or len(answer.strip()) < 10):
                     print(f"🔍 Поиск не дал контекстов ({n_contexts}), отвечаю через LLM напрямую...")
                     direct = self._direct_llm(query_text, context=context, search_query=rag_text)
                     if direct:
@@ -4257,17 +4475,15 @@ class VoiceAssistant:
                 # 3B-моделью в этом случае только портит факты и имена
                 # («Санислав Кудж», «МИФИ») и добавляет задержку. Поэтому
                 # пересказ применяем только к локальному провайдеру.
-                provider = self.rag.get_llm_provider() if self.rag else "ollama"
-                cloud_llm = provider in ("deepseek", "openai", "claude")
-                if cloud_llm:
-                    print(f"☁️ Ответ от облачной модели ({provider}) — пересказ не нужен.")
-                elif not already_spoken and self.runtime.feature("rephrase_answers"):
-                    answer_ai = rephrase_answer_with_ai(rag_text, answer)
-                    if answer_ai and answer_ai.strip():
-                        answer = answer_ai
+                if not already_spoken and not scoped_kb and self.runtime.feature("rephrase_answers"):
+                    provider = self.rag.get_llm_provider() if self.rag else "ollama"
+                    if provider not in ("deepseek", "openai", "claude"):
+                        answer_ai = rephrase_answer_with_ai(rag_text, answer)
+                        if answer_ai and answer_ai.strip():
+                            answer = answer_ai
                 # Даже облачная модель иногда отказывается отвечать на
                 # сбивчивую речь («не разобрал»). Слова понятны — отвечаем.
-                if not already_spoken:
+                if not already_spoken and not scoped_kb:
                     answer = self._answer_said_unrecognized(
                         answer, query_text, mirea_related, context=context, search_query=rag_text,
                     )
@@ -4276,19 +4492,19 @@ class VoiceAssistant:
             except Exception as e:
                 print(f"❌ Ошибка RAG-запроса: {e}", file=sys.stderr)
                 self.runtime.log_event("error", f"Ошибка RAG: {e}")
-                self._speak("Извините, произошла ошибка при обработке запроса.")
-                self.runtime.set_status("Слушаю…")
-                return
+                search_failed = True
+                answer, self._last_query_source = offline_search_reply(rag_text, mirea_related)
 
-            if not answer or answer == "Ответ отсутствует":
+            if not answer or answer == "Ответ отсутствует" or _INCOMPLETE_ANSWER_END_RE.fullmatch(parse_emotion(answer)[0].strip()):
                 # Ничего не нашли и модель ничего не сказала. Если в реплике
                 # были осмысленные слова — переспрашиваем по теме, а чистую
                 # бессмыслицу просим повторить.
                 answer = (UNRECOGNIZED_REPLY if is_gibberish(query_text)
                           else clarify_reply(mirea_related))
 
-            if continuing:
-                answer = self._finish_continuation(answer, query_text, context, rag_text)
+            if not search_failed and (continuing or scoped_kb):
+                answer = self._finish_continuation(answer, query_text, context, rag_text,
+                                                   evidence=rag_result.get("contexts", []) if scoped_kb else None)
             elif not already_spoken:
                 answer = finalize_answer(answer, keep_emotion=True)
             print(f"🤖 Ответ: {parse_emotion(answer)[0][:200]}")
@@ -4309,7 +4525,8 @@ class VoiceAssistant:
 
             # Сохраняем обмен в локальную историю (подстраховка для /query).
             # Серверный чат WebRAgent ведёт свою историю сам.
-            self._remember_exchange(query_text, answer)
+            if not search_failed or self._last_query_source == "local-kb":
+                self._remember_exchange(query_text, answer, followup=followup)
 
             # 5. Озвучиваем ответ
             if already_spoken:
@@ -4367,7 +4584,7 @@ class VoiceAssistant:
         if not clean_question_for_speech:
             clean_question_for_speech = "этот вопрос"
         self.tts.speak(
-            f"Вы хотели бы узнать об {clean_question_for_speech}?",
+            words_only(spoken_numbers(f"Вы хотели бы узнать об {clean_question_for_speech}?")),
             speaker=self.runtime.get("tts", "speaker", default=self._tts_speaker),
             save_file=False,
             sample_rate=TTS_SAMPLE_RATE,
@@ -4410,7 +4627,7 @@ class VoiceAssistant:
             print(f"📚 Коллекция по умолчанию: {collections[0].get('name')} "
                   f"({self._collection_id})")
         except Exception as e:
-            print(f"❌ Не удалось получить коллекции: {e}", file=sys.stderr)
+            raise RuntimeError("Не удалось получить список коллекций") from e
         return self._collection_id
 
     def _load_chat_state(self) -> tuple[Optional[str], Optional[str]]:

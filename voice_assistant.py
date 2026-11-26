@@ -38,9 +38,9 @@ from russian_text_to_speech.NeuralSpeaker import NeuralSpeaker
 from tts_backends import get_xtts_client
 from asr_fix import fix_asr
 from valera_numbers import spoken_numbers
-from valera_gestures import choose_gesture, start_gesture
-from xtts_service.speech_text import words_only
-from valera_dialogue import INSTITUTE_RE, asks_next, institute_overview, search_topic, selection_topic
+from valera_gestures import gesture_busy, gesture_reply, handle_reply_gesture
+from xtts_service.speech_text import list_phrases, words_only
+from valera_dialogue import INSTITUTE_RE, asks_next, search_topic, selection_topic
 from valera_memory import (
     CONTINUE_RE, FOLLOWUP_WINDOW_SEC, GREET_RE, THANKS_RE,
     ConversationMemory, FollowUp, is_offer_confirmation, needs_topic, recall_kind, style_hint,
@@ -121,6 +121,8 @@ TTS_SAMPLE_RATE = _env_int("TTS_SAMPLE_RATE", 48000)
 # поэтому первые ~200-300 мс звука «проглатывались». Небольшой буфер тишины
 # в начале даёт устройству время открыться — начало фразы не срезается.
 TTS_LEADING_SILENCE_MS = _env_int("TTS_LEADING_SILENCE_MS", 250)
+TTS_SENTENCE_PAUSE_MS = _env_int("TTS_SENTENCE_PAUSE_MS", 380)
+TTS_LIST_PAUSE_MS = 210
 # Синтез идёт по предложениям: первое предложение озвучивается, пока
 # синтезируется второе — первые слова звучат заметно раньше.
 TTS_PARALLEL_SENTENCES = os.getenv("TTS_PARALLEL_SENTENCES", "1") not in ("0", "false", "False")
@@ -167,6 +169,8 @@ def answer_budget(question: str) -> int:
     if not q:
         return ANSWER_MAX_WORDS
     n = len(q.split())
+    if re.search(r"\b(?:очень подробно|большой текст|все нюансы)\b", q, re.I):
+        return 120
     if _TOUR_Q_RE.search(q):
         return ANSWER_WORDS_TOUR
     if _LONG_Q_RE.search(q) or CONTINUE_RE.search(q):
@@ -1181,7 +1185,7 @@ def is_backchannel(text: str) -> bool:
 
 
 _SPEECH_REQUEST_RE = re.compile(
-    r"^[\s,]*(?:(?:валера|лера)[\s,]+)?(?:пожалуйста[\s,]+)?"
+    r"^[\s,]*(?:(?:валера|лера|ну|пожалуйста|ещ[её]\s+раз)[\s,]+)*"
     r"(скажи(?:те|-ка)?|произнеси(?:те)?|повтори(?:те)?(?:\s+за\s+мной)?|"
     r"мож(?:ешь|ете)\s+(?:сказать|произнести|повторить)(?:\s+за\s+мной)?)"
     r"[\s,.:—-]+(.+)$",
@@ -1189,12 +1193,25 @@ _SPEECH_REQUEST_RE = re.compile(
 )
 
 
+def last_command(text: str) -> str:
+    """ASR иногда ставит просьбу отдельным предложением после замечания гостя."""
+    return re.split(r"[.!?…]+\s+", text.strip())[-1].strip(" ,")
+
+
 def requested_speech(text: str) -> str:
     """Возвращает текст явной команды на произнесение."""
     request = _SPEECH_REQUEST_RE.fullmatch(text)
-    if not request:
-        return ""
-    verb, target = request.groups()
+    if request:
+        verb, target = request.groups()
+        if not re.search(r"\bза\s+мной$", verb, re.I):
+            target = re.sub(r"^ещ[её]\s+раз[,\s]+", "", target, flags=re.I)
+    else:
+        # Разговорный порядок слов: «Ну, привет ещё раз скажи».
+        reverse = re.fullmatch(r"(?:ну[,\s]+)?(.+?)\s+ещ[её]\s+раз\s+скажи(?:те)?[.!?…]*",
+                               text, re.I)
+        if not reverse:
+            return ""
+        verb, target = "скажи", reverse.group(1)
     target = re.sub(r"(?i)^пожалуйста[\s,]+|[\s,]+пожалуйста[.!?]*$", "", target).strip()
     quoted = re.fullmatch(r'[«"„“](.+?)[»"“”][.!?]*', target)
     named_text = re.fullmatch(r"(?i)(?:(?:букву|звук)\s+([а-яёa-z])|слово\s+([а-яёa-z-]+))[.!?]*", target)
@@ -1204,18 +1221,43 @@ def requested_speech(text: str) -> str:
         target = named_text.group(1) or named_text.group(2)
     elif not re.search(r"\bза\s+мной$", verb, re.IGNORECASE):
         word = target.rstrip(".!?…").lower()
+        if recall_kind(text) or not word:
+            return ""
         if word in {"как", "кто", "что", "где", "чья", "чьё"}:
             return ""
         if not (
             re.fullmatch(r"[а-яёa-z]{1,3}|([а-яёa-z])(?:[\s,.-]*\1)+", word)
             or is_backchannel(word)
             or GREET_RE.fullmatch(word)
+            or re.fullmatch(r"повтори(?:те)?", verb, re.I)
         ):
             return ""
 
     if not any(char.isalnum() for char in target):
         return ""
     return target if target.endswith((".", "!", "?", "…")) else target + "."
+
+
+_SIMPLE_GREETING = re.compile(
+    r"(?:привет|здравствуй(?:те)?|доброе утро|добрый (?:день|вечер)|"
+    r"салам алейкум|здорово|hello)(?:\s+ещ[её] раз)?[.!?…]*", re.I,
+)
+
+
+def is_simple_greeting(text: str) -> bool:
+    parts = re.split(r"[.!?…]+\s+", text.strip())
+    return all(_SIMPLE_GREETING.fullmatch(part.strip(" ,")) for part in parts)
+
+
+def greeting_reply(recent: list) -> str:
+    replies = ("Здравствуйте! Чем могу Вам помочь?", "Ещё раз здравствуйте!", "И снова здравствуйте!")
+    for row in reversed(recent):
+        if time.time() - row["ts"] > FOLLOWUP_WINDOW_SEC:
+            break
+        if is_simple_greeting(row["q"]):
+            previous = row["a"]
+            return replies[2] if previous == replies[1] else replies[1]
+    return replies[0]
 
 
 
@@ -1309,6 +1351,44 @@ def leading_silence_bytes(sample_rate: int = TTS_SAMPLE_RATE,
         return b""
     n_samples = int(sample_rate * ms / 1000)
     return b"\x00\x00" * n_samples
+
+
+def sentence_cadence(pcm: bytes, terminal: str) -> bytes:
+    """Плавно меняет тон последних слогов, оставляя тишину движка в конце."""
+    audio = np.frombuffer(pcm, dtype=np.int16)
+    # XTTS добавляет около 400 мс цифровых нулей. Не складываем их с нашей
+    # межфразовой паузой. Тихие согласные и естественный выдох сохраняем.
+    nonzero = np.flatnonzero(audio)
+    if nonzero.size:
+        audio = audio[:nonzero[-1] + 1 + TTS_SAMPLE_RATE // 50]
+    shift = {"?": 0.075, "!": 0.035, ".": -0.035, "…": -0.05}.get(terminal)
+    if shift is None:
+        return audio.tobytes()
+    # У XTTS бывает длинный тихий хвост. Ищем окончание собственно речи.
+    voiced = np.flatnonzero(np.abs(audio.astype(np.int32)) > 180)
+    if voiced.size < 2:
+        return audio.tobytes()
+    end = voiced[-1] + 1
+    begin = max(voiced[0], end - TTS_SAMPLE_RATE * 2 // 5)
+    tail = audio[begin:end]
+    # Длительность одного входного отсчёта в выходном сигнале.
+    durations = 1 / np.linspace(1.0, 1.0 + shift, len(tail))
+    positions = np.cumsum(durations) - durations
+    bent = np.interp(np.arange(0, positions[-1] + 1), positions, tail).astype(np.int16)
+    return audio[:begin].tobytes() + bent.tobytes() + audio[end:].tobytes()
+
+
+def sentence_pause_ms(previous: str, current: str) -> int:
+    """Дольше перед вопросом к гостю или сменой темы, короче при тесной связи."""
+    if (current.rstrip(' »”"').endswith("?") or previous.rstrip().endswith(("?", "…"))
+            or re.match(r"(?:а теперь|теперь перейд[её]м|перейд[её]м|следующая остановка|подвед[её]м итог)\b", current, re.I)):
+        factor = 1.65
+    elif (len(previous.split()) <= 2
+          or re.match(r"(?:например|то есть|в частности|затем|поэтому)\b", current, re.I)):
+        factor = 0.7
+    else:
+        factor = 1.0
+    return round(TTS_SENTENCE_PAUSE_MS * factor)
 
 
 def split_into_sentences(text: str) -> list:
@@ -1453,7 +1533,7 @@ _EN_WORDS = {
     "thank": "спасибо", "bye": "пока", "goodbye": "пока", "yes": "да",
     "no": "нет", "wow": "ого", "cool": "класс", "super": "супер",
     "human": "человек", "ai": "искусственный интеллект",
-    "it": "ай-ти", "h1": "Аш-один", "unitree": "Юнитри",
+    "it": "ай-ти", "h1": "Аш-один", "g1": "Джи-один", "go1": "Го один", "go2": "Го два", "unitree": "Юнитри",
     "kuka": "Кука", "abb": "А-Б-Б", "iiwa": "и-и-вэ-а", "gofa": "Го-Фа",
     "youbot": "ю-Бот", "ros": "рос", "dds": "ди-ди-эс",
     "rtu": "Р-Т-У", "mirea": "МИРЭА", "world": "мир", "people": "люди",
@@ -1973,7 +2053,7 @@ _SELF_QUESTION_RE = re.compile(
     r"|\bты\s+(?:работаешь|работаете|здесь|тут|на\s+работе|готов)\b"
     r"|\bчто\s+ты\s+(?:умеешь|можешь)\b"
     r"|\bчто\s+ты\s+знаешь(?:\s+(?:о|про)\s+себ[ея])?[?!.…\s]*$"
-    r"|\bрасскажи\s+(?:о\s+себе|про\s+себя)\b"
+    r"|\b(?:расскажи|скажи)\s+(?:о\s+себе|про\s+себя)\b"
     r"|\bты\s+(?:меня|нас)\s+(?:слышишь|понимаешь|видишь)\b"
     r"|\b(?:ты|вы)\s+(?:бо[тт]|робот)\b"
     r"|\b(?:Валера|Лера)\s*,\s*"
@@ -3444,7 +3524,8 @@ class VoiceAssistant:
                 pcm_q.put((s_text, pcm))
 
         def _player():
-            first_phrase = True
+            previous = None
+            sent = set()
             while True:
                 item = pcm_q.get()
                 if item is None:
@@ -3455,17 +3536,8 @@ class VoiceAssistant:
                 if not stop.is_set():
                     s_text, pcm = item
                     try:
-                        if pcm:
-                            gesture = choose_gesture(s_text, first_phrase=first_phrase)
-                            if gesture:
-                                print(f"Жест: {gesture}", flush=True)
-                                if os.getenv("VALERA_ROBOT_GESTURES") == "1":
-                                    start_gesture(gesture)
-
-
-                        first_phrase = False
-                        if not pcm or not play_audio(pcm, sample_rate=TTS_SAMPLE_RATE):
-                            self._speak_whole_fallback(s_text, speaker)
+                        self._play_sentence(s_text, pcm, speaker, previous, sent)
+                        previous = (s_text, time.monotonic())
                     except Exception as exc:
                         print(f"⚠️ Ошибка воспроизведения: {exc}", file=sys.stderr)
 
@@ -3515,7 +3587,7 @@ class VoiceAssistant:
                     return
                 if ev.get("t") == "err":
                     if parse_emotion(buf)[0].endswith((".", "!", "?", "…")):
-                        yield buf
+                        yield from split_into_sentences(buf)
                     raise RuntimeError(ev.get("message") or "ошибка потока")
                 if ev.get("t") == "done":
                     if not emitted_boundary:
@@ -3527,7 +3599,7 @@ class VoiceAssistant:
                     emitted_boundary |= bool(done)
                     yield from done
             if buf.strip():
-                yield buf.strip()
+                yield from split_into_sentences(buf)
 
         try:
             self._last_query_source = "chat-stream"
@@ -3720,7 +3792,14 @@ class VoiceAssistant:
         # Ответ озвучивается ПОТОКОВО, по предложениям, а метка эмоции стоит в
         # конце КАЖДОГО предложения. Поэтому метки разбираем здесь же, вместе с
         # разбивкой: у каждой фразы будет своя интонация, а не одна на всё.
-        pairs = [(text, emotion_style(None))] if literal else split_answer_for_tts(text)
+        if literal:
+            pairs = []
+            for part in split_into_sentences(text):
+                plain, name = parse_emotion(part)
+                if plain:
+                    pairs.append((plain, emotion_style(name)))
+        else:
+            pairs = split_answer_for_tts(text)
         if not pairs:
             return
         # Интонация для отката на синтез всего текста целиком: берём стиль
@@ -3732,20 +3811,27 @@ class VoiceAssistant:
             return
 
         speaker = self.runtime.get("tts", "speaker", default=self._tts_speaker)
-        plain = " ".join(t for t, _ in pairs)
 
         def _do_speak():
+            sent = set()
             try:
                 # 1) Пробуем потоковую озвучку по предложениям на выбранном
                 #    устройстве (aplay). Первые слова звучат почти сразу.
                 if TTS_PARALLEL_SENTENCES:
-                    if len(pairs) > 1 and self._stream_sentences(pairs, speaker):
+                    if len(pairs) > 1 and self._stream_sentences(pairs, speaker, sent=sent):
                         return
-                # 2) Откат: целиком через устройство (aplay)…
-                played = self._speak_via_device(plain, speaker)
-                if not played:
-                    # 3) …или встроенный проигрыватель NeuralSpeaker (simpleaudio).
-                    self._speak_whole_fallback(plain, speaker)
+                previous = None
+                for phrase, style in pairs:
+                    if self._interrupt_tts:
+                        break
+                    self._tts_emotion = style
+                    try:
+                        pcm = self._synthesize_pcm_bytes(phrase, speaker, style)
+                    except Exception as exc:
+                        print(f"⚠️ Синтез фразы прервался: {exc}", file=sys.stderr)
+                        pcm = None
+                    self._play_sentence(phrase, pcm, speaker, previous, sent)
+                    previous = (phrase, time.monotonic())
             except Exception as e:
                 print(f"❌ Ошибка синтеза речи: {e}", file=sys.stderr)
                 self.runtime.log_event("error", f"TTS: {e}")
@@ -3772,8 +3858,8 @@ class VoiceAssistant:
         Добавляем в начало короткую тишину в WAV, чтобы начало фразы не
         срезалось при открытии устройства (та же причина, что и в aplay-пути).
         """
-        text = words_only(spoken_numbers(text))
-        if not text:
+        spoken = words_only(spoken_numbers(text))
+        if not spoken:
             return
         try:
             data = self._synthesize_pcm_bytes(text, speaker)
@@ -3800,11 +3886,27 @@ class VoiceAssistant:
         except Exception as e:  # noqa: BLE001
             print(f"⚠️ simpleaudio-откат не удался: {e}", file=sys.stderr)
         # Последний рубеж — штатный NeuralSpeaker (играет в default).
-        self.tts.speak(
-            text, speaker=speaker, save_file=False, sample_rate=TTS_SAMPLE_RATE
-        )
+        for index, part in enumerate(list_phrases(spoken_numbers(text))):
+            if index:
+                time.sleep(TTS_LIST_PAUSE_MS / 1000)
+            if self._interrupt_tts:
+                break
+            self.tts.speak(words_only(part), speaker=speaker, save_file=False, sample_rate=TTS_SAMPLE_RATE)
 
-    def _stream_sentences(self, sentences: list, speaker: str) -> bool:
+    def _play_sentence(self, phrase, pcm, speaker, previous, sent):
+        if previous is not None:
+            last_text, finished_at = previous
+            gap = (sentence_pause_ms(last_text, phrase) - TTS_LEADING_SILENCE_MS) / 1000
+            remaining = finished_at + gap - time.monotonic()
+            if remaining > 0:
+                time.sleep(remaining)
+        if self._interrupt_tts:
+            return
+        handle_reply_gesture(phrase, first_phrase=previous is None, sent=sent)
+        if not pcm or not play_audio(pcm, sample_rate=TTS_SAMPLE_RATE):
+            self._speak_whole_fallback(phrase, speaker)
+
+    def _stream_sentences(self, sentences: list, speaker: str, *, sent=None) -> bool:
         """
         Озвучивает предложения конвейером: пока играет текущее, в фоне уже
         синтезируется следующее. Возвращает True, если всё проигралось через
@@ -3827,7 +3929,12 @@ class VoiceAssistant:
                     s, style = item if isinstance(item, tuple) else (item, None)
                     if style:
                         print(f"🎭 Эмоция: темп ×{style['speed']:.2f}, тон ×{style['pitch']:.2f}")
-                    q.put((s, self._synthesize_pcm_bytes(s, speaker, style)))
+                    try:
+                        pcm = self._synthesize_pcm_bytes(s, speaker, style)
+                    except Exception as exc:
+                        print(f"⚠️ Синтез фразы прервался: {exc}", file=sys.stderr)
+                        pcm = None
+                    q.put((s, pcm))
             except Exception as exc:
                 print(f"⚠️ Синтез ответа прервался: {exc}", file=sys.stderr)
             finally:
@@ -3836,32 +3943,25 @@ class VoiceAssistant:
         th = threading.Thread(target=_producer, daemon=True)
         th.start()
 
-        played_any = False
+        previous = None
+        if sent is None:
+            sent = set()
         try:
             while True:
                 item = q.get()
                 if item is None:
                     break
-                #_s, pcm = item
                 phrase, pcm = item
                 if self._interrupt_tts:
                     interrupted.set()
                     break
-                if not pcm:
-                    continue
-                gesture = choose_gesture(phrase, first_phrase=not played_any)
-                if gesture:
-                    print(f"Жест: {gesture}", flush=True)
-                if not play_audio(pcm, sample_rate=TTS_SAMPLE_RATE):
-                    # Устройство не приняло звук — прерываем и просим откат.
-                    interrupted.set()
-                    return False
-                played_any = True
+                self._play_sentence(phrase, pcm, speaker, previous, sent)
+                previous = (phrase, time.monotonic())
         finally:
             interrupted.set()
-        return played_any
+        return previous is not None
 
-    def _speak_via_device(self, text: str, speaker: str) -> bool:
+    def _speak_via_device(self, text: str, speaker: str, *, first_phrase=True, sent=None) -> bool:
         """
         Озвучивает текст на выбранном устройстве вывода.
 
@@ -3878,11 +3978,7 @@ class VoiceAssistant:
             data = self._synthesize_pcm_bytes(text, speaker)
             if not data:
                 return False
-            gesture = choose_gesture(text, first_phrase=True)
-            if gesture:
-                print(f"Жест: {gesture}", flush=True)
-                if os.getenv("VALERA_ROBOT_GESTURES") == "1":
-                    start_gesture(gesture)
+            handle_reply_gesture(text, first_phrase=first_phrase, sent=set() if sent is None else sent)
             return play_audio(data, sample_rate=TTS_SAMPLE_RATE)
         except Exception as e:  # noqa: BLE001
             print(f"⚠️ Озвучка на устройство {device} не удалась: {e}", file=sys.stderr)
@@ -3949,9 +4045,27 @@ class VoiceAssistant:
         его явно: там предложения идут очередью и общий атрибут состояния
         гоняется между потоками.
         """
-        text = words_only(spoken_numbers(text))
-        if not text:
+        parts = list_phrases(spoken_numbers(text))
+        chunks = []
+        emo = emotion if emotion is not None else (getattr(self, "_tts_emotion", None) or {})
+        for part in parts:
+            clean = words_only(part)
+            if not clean:
+                continue
+            terminal = part.rstrip(' »”"\')]')[-1:]
+            pcm = self._synthesize_fragment(clean, speaker, emo, terminal, len(parts) > 1)
+            if not pcm:
+                return None
+            chunks.append(pcm)
+        if not chunks:
             return None
+        gap = leading_silence_bytes(TTS_SAMPLE_RATE, TTS_LIST_PAUSE_MS) if len(chunks) > 1 else b""
+        return leading_silence_bytes(TTS_SAMPLE_RATE) + gap.join(chunks)
+
+    def _synthesize_fragment(self, text, speaker, emo, terminal, in_list):
+        """Синтезирует одну смысловую группу без тишины для открытия колонок."""
+        technical = bool(re.search(r"\b(?:[а-яё]{13,}|юнитри|манипулятор\w*|мехатроник\w*|кибербезопас\w*)\b", text, re.I))
+        pace = 0.90 if in_list else (0.92 if technical else 1.0)
 
         # Основной голос — XTTS-v2 (отдельный сервис на GPU). Если он не поднят
         # или упал, клиент вернёт None и ниже сработает запасной Silero.
@@ -3960,8 +4074,7 @@ class VoiceAssistant:
             # радость — быстрее, серьёзный разговор — медленнее. Это и есть
             # «смена тона», доступная без отдельной эмоциональной модели.
             base_speed = float(self.runtime.get("tts", "speed", default=1.0) or 1.0)
-            emo = emotion if emotion is not None else (getattr(self, "_tts_emotion", None) or {})
-            speed = base_speed * float(emo.get("speed", 1.0))
+            speed = base_speed * float(emo.get("speed", 1.0)) * pace
             pcm = get_xtts_client().synthesize(
                 text,
                 speaker=self.runtime.get("tts", "xtts_speaker", default="Damien Black"),
@@ -3971,7 +4084,7 @@ class VoiceAssistant:
             if pcm and len(pcm) % 2 == 0 and np.any(np.frombuffer(pcm, dtype=np.int16)):
                 pcm = self._apply_emotion_gain(pcm, float(emo.get("volume", 1.0)))
                 pcm = self._apply_emotion_pitch(pcm, float(emo.get("pitch", 1.0)))
-                return leading_silence_bytes(TTS_SAMPLE_RATE) + pcm
+                return sentence_cadence(pcm, terminal)
 
         try:
             from transliterate import translit
@@ -3992,8 +4105,9 @@ class VoiceAssistant:
             audio = (audio * 32767 / peak).astype(np.int16)
             # Ставим короткую тишину в начало — иначе первые ~200 мс речи
             # «проглатываются», пока колонки открываются.
-            pcm = leading_silence_bytes(TTS_SAMPLE_RATE) + audio.tobytes()
-            return pcm
+            pcm = self._apply_emotion_gain(audio.tobytes(), float(emo.get("volume", 1.0)))
+            pcm = self._apply_emotion_pitch(pcm, float(emo.get("pitch", 1.0)) * pace)
+            return sentence_cadence(pcm, terminal)
         except Exception as e:  # noqa: BLE001
             print(f"⚠️ Не удалось синтезировать PCM: {e}", file=sys.stderr)
             return None
@@ -4062,16 +4176,43 @@ class VoiceAssistant:
             print(f"🗣️  Распознано: {clean_text}")
             self.runtime.set_transcript(clean_text)
             self.runtime.set_status(f"Услышал: {clean_text[:60]}")
+            command = last_command(clean_text)
             speech = requested_speech(clean_text)
+            if not speech and command != clean_text:
+                speech = requested_speech(command)
             if not speech:
                 clean_text = fix_asr(clean_text)
             recent = self.memory.current_discussion(self._memory_chat_id)
+            if not speech and re.search(r"\b(?:юнитри|unitree)\b", recent.get("a", ""), re.I):
+                clean_text = re.sub(r"(\bробот\w*\s+)Юнь\b", r"\1Юнитри", clean_text, flags=re.I)
             selection = selection_topic(clean_text, recent.get("topic") or recent.get("q", ""), recent.get("a", ""))
             forbidden = is_forbidden_topic(clean_text, academic=bool(selection))
+            action_reply = gesture_reply(command) if not speech else ""
+            # Иногда после обращения к Валере ASR захватывает комментарий
+            # наблюдателя («поздоровайся. Он сейчас долго руку отпускать будет»).
+            if (not speech and not action_reply
+                    and re.match(r"^(?:поздоровайся|поприветствуйся)[.!?…]+\s+[, ]*он\b", clean_text, re.I)):
+                action_reply = "Здравствуйте!"
+            addressed = re.fullmatch(r"(?:валера|лера)[,\s]+(.+)", last_command(text), re.I)
+            greeting = is_simple_greeting(clean_text) or bool(addressed and is_simple_greeting(addressed[1]))
+            if not forbidden and (speech or action_reply):
+                reply = speech or action_reply
+                if action_reply and action_reply != "Здравствуйте!":
+                    if os.getenv("VALERA_ROBOT_GESTURES") != "1":
+                        reply = "Сейчас жесты отключены."
+                    elif gesture_busy():
+                        reply = "Секунду, я ещё заканчиваю предыдущий жест."
+                log_question(raw_text=text, query_text=clean_text, answer=reply,
+                             chat_id=self._chat_id, source="literal-speech" if speech else "gesture")
+                self._remember_exchange(clean_text, reply, use_as_topic=False)
+                self.runtime.set_transcript(clean_text, reply)
+                self._speak(reply, literal=True)
+                self.runtime.set_status("Слушаю…")
+                return
             confirms_offer = is_offer_confirmation(clean_text)
             backchannel = is_backchannel(clean_text)
             discussion = None
-            if not forbidden and not speech:
+            if not forbidden and not greeting:
                 fact_answer, fact = self.memory.guest_fact_reply(clean_text, self._memory_chat_id)
                 if fact_answer:
                     log_question(raw_text=text, query_text=clean_text, answer=fact_answer,
@@ -4083,10 +4224,10 @@ class VoiceAssistant:
                     return
                 if selection:
                     discussion = FollowUp(f"{selection}. {clean_text}", selection, True)
-                elif not self._pending_followup or institute_overview(clean_text):
+                else:
                     discussion = self.memory.discussion_followup(
                         clean_text, self._memory_chat_id, getattr(self.gate, "discussion_items", None),
-                        mirea=is_mirea_related(clean_text),
+                        mirea=is_mirea_related(clean_text), pending=self._pending_followup,
                     )
             offer_followup = discussion
             if discussion and is_forbidden_topic(discussion.query, academic=bool(selection)):
@@ -4102,7 +4243,7 @@ class VoiceAssistant:
             # Если оборвана — не отвечаем, а держим аудио и ждём продолжения
             # (жёсткий потолок по времени всё равно закроет фразу).
             if (self.gate.enabled and not self._force_phrase
-                    and not speech
+                    and not greeting
                     and not confirms_offer
                     and not discussion
                     and not backchannel
@@ -4168,15 +4309,6 @@ class VoiceAssistant:
                 self.runtime.set_status("Слушаю…")
                 return
 
-            if speech:
-                log_question(raw_text=text, query_text=clean_text, answer=speech,
-                             chat_id=self._chat_id, source="literal-speech")
-                self._remember_exchange(clean_text, speech, use_as_topic=False)
-                self.runtime.set_transcript(clean_text, speech)
-                self._speak(speech, literal=True)
-                self.runtime.set_status("Слушаю…")
-                return
-
             # --- Триггеры «слово → сетевая команда» (робот Unitree H1) ---------
             # Проверяем ДО любого поиска: если фраза содержит ключевое слово,
             # сразу дёргаем заданную команду (например, curl к API робота).
@@ -4190,6 +4322,16 @@ class VoiceAssistant:
                 else:
                     print(f"⚠️  Триггер не удался: {res.get('stderr') or res.get('command')}",
                           file=sys.stderr)
+
+            if greeting:
+                reply = greeting_reply(self.memory.recent(self._memory_chat_id))
+                log_question(raw_text=text, query_text=clean_text, answer=reply,
+                             chat_id=self._chat_id, source="greeting")
+                self._remember_exchange(addressed[1] if addressed else clean_text, reply, use_as_topic=False)
+                self.runtime.set_transcript(clean_text, reply)
+                self._speak(reply, literal=True)
+                self.runtime.set_status("Слушаю…")
+                return
 
             # Нормализация названий: близкие к «МИРЭА» слова → "МИРЭА",
             # варианты «студсоюз» → "Студсоюз", «Лера» → «Валера» (гости часто

@@ -33,11 +33,47 @@ def _read_institute_list(match: re.Match) -> str:
     return (prep + " " if prep else "") + names
 
 
+def list_phrases(text: str) -> list[str]:
+    """Выделяет перечисление до удаления запятых и сохраняет союз последнего пункта."""
+    text = _INSTITUTE_LIST.sub(_read_institute_list, text)
+    # Запятая внутри названия и десятичная запятая принадлежат самому пункту.
+    pieces = re.split(r'(«[^»]*»|"[^"]*")', text)
+    parts = [""]
+    for index, piece in enumerate(pieces):
+        groups = [piece] if index % 2 else re.split(r",\s+(?!\d)", piece)
+        parts[-1] += groups[0]
+        parts.extend(groups[1:])
+    if len(parts) > 1 and parts[0].casefold() in {"например", "в частности"}:
+        parts[:2] = [", ".join(parts[:2])]
+    if len(parts) < 2:
+        return [text]
+    # Не режем обращение, вводное слово или зависимое предложение на куски.
+    if (re.fullmatch(r"(?:да|нет|например|здравствуйте|конечно|пожалуйста)", parts[0], re.I)
+            or any(re.match(r"(?:что|чтобы|где|когда|если|котор\w*|потому|но|поскольку)\b", p, re.I)
+                   for p in parts[1:])):
+        return [text]
+    last = parts[-1]
+    ending = [last]
+    for match in re.finditer(r'«[^»]*»|"[^"]*"|\s+(?=(?:и|или)\s+)', last, re.I):
+        if match[0].isspace():
+            ending = [last[:match.start()], last[match.end():]]
+            break
+    if len(parts) == 2 and len(ending) == 1 and not re.match(r"(?:затем|далее|после этого)\b", parts[1], re.I):
+        return [text]
+    return parts[:-1] + ending
+
+
 def words_only(text: str) -> str:
     """Оставляет слова и ударения. Разделитель между словами заменяет пробелом."""
     text = unicodedata.normalize("NFC", text)
     text = _INSTITUTE_LIST.sub(_read_institute_list, text)
     text = _INITIALS_RE.sub(lambda m: _INITIALS[m[0]], text)
+    for pattern, spoken in (
+        (r"unitree|юньитри|юнит[- ]три", "Юнитри"), (r"kuka", "Кука"),
+        (r"youbot", "ю бот"), (r"g1", "джи один"), (r"h1", "аш один"),
+        (r"go1", "го один"), (r"go2", "го два"),
+    ):
+        text = re.sub(r"\b(?:" + pattern + r")\b", spoken, text, flags=re.I)
     # У серии GoFa стык двух коротких имён у XTTS сливается в один звук.
     text = re.sub(r"\b(?:abb|а[- ]?б[- ]?б)\s+(?:gofa|го[- ]?фа)\b", "АББ серии Гофа", text, flags=re.I)
     text = re.sub(r"\b(?:abb|а[- ]?б[- ]?б)\b", "а бэ бэ", text, flags=re.I)

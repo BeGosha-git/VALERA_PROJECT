@@ -50,6 +50,7 @@ class DialogueTests(unittest.TestCase):
             context.start()
             self.addCleanup(context.stop)
         voice.set_answer_context("")
+        voice.note_answer_given("")
         self.bot = bot
 
     def say(self, text, answer=None):
@@ -75,6 +76,122 @@ class DialogueTests(unittest.TestCase):
         self.say("Дальше.", "В ИРИП изучают радиоэлектронику.")
         self.assertIn("ИРИП", self.bot._rag_query.call_args.kwargs["query_text"])
         self.bot.rag.direct_answer.assert_not_called()
+
+    def test_spoken_gesture_requests_from_log(self):
+        from valera_gestures import choose_gesture
+
+        with patch.dict("os.environ", VALERA_ROBOT_GESTURES="1"):
+            for question, expected in (
+                ("Ты же нормально работал. Что тебе снова не? Ладно, давай пожмём руки.", "shake_hand"),
+                ("Валера, дай лапу.", "shake_hand"),
+                ("Можешь пожать мне руку?", "shake_hand"),
+                ("Давай руки пожмём.", "shake_hand"),
+                ("А-а, дай лапу.", "shake_hand"),
+                ("Поприветствуйся.", "wave_hand"),
+                ("Лера, поздоровайся. Он сейчас долго руку отпускать будет.", "wave_hand"),
+                ("Тогда помаши ей.", "wave_hand"),
+                ("Ты не помахала рукой. Помаши рукой.", "wave_hand"),
+            ):
+                reply = self.say(question)
+                self.assertEqual(choose_gesture(reply, first_phrase=True), expected)
+                self.assertEqual(voice.log_question.call_args.kwargs["source"], "gesture")
+        self.bot.rag.direct_answer.assert_not_called()
+        self.bot.runtime.fire_triggers.assert_not_called()
+        self.bot.gate.is_complete.assert_not_called()
+        with patch.dict("os.environ", VALERA_ROBOT_GESTURES="0"):
+            self.assertEqual(self.say("Пожми мне руку."), "Сейчас жесты отключены.")
+        with patch.dict("os.environ", VALERA_ROBOT_GESTURES="1"), patch.object(voice, "gesture_busy", return_value=True):
+            self.assertIn("заканчиваю предыдущий жест", self.say("Дай лапу."))
+        for text in ("Не маши рукой.", "Он сказал «помаши рукой».", "Что означает дай лапу?"):
+            self.assertFalse(voice.gesture_reply(voice.last_command(text)))
+
+    def test_repeat_target_instead_of_previous_answer(self):
+        self.bot.memory.add("Ха-ха.", "Рад, что у Вас такое хорошее настроение!", "guest")
+        for question, expected in (
+            ("Ещё раз скажи привет.", "привет."),
+            ("Скажи ещё раз привет.", "привет."),
+            ("Ну, привет ещё раз скажи.", "привет."),
+            ("Подожди. Валера, повтори, пожмём руки.", "пожмём руки."),
+            ("Валера, повтори, пожмём руки.", "пожмём руки."),
+            ("Повтори: я готов к экскурсии.", "я готов к экскурсии."),
+        ):
+            self.assertEqual(self.say(question), expected)
+            self.assertEqual(voice.log_question.call_args.kwargs["source"], "literal-speech")
+        self.assertEqual(self.say("Повтори ещё раз."), "я готов к экскурсии.")
+        self.assertEqual(voice.log_question.call_args.kwargs["source"], "memory")
+        self.assertIsNone(voice.recall_kind("Сколько стоит ещё раз подать заявление?"))
+
+    def test_repeated_greetings_in_one_chat(self):
+        self.assertEqual(self.say("Валера, привет."), "Здравствуйте! Чем могу Вам помочь?")
+        self.assertEqual(self.say("Валера, привет."), "Ещё раз здравствуйте!")
+        self.assertEqual(self.say("Привет! Валера, привет!"), "И снова здравствуйте!")
+        self.bot._memory_chat_id = "another-guest"
+        self.assertEqual(self.say("Привет!"), "Здравствуйте! Чем могу Вам помочь?")
+        self.bot.rag.direct_answer.assert_not_called()
+
+    def test_sentence_cadence_and_pronunciation(self):
+        pcm = np.tile(np.array([2000, -2000], np.int16), 12000).tobytes()
+        self.assertLess(len(voice.sentence_cadence(pcm, "?")), len(pcm))
+        self.assertGreater(len(voice.sentence_cadence(pcm, ".")), len(pcm))
+        self.assertEqual(voice.sentence_cadence(pcm, ""), pcm)
+        self.assertEqual(voice.sentence_cadence(pcm + bytes(voice.TTS_SAMPLE_RATE), ""),
+                         pcm + bytes(2 * (voice.TTS_SAMPLE_RATE // 50)))
+        self.assertEqual(voice.words_only(voice.spoken_numbers("Unitree G1, KUKA и ABB.")),
+                         "Юнитри Джи один Кука и а бэ бэ")
+        bot = self.bot
+        bot._speak = voice.VoiceAssistant._speak.__get__(bot)
+        bot._tts_speaker = "test"
+        bot._interrupt_tts = False
+        bot.runtime.feature.side_effect = lambda name, **kwargs: name == "tts"
+        bot._synthesize_pcm_bytes = Mock(return_value=pcm)
+        with patch.object(voice, "TTS_PARALLEL_SENTENCES", False), patch.object(voice.time, "sleep") as pause, \
+                patch.object(voice, "play_audio", return_value=True) as play:
+            bot._speak("Начинаем экскурсию. Вы готовы?", literal=True)
+        self.assertEqual(play.call_count, 2)
+        self.assertEqual([c.args[0] for c in bot._synthesize_pcm_bytes.call_args_list],
+                         ["Начинаем экскурсию.", "Вы готовы?"])
+        pause.assert_called_once()
+        self.assertAlmostEqual(pause.call_args.args[0],
+                               (voice.sentence_pause_ms("Начинаем экскурсию.", "Вы готовы?")
+                                - voice.TTS_LEADING_SILENCE_MS) / 1000, delta=.03)
+
+    def test_accepted_lab_tour_replaces_institute_outline(self):
+        self.say("Расскажи про институты по очереди.", "В ИИТ изучают программирование.")
+        self.say("Расскажи про себя, про институт, про мегалабораторию. Расскажи про все нюансы.",
+                 "Я Валера. В ИИТ изучают программирование. О мегалаборатории могу рассказать отдельно. "
+                 "Хотите начать экскурсию по ней?")
+        query = self.bot._rag_query.call_args.kwargs["query_text"]
+        self.assertIn("представь Валеру", query)
+        self.say("Да, давай.", "Наша экскурсия по мегалаборатории начнётся с полигонов. "
+                 "Сначала увидим полигон «Город», затем перейдём к полигону «Луна».")
+        self.assertNotIn("ИИТ", self.bot._rag_query.call_args.kwargs["query_text"])
+        self.bot.memory = ConversationMemory(self.path)
+        self.say("Давай дальше.", "На полигоне «Город» моделируют дорожное движение.")
+        self.assertIn("Полигон «Город»", self.bot._rag_query.call_args.kwargs["query_text"])
+        self.say("Дальше.", "На полигоне «Луна» испытывают роботов.")
+        self.assertIn("Полигон «Луна»", self.bot._rag_query.call_args.kwargs["query_text"])
+
+    def test_lists_keep_their_words_and_use_shorter_internal_pauses(self):
+        text = "Изучаем мехатронику, робототехнику и управление."
+        parts = voice.list_phrases(text)
+        self.assertEqual(parts, ["Изучаем мехатронику", "робототехнику", "и управление."])
+        for ordinary in ("Вы знаете, что здесь изучают?", "Стоимость около 2,5 тысячи.",
+                         "Например, студенты проектируют и собирают роботов."):
+            self.assertEqual(voice.list_phrases(ordinary), [ordinary])
+        bot = self.bot
+        with patch.object(bot, "_synthesize_fragment", return_value=b"\x03\x00") as synth:
+            pcm = bot._synthesize_pcm_bytes(text, "test")
+        self.assertEqual(synth.call_count, 3)
+        self.assertTrue(all(c.args[-1] for c in synth.call_args_list))
+        self.assertEqual(pcm, voice.leading_silence_bytes() + voice.leading_silence_bytes(ms=210).join([b"\x03\x00"] * 3))
+        self.assertLess(voice.sentence_pause_ms("Начнём.", "Например, с роботов."),
+                        voice.sentence_pause_ms("Закончим эту часть.", "Хотите продолжить?"))
+
+    def test_robot_name_uses_the_recent_lab_answer(self):
+        self.bot.memory.add("Что есть в лаборатории?", "У нас есть роботы Юнитри.", "guest", True)
+        self.say("Что за роботы Юнь?", "Юнитри выпускает гуманоидных роботов.")
+        self.assertIn("Юнитри", self.bot._rag_query.call_args.kwargs["query_text"])
+        self.assertTrue(voice.is_self_question("Скажи про себя."))
 
     def test_admission_and_program(self):
         self.say("Институтов.", "В ИИТ занимаются разработкой программ.")
@@ -145,6 +262,35 @@ class DialogueTests(unittest.TestCase):
                  "Институты различаются по направлениям подготовки.")
         self.assertIn("средний", self.bot._rag_query.call_args.kwargs["query_text"])
         self.assertIsNone(self.bot._pending_followup)
+
+    def test_admission_overview_and_general_scope_from_live_log(self):
+        question = ("Расскажи подробно про вуз, про поступление, какие институты есть, "
+                    "что нужно и какие средние баллы, деньги, пятое-десятое, знания, успех, "
+                    "миллиардеры там, всё подряд.")
+        answer = "В вузе несколько институтов. В ИИТ изучают программирование."
+        self.assertEqual(self.say(question, answer), answer)
+        self.assertIsNone(self.bot._pending_followup)
+        self.assertIn(question, self.bot._rag_query.call_args.kwargs["query_text"])
+        self.say("Блядь, для всего подряд расскажи.", "Условия приёма зависят от программы.")
+        query = self.bot._rag_query.call_args.kwargs["query_text"]
+        self.assertIn("средние баллы", query)
+        self.assertIn("стоимости", query)
+        self.assertEqual(self.bot._rag_query.call_count, 2)
+
+    def test_general_scope_instead_of_program_name(self):
+        self.say("Институтов.", "В ИИТ занимаются разработкой программ.")
+        self.say("Сколько баллов и какая стоимость обучения?")
+        self.assertTrue(self.bot._pending_followup.awaiting_program)
+        self.say("Для всех программ.", "Приведу примеры по нескольким направлениям.")
+        query = self.bot._rag_query.call_args.kwargs["query_text"]
+        self.assertIn("Сколько баллов", query)
+        self.assertNotIn("Программа: Для всех", query)
+        self.assertIsNone(self.bot._pending_followup)
+
+    def test_aside_before_addressed_greeting(self):
+        self.assertIn("Здравствуйте", self.say("Ну, я его не обновил. Валера, привет."))
+        self.assertEqual(self.say("Валера, привет!"), "Ещё раз здравствуйте!")
+        self.bot._rag_query.assert_not_called()
 
     def test_equipment_to_admissions(self):
         self.bot.memory.add("Какие роботы есть в лаборатории?", "Есть роботы Юнитри.", "guest", True)

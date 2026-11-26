@@ -17,8 +17,8 @@ def spoken_numbers(text):
     if not re.search(r"\d", text):
         return text
 
-    names = {"go1": "Го один", "go2": "Го два", "h1": "Аш-один", "3d": "три дэ", "5g": "пять джи", "v2": "вэ два"}
-    text = re.sub(r"\b(?:go1|go2|h1|3d|5g|v2)\b", lambda m: names[m[0].lower()], text, flags=re.I)
+    names = {"go1": "Го один", "go2": "Го два", "h1": "Аш-один", "g1": "Джи один", "3d": "три дэ", "5g": "пять джи", "v2": "вэ два"}
+    text = re.sub(r"\b(?:go1|go2|h1|g1|3d|5g|v2)\b", lambda m: names[m[0].lower()], text, flags=re.I)
 
     def calendar(match):
         day, month, year = match.group("day", "month", "year")

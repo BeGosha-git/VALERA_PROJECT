@@ -43,6 +43,7 @@ _PREFERENCE_RE = re.compile(r"связан|увлекаюсь|интересую
 def institute_overview(text: str) -> bool:
     """Просьба об общем перечне, в том числе с вопросом про баллы."""
     return bool(re.search(r"\b(?:все(?: виды)?|всех|каждый|какие (?:есть|бывают))\s+институт|"
+                          r"\bкакие\s+институты(?:\s+(?:есть|бывают|входят)\b|[?!.,]|\s*$)|"
                           r"институт\w*,?\s+какие есть", text, re.I))
 
 
@@ -115,6 +116,8 @@ def search_topic(item: str) -> str:
 
 
 def ordered_request(text: str) -> bool:
+    # «Про все нюансы» указывает глубину ответа, а не выбор всех пунктов списка.
+    text = re.sub(r"\bпро\s+все\s+(?:нюансы|подробности|детали)\b", "", text, flags=re.I)
     return bool(_ORDER_RE.search(text))
 
 
@@ -195,7 +198,8 @@ class Outline:
             return replace(self, unavailable=target)
         described = []
         for sentence in statements:
-            mentions = [item for item in self.items if item.casefold() in sentence.casefold()]
+            mentions = [item for item in self.items
+                        if re.search(r"(?<!\w)" + re.escape(item) + r"(?!\w)", sentence, re.I)]
             if len(mentions) == 1 and len(sentence.split()) > len(mentions[0].split()) + 1:
                 described.append(mentions[0])
             elif not mentions:

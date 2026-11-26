@@ -56,7 +56,14 @@ RECALL_RE = re.compile(
     r")"
 )
 # «Повтори / ещё раз» — вернуть последний ответ.
-REPEAT_RE = re.compile(r"(?i)\b(?:повтори\w*|скажи\s+ещё\s+раз|ещё\s+раз|что\s+ты\s+сказал)\b")
+REPEAT_RE = re.compile(
+    r"(?i)(?:(?:ну|а|пожалуйста)[,\s]+)*(?:"
+    r"(?:можешь\s+повторить|можете\s+повторить|повтори(?:те)?)"
+    r"(?:[,\s]+(?:это|ещ[её]\s+раз|(?:свой\s+)?(?:последний\s+|предыдущий\s+)?ответ|"
+    r"(?:то,?\s+)?что\s+(?:ты|вы)\s+сказал(?:и)?))?"
+    r"|скажи(?:те)?\s+ещ[её]\s+раз|ещ[её]\s+раз|что\s+ты\s+сказал)"
+    r"(?:[,\s]+пожалуйста)?[.!?…]*"
+)
 # «Подробнее / дальше / продолжай» — продолжить прошлый ответ, не повторяясь.
 CONTINUE_RE = re.compile(
     r"(?i)^\s*(?:(?:ну|а|и)[,\s]+)?(?:расскажи(?:те)?\s+)?"
@@ -174,7 +181,7 @@ def recall_kind(text: str) -> Optional[str]:
     """'recall' | 'repeat' | None — что просит гость про прошлое."""
     if not text:
         return None
-    if REPEAT_RE.search(text):
+    if REPEAT_RE.fullmatch(text.strip()):
         return "repeat"
     if RECALL_RE.search(text):
         return "recall"
@@ -318,7 +325,8 @@ class ConversationMemory:
         recent = next((r for r in reversed(rows) if r.get("use_as_topic", True) or r.get("guest_fact")), {})
         return recent if time.time() - recent.get("ts", 0) <= FOLLOWUP_WINDOW_SEC else {}
 
-    def discussion_followup(self, text: str, chat: str, extract_items=None, *, mirea=False) -> Optional[FollowUp]:
+    def discussion_followup(self, text: str, chat: str, extract_items=None, *, mirea=False,
+                            pending: Optional[FollowUp] = None) -> Optional[FollowUp]:
         """Выбирает следующий пункт или уточняет текущий до обычной маршрутизации."""
         recent = self.current_discussion(chat)
         saved = recent.get("outline")
@@ -326,12 +334,46 @@ class ConversationMemory:
         previous_topic = recent.get("topic") or recent.get("q", "")
         previous_answer = recent.get("a", "")
         overview = institute_overview(text)
+        general_scope = re.fullmatch(
+            r"(?:(?:ну|давай|расскажи(?:те)?)[,\s]+)*(?:для всего|про вс[её]|вс[её]|"
+            r"(?:для|по) все[хм](?: (?:институт\w*|программ\w*|направлени\w*))?)"
+            r"(?: подряд| в целом)?(?: расскажи(?:те)?)?", text.strip(" ,.!?…"), re.I)
+        awaiting_program = pending is not None and pending.awaiting_program
+        if general_scope and (awaiting_program or previous_topic == "Институты РТУ МИРЭА"):
+            if awaiting_program:
+                query = (f"{pending.query} Гостю нужен общий обзор поступления. Раскрой перечисленные вопросы, "
+                         "приведи примеры программ и доступные в базе сведения о баллах и стоимости. "
+                         "Для чисел укажи программу и год, если они известны.")
+            else:
+                query = recent.get("eq") or recent["q"]
+            return FollowUp(query, "Институты РТУ МИРЭА", True, outline=Outline(tuple(INSTITUTES), mirea=True))
+        if pending and not overview:
+            return None
+        if (re.search(r"(?:про\s+себя|о\s+себе)", text, re.I)
+                and re.search(r"\bинститут", text, re.I) and re.search(r"лаборатори", text, re.I)):
+            return FollowUp(f"{text} Ответь по порядку: представь Валеру, расскажи об институте "
+                            "и объясни на примере, чем занимаются в лаборатории.",
+                            "Валера, институт и мегалаборатория", True)
         if overview and not re.search(r"по (?:очереди|порядку)|поочер[её]дно|по шагам", text, re.I):
-            query = (f"Обзор институтов РТУ МИРЭА: {', '.join(INSTITUTES)}. {text} "
-                     "Назови институты и примеры направлений. Различай средний и проходной балл, "
-                     "уточняй программу только для цифр, которых нет в источниках.")
+            query = (f"Обзор институтов РТУ МИРЭА: {', '.join(INSTITUTES)}. "
+                     "Назови институты и примеры направлений. По вопросам о поступлении и стоимости "
+                     "различай средние баллы и проходные. Приводи цифры с программой и годом из базы. "
+                     f"Вопрос гостя: {text}")
             return FollowUp(query, "Институты РТУ МИРЭА", True, outline=Outline(tuple(INSTITUTES), mirea=True))
         offer = re.split(r"(?<=[.!?…])\s+", previous_answer.strip())[-1]
+        # «По ней» может ссылаться на лабораторию в предыдущем предложении.
+        last_two = " ".join(re.split(r"(?<=[.!?…])\s+", previous_answer.strip())[-2:])
+        if ((is_offer_confirmation(text) or asks_next(text)) and offer.endswith("?")
+                and re.search(r"экскурси", offer, re.I) and (not outline or tuple(outline.items) != TOUR)
+                and re.search(r"лаборатори", last_two, re.I)):
+            subject = "Экскурсия по мегалаборатории робототехники"
+            return FollowUp(f"{subject}. Кратко представь маршрут, начиная с полигона «Город».",
+                            subject, True, outline=Outline(TOUR, mirea=True, subject=subject))
+        # В старых записях к фактическому анонсу маршрута мог прикрепиться план институтов.
+        if (asks_next(text) and (not outline or tuple(outline.items) != TOUR)
+                and re.search(r"экскурси\w*\s+по\s+(?:мега)?лаборатори", previous_answer, re.I)
+                and re.search(r"полигон", previous_answer, re.I)):
+            outline = Outline(TOUR, mirea=True, subject="Экскурсия по мегалаборатории робототехники")
         if offer.endswith("?") and not re.search(r"следующ|дальше|остальн|продолж", offer, re.I):
             named = institute_names(previous_answer)
             subject = (outline.current if outline else "") or (named[-1] if named else previous_topic)
@@ -624,7 +666,11 @@ def style_hint(text: str, now: Optional[float] = None) -> str:
     if UPSET_RE.search(text):
         parts.append("Гость раздражён: ответьте спокойно, коротко извинитесь и предложите конкретную помощь.")
     n = len(text.split())
-    if n <= 3 and not parts:
+    if re.search(r"очень подробно|большой текст|все нюансы", text, re.I):
+        parts.append("Гость просит подробный рассказ. Раскрой каждую названную тему с конкретным примером.")
+    elif asks_next(text):
+        parts.append("Гость просит продолжить: раскрой следующий пункт текущей темы.")
+    elif n <= 3 and not parts:
         parts.append("Гость говорит коротко — ответьте кратко, одной фразой.")
     elif n >= 18:
         parts.append("Гость говорит развёрнуто — можно ответить чуть подробнее, но не больше трёх предложений.")
